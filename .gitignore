@@ -15,6 +15,9 @@ go/bin
 lua/*.rock
 lua/.luacheckcache
 
+# bun
+bun/node_modules
+
 # shared local state
 *.sqlite
 *.db

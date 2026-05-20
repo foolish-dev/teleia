@@ -78,3 +78,17 @@ jobs:
           done
       - name: Help
         run: lua5.4 teleia.lua --help
+
+  bun:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bun
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3"
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun src/index.ts --help
