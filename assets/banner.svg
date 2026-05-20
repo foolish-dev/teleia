@@ -4,8 +4,21 @@
     <linearGradient id="t" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#7aa2f7"/>
       <stop offset="1" stop-color="#bb9af7"/>
+      <animateTransform attributeName="gradientTransform" type="rotate"
+                        from="0 0.5 0.5" to="360 0.5 0.5"
+                        dur="18s" repeatCount="indefinite"/>
     </linearGradient>
+    <linearGradient id="sweep" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7dcfff" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#7dcfff" stop-opacity="0.65"/>
+      <stop offset="1" stop-color="#7dcfff" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="word">
+      <text x="324" y="160" font-size="108" font-weight="700" letter-spacing="-2"
+            font-family="Iosevka, 'JetBrains Mono', 'IBM Plex Mono', Menlo, monospace">Teleia</text>
+    </clipPath>
   </defs>
+
   <rect width="1200" height="300" fill="#1a1b26"/>
 
   <!-- mark: T with greek period -->
@@ -14,12 +27,24 @@
       <rect x="0" y="0" width="160" height="24" rx="4"/>
       <rect x="68" y="0" width="24" height="140" rx="4"/>
     </g>
-    <circle cx="148" cy="148" r="12" fill="#f7768e"/>
+    <circle cx="148" cy="148" r="12" fill="#f7768e">
+      <animate attributeName="opacity"
+               values="1;1;0;0;1"
+               keyTimes="0;0.5;0.5;1;1"
+               dur="1.06s" repeatCount="indefinite"/>
+    </circle>
   </g>
 
   <!-- wordmark -->
-  <g font-family="Iosevka, 'JetBrains Mono', 'IBM Plex Mono', Menlo, monospace" fill="#c0caf5">
-    <text x="324" y="160" font-size="108" font-weight="700" letter-spacing="-2">Teleia</text>
+  <g font-family="Iosevka, 'JetBrains Mono', 'IBM Plex Mono', Menlo, monospace">
+    <text x="324" y="160" font-size="108" font-weight="700" letter-spacing="-2" fill="#c0caf5">Teleia</text>
+    <!-- shimmer sweep over the wordmark -->
+    <g clip-path="url(#word)">
+      <rect x="-300" y="60" width="200" height="140" fill="url(#sweep)">
+        <animate attributeName="x" from="-300" to="700" dur="5.5s"
+                 begin="1s" repeatCount="indefinite"/>
+      </rect>
+    </g>
     <text x="328" y="208" font-size="28" fill="#7dcfff" opacity="0.9">the distilled coding agent</text>
     <text x="328" y="244" font-size="20" fill="#565f89" font-style="italic">τελεία · full stop</text>
   </g>
