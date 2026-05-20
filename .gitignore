@@ -1,2 +1,20 @@
-/target
-Cargo.lock.bak
+# rust
+rust/target
+
+# python
+python/__pycache__
+python/**/__pycache__
+python/.venv
+python/*.egg-info
+
+# go
+go/teleia
+go/bin
+
+# lua
+lua/*.rock
+lua/.luacheckcache
+
+# shared local state
+*.sqlite
+*.db

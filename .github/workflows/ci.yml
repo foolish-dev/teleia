@@ -11,28 +11,70 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -D warnings
 
 jobs:
-  check:
+  rust:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    env:
+      RUSTFLAGS: -D warnings
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo build --all-targets --locked
+      - run: cargo test --all-targets --locked
 
-      - name: fmt
-        run: cargo fmt --all -- --check
+  python:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile
+        run: python -m compileall -q teleia
+      - name: Help
+        run: python -m teleia --help
 
-      - name: clippy
-        run: cargo clippy --all-targets -- -D warnings
+  go:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: go/go.sum
+      - run: go build ./...
+      - run: go vet ./...
 
-      - name: build
-        run: cargo build --all-targets --locked
-
-      - name: test
-        run: cargo test --all-targets --locked
+  lua:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lua
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lua + luac
+        run: sudo apt-get update && sudo apt-get install -y lua5.4 luac
+      - name: Syntax-check all modules
+        run: |
+          for f in teleia.lua teleia/*.lua; do
+            luac -p "$f"
+          done
+      - name: Help
+        run: lua5.4 teleia.lua --help
