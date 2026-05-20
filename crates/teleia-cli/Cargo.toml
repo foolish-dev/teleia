@@ -1,0 +1,22 @@
+[package]
+name = "teleia-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "teleia"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+teleia-llm.workspace = true
+teleia-agent.workspace = true
+teleia-store.workspace = true

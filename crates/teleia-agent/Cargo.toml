@@ -1,0 +1,16 @@
+[package]
+name = "teleia-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+teleia-llm.workspace = true
+teleia-tools.workspace = true
+teleia-store.workspace = true

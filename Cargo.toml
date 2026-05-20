@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/teleia-cli",
+    "crates/teleia-llm",
+    "crates/teleia-tools",
+    "crates/teleia-store",
+    "crates/teleia-agent",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["foolish-dev"]
+repository = "https://github.com/foolish-dev/Teleia"
+
+[workspace.dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "process", "io-util", "sync"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+ratatui = "0.29"
+crossterm = "0.28"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ulid = "1"
+directories = "5"
+
+teleia-llm = { path = "crates/teleia-llm" }
+teleia-tools = { path = "crates/teleia-tools" }
+teleia-store = { path = "crates/teleia-store" }
+teleia-agent = { path = "crates/teleia-agent" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
