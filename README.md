@@ -1,4 +1,6 @@
-# Teleia
+<p align="center">
+  <img src="assets/banner.svg" alt="Teleia — the distilled coding agent" width="720">
+</p>
 
 Minimal TUI coding agent in Rust. Talks to a local Ollama (OpenAI-chat-compatible) endpoint, runs tools, persists sessions to SQLite.
 
