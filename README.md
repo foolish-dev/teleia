@@ -2,6 +2,11 @@
   <img src="assets/banner.svg" alt="Teleia — the distilled coding agent" width="720">
 </p>
 
+<p align="center">
+  <a href="https://github.com/foolish-dev/Teleia/actions/workflows/ci.yml"><img alt="ci" src="https://github.com/foolish-dev/Teleia/actions/workflows/ci.yml/badge.svg?branch=dev"></a>
+  <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
+</p>
+
 Minimal TUI coding agent in Rust. Talks to a local Ollama (OpenAI-chat-compatible) endpoint, runs tools, persists sessions to SQLite.
 
 ## Build

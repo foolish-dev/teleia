@@ -110,7 +110,11 @@ struct EditArgs {
 }
 
 async fn edit_tool(args: Value) -> Result<String> {
-    let EditArgs { path, old_string, new_string } = serde_json::from_value(args)?;
+    let EditArgs {
+        path,
+        old_string,
+        new_string,
+    } = serde_json::from_value(args)?;
     let original = tokio::fs::read_to_string(&path)
         .await
         .with_context(|| format!("read {path}"))?;
@@ -137,10 +141,7 @@ struct BashArgs {
 
 async fn bash_tool(args: Value) -> Result<String> {
     let BashArgs { command } = serde_json::from_value(args)?;
-    let fut = Command::new("bash")
-        .arg("-lc")
-        .arg(&command)
-        .output();
+    let fut = Command::new("bash").arg("-lc").arg(&command).output();
     let output = tokio::time::timeout(std::time::Duration::from_secs(30), fut)
         .await
         .map_err(|_| anyhow!("bash command timed out after 30s"))?

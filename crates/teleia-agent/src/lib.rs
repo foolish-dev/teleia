@@ -19,7 +19,11 @@ pub struct Agent {
 
 pub enum Step {
     Assistant(String),
-    Tool { name: String, input: String, output: String },
+    Tool {
+        name: String,
+        input: String,
+        output: String,
+    },
 }
 
 impl Agent {
@@ -33,7 +37,9 @@ impl Agent {
             messages: Vec::new(),
             seq: 0,
         };
-        let system = Message::System { content: SYSTEM_PROMPT.to_string() };
+        let system = Message::System {
+            content: SYSTEM_PROMPT.to_string(),
+        };
         agent.push(system)?;
         Ok(agent)
     }
@@ -43,14 +49,20 @@ impl Agent {
     }
 
     pub async fn turn(&mut self, user_input: String) -> Result<Vec<Step>> {
-        self.push(Message::User { content: user_input })?;
+        self.push(Message::User {
+            content: user_input,
+        })?;
         let mut steps = Vec::new();
 
         for _ in 0..MAX_TOOL_HOPS {
             let reply = self.llm.chat(&self.messages, Some(&self.tools)).await?;
             self.push(reply.clone())?;
 
-            let Message::Assistant { content, tool_calls } = reply else {
+            let Message::Assistant {
+                content,
+                tool_calls,
+            } = reply
+            else {
                 continue;
             };
 
@@ -65,10 +77,13 @@ impl Agent {
             }
 
             for call in tool_calls {
-                let output = match teleia_tools::dispatch(&call.function.name, &call.function.arguments).await {
-                    Ok(o) => o,
-                    Err(e) => format!("error: {e}"),
-                };
+                let output =
+                    match teleia_tools::dispatch(&call.function.name, &call.function.arguments)
+                        .await
+                    {
+                        Ok(o) => o,
+                        Err(e) => format!("error: {e}"),
+                    };
                 steps.push(Step::Tool {
                     name: call.function.name.clone(),
                     input: call.function.arguments.clone(),

@@ -7,8 +7,12 @@ pub const DEFAULT_BASE_URL: &str = "http://127.0.0.1:11434/v1";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "lowercase")]
 pub enum Message {
-    System { content: String },
-    User { content: String },
+    System {
+        content: String,
+    },
+    User {
+        content: String,
+    },
     Assistant {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         content: Option<String>,

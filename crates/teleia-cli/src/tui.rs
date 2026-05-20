@@ -18,7 +18,11 @@ use teleia_agent::{Agent, Step};
 enum Entry {
     User(String),
     Assistant(String),
-    Tool { name: String, input: String, output: String },
+    Tool {
+        name: String,
+        input: String,
+        output: String,
+    },
     Error(String),
 }
 
@@ -32,7 +36,11 @@ pub async fn run(mut agent: Agent) -> Result<()> {
     let result = event_loop(&mut terminal, &mut agent).await;
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
     result
 }
@@ -43,7 +51,10 @@ async fn event_loop<B: ratatui::backend::Backend>(
 ) -> Result<()> {
     let mut input = String::new();
     let mut history: Vec<Entry> = Vec::new();
-    let mut status = format!("session {} ready · enter to send · ctrl-c to quit", agent.session_id());
+    let mut status = format!(
+        "session {} ready · enter to send · ctrl-c to quit",
+        agent.session_id()
+    );
     let mut working = false;
 
     loop {
@@ -58,7 +69,9 @@ async fn event_loop<B: ratatui::backend::Backend>(
         }
         match event::read()? {
             Event::Key(key) => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && matches!(key.code, KeyCode::Char('c'))
+                {
                     break;
                 }
                 match key.code {
@@ -81,9 +94,15 @@ async fn event_loop<B: ratatui::backend::Backend>(
                                 for step in steps {
                                     history.push(match step {
                                         Step::Assistant(t) => Entry::Assistant(t),
-                                        Step::Tool { name, input, output } => {
-                                            Entry::Tool { name, input, output }
-                                        }
+                                        Step::Tool {
+                                            name,
+                                            input,
+                                            output,
+                                        } => Entry::Tool {
+                                            name,
+                                            input,
+                                            output,
+                                        },
                                     });
                                 }
                                 status = "ready".to_string();
@@ -105,13 +124,7 @@ async fn event_loop<B: ratatui::backend::Backend>(
     Ok(())
 }
 
-fn draw(
-    f: &mut ratatui::Frame,
-    history: &[Entry],
-    input: &str,
-    status: &str,
-    working: bool,
-) {
+fn draw(f: &mut ratatui::Frame, history: &[Entry], input: &str, status: &str, working: bool) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -125,7 +138,10 @@ fn draw(
     let log = Paragraph::new(lines)
         .block(Block::default().borders(Borders::ALL).title(" teleia "))
         .wrap(Wrap { trim: false })
-        .scroll((scroll_offset(history, chunks[0].height.saturating_sub(2) as usize), 0));
+        .scroll((
+            scroll_offset(history, chunks[0].height.saturating_sub(2) as usize),
+            0,
+        ));
     f.render_widget(log, chunks[0]);
 
     let prompt_style = if working {
@@ -142,7 +158,9 @@ fn draw(
 
     let status_widget = Paragraph::new(Span::styled(
         status,
-        Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::ITALIC),
     ));
     f.render_widget(status_widget, chunks[2]);
 }
@@ -153,7 +171,9 @@ fn render_entry(entry: &Entry) -> Vec<Line<'static>> {
         Entry::User(text) => {
             out.push(Line::from(Span::styled(
                 "you",
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             )));
             for line in text.lines() {
                 out.push(Line::from(line.to_string()));
@@ -163,14 +183,20 @@ fn render_entry(entry: &Entry) -> Vec<Line<'static>> {
         Entry::Assistant(text) => {
             out.push(Line::from(Span::styled(
                 "teleia",
-                Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
             )));
             for line in text.lines() {
                 out.push(Line::from(line.to_string()));
             }
             out.push(Line::from(""));
         }
-        Entry::Tool { name, input, output } => {
+        Entry::Tool {
+            name,
+            input,
+            output,
+        } => {
             out.push(Line::from(Span::styled(
                 format!("⚙ {name}({input})"),
                 Style::default().fg(Color::Yellow),
