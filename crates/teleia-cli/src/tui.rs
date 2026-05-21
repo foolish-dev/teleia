@@ -1305,13 +1305,24 @@ fn welcome_banner(width: u16, frame: usize) -> Vec<Line<'static>> {
     let logo_pad = (width as usize).saturating_sub(logo_width) / 2;
     let logo_indent = " ".repeat(logo_pad);
 
+    // Typewriter reveal: each event-loop tick uncovers another fraction of
+    // the logo width. ≈ 50 frames × 50 ms = 2.5 s to fully type out. After
+    // it completes the existing shimmer + dot/tagline take over.
+    const REVEAL_FRAMES: usize = 50;
+    let revealed = if frame >= REVEAL_FRAMES {
+        logo_width
+    } else {
+        frame * logo_width / REVEAL_FRAMES
+    };
+    let done_revealing = revealed >= logo_width;
+
     let mut out = Vec::new();
     out.push(Line::from(""));
     out.push(Line::from(""));
 
     for row in LOGO {
         let mut spans: Vec<Span<'static>> = vec![Span::raw(logo_indent.clone())];
-        for (i, c) in row.chars().enumerate() {
+        for (i, c) in row.chars().enumerate().take(revealed) {
             // Per-character colour alternation; the phase shifts with frame
             // to give a slow shimmer reading left-to-right.
             let color = if (i + frame / 4).is_multiple_of(2) {
@@ -1324,7 +1335,21 @@ fn welcome_banner(width: u16, frame: usize) -> Vec<Line<'static>> {
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
             ));
         }
+        // A leading caret rides the reveal edge so the type-on reads as
+        // an active cursor sweeping across.
+        if !done_revealing {
+            spans.push(Span::styled(
+                "▌",
+                Style::default().fg(th.red).add_modifier(Modifier::BOLD),
+            ));
+        }
         out.push(Line::from(spans));
+    }
+
+    if !done_revealing {
+        // Suppress the dot/tagline/hint until the reveal finishes — keeps
+        // the bottom of the banner clean during the type-on.
+        return out;
     }
 
     // Greek period (●) blinks under the end of the logo at ~2 Hz.
