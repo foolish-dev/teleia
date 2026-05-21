@@ -9,6 +9,14 @@ use telia_agent::Agent;
 use telia_llm::{LlmClient, PullProgress, DEFAULT_BASE_URL};
 use telia_store::Store;
 
+/// Models telia tries to keep cached on startup so `/model` can switch
+/// between them without a fresh download. The active `--model` is added
+/// to this set automatically if it isn't already in it.
+const DEFAULT_MODELS: &[&str] = &[
+    "hf.co/FoolDev/Thanatos-27B:Q4_K_M",
+    "hf.co/FoolDev/Janus-35B:Q4_K_M",
+];
+
 #[derive(Parser, Debug)]
 #[command(name = "telia", version, about = "Minimal TUI coding agent")]
 struct Args {
@@ -40,10 +48,20 @@ async fn main() -> Result<()> {
             tui::theme_names().join(", ")
         );
     }
-    let llm = LlmClient::new(args.base_url, args.model);
     if !args.no_pull {
-        ensure_model(&llm).await?;
+        // Pull every default model plus the active --model (deduped) so
+        // /model can switch between them without a fresh download.
+        let mut want: Vec<String> = DEFAULT_MODELS.iter().map(|s| s.to_string()).collect();
+        if !want.iter().any(|m| m == &args.model) {
+            want.push(args.model.clone());
+        }
+        for model in &want {
+            let pre = LlmClient::new(args.base_url.clone(), model.clone());
+            ensure_model(&pre).await?;
+        }
     }
+
+    let llm = LlmClient::new(args.base_url, args.model);
     let store = Store::open()?;
     let mut agent = Agent::new(llm, store)?;
     // Best-effort: cache the installed-model list once so the /model

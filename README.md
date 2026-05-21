@@ -41,7 +41,7 @@ telia
 telia --model hf.co/FoolDev/Janus-35B:Q4_K_M --base-url http://127.0.0.1:11434/v1
 ```
 
-Requires Ollama running locally. On startup `telia` asks Ollama whether the active `--model` is already cached; if not it shells out to `ollama pull MODEL` so the download progress is visible before the TUI takes over the screen. Either of the default models — [`hf.co/FoolDev/Thanatos-27B`](https://huggingface.co/FoolDev/Thanatos-27B) and [`hf.co/FoolDev/Janus-35B`](https://huggingface.co/FoolDev/Janus-35B) — fetches from HuggingFace this way. Pass `--no-pull` to skip the pre-flight (e.g. when pointing `--base-url` at a non-Ollama OpenAI-compatible backend).
+Requires Ollama running locally. On startup `telia` walks a list of default models — currently [`hf.co/FoolDev/Thanatos-27B`](https://huggingface.co/FoolDev/Thanatos-27B) and [`hf.co/FoolDev/Janus-35B`](https://huggingface.co/FoolDev/Janus-35B), plus the active `--model` if it isn't already on that list — asks Ollama which of them are already cached, and streams `/api/pull` (with an animated in-place progress bar) for the ones that aren't. Once they're all cached, `/model` can switch between them without another download. Pass `--no-pull` to skip the pre-flight entirely (e.g. when `--base-url` points at a non-Ollama OpenAI-compatible backend).
 
 For development from a workspace clone:
 
