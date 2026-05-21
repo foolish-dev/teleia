@@ -1,7 +1,10 @@
 use crate::highlight;
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+        MouseEvent, MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -24,7 +27,7 @@ const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧
 fn mode_hints(mode: Mode) -> &'static str {
     match mode {
         Mode::Insert => "↵ send · esc normal · tab accept · /help",
-        Mode::Normal => "i insert · : command · G bottom · q quit",
+        Mode::Normal => "i insert · : command · ^U/^D half-page · G bottom · q quit",
         Mode::Command => "↵ run · esc cancel",
     }
 }
@@ -305,7 +308,12 @@ impl State {
 pub async fn run(mut agent: Agent) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    // Mouse capture forwards wheel events to telia so the log can scroll
+    // with the wheel. The cost is that drag-to-select in the terminal
+    // stops working as-is — most emulators expose Shift+drag (or a
+    // similar modifier) as "send to terminal, ignore app capture" so
+    // selection is still reachable.
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -313,7 +321,11 @@ pub async fn run(mut agent: Agent) -> Result<()> {
     let result = event_loop(&mut terminal, &mut state, &mut agent).await;
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
     result
 }
@@ -333,8 +345,22 @@ async fn event_loop<B: ratatui::backend::Backend>(
         if !event::poll(Duration::from_millis(50))? {
             continue;
         }
-        let Event::Key(key) = event::read()? else {
-            continue;
+        let key = match event::read()? {
+            Event::Key(k) => k,
+            Event::Mouse(MouseEvent { kind, .. }) => {
+                // 3 lines per wheel tick is the usual ratio.
+                match kind {
+                    MouseEventKind::ScrollUp => {
+                        state.scroll = state.scroll.saturating_add(3);
+                    }
+                    MouseEventKind::ScrollDown => {
+                        state.scroll = state.scroll.saturating_sub(3);
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+            _ => continue,
         };
         if key.kind == KeyEventKind::Release {
             continue;
@@ -477,6 +503,13 @@ async fn event_loop<B: ratatui::backend::Backend>(
                     KeyCode::Char('$') | KeyCode::End => state.input_cursor = state.input.len(),
                     // Jump scrollback to the latest entries (vim's G).
                     KeyCode::Char('G') => state.scroll = 0,
+                    // Half-page scroll (vim's Ctrl-U / Ctrl-D).
+                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        state.scroll = state.scroll.saturating_add(12);
+                    }
+                    KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        state.scroll = state.scroll.saturating_sub(12);
+                    }
                     // History scroll
                     KeyCode::Char('j') | KeyCode::Down | KeyCode::PageDown => {
                         state.scroll = state

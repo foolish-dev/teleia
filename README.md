@@ -79,7 +79,7 @@ cargo run --release
 - **Themes** — `tokyo-night` (default), `catppuccin`, `dracula`. Pick at startup with `--theme NAME`, or switch live with `/theme NAME` (vim users: `:colo NAME`).
 - **Input history** — readline-style. Up/Down (with empty input or already recalling) walks back through previous submissions; further edits exit recall mode. Consecutive duplicates are deduplicated.
 - **Vim keys** — `Esc` enters Normal mode; `i`/`a`/`I`/`A` go back to Insert; `h`/`l`/`0`/`$` move the cursor, `j`/`k` scroll history, `x` deletes a char. `:` opens an ex command line: `:q`, `:w NAME`, `:e NAME`, `:d NAME`, `:ls`, `:model …`, `:reset`, `:clear`, `:help` (slash commands also still work).
-- **Scrollback** — ↑ / ↓ (PageUp / PageDown).
+- **Scrollback** — ↑/↓ (1 line) and PageUp/PageDown (5 lines); mouse wheel also scrolls (3 lines per tick); in Normal mode `Ctrl+U` / `Ctrl+D` are half-page (12 lines), `G` jumps to the bottom.
 - **Sessions** — sqlite at `$XDG_DATA_HOME/telia/telia.sqlite`. Save/load by alias across runs.
 - **Token tracker** — status bar shows `↑prompt ↓completion` totals for the current session (cumulative across turns; resets on `/reset` or `/load`). Counts come from the `usage` field in Ollama's final stream chunk (request includes `stream_options.include_usage`).
 
