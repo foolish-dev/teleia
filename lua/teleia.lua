@@ -14,20 +14,29 @@ local opts = {
   base_url = llm_mod.DEFAULT_BASE_URL,
 }
 
+local function fail(msg)
+  io.stderr:write("teleia.lua: " .. msg .. "\n")
+  os.exit(2)
+end
+
 local i = 1
 while i <= #arg do
   local a = arg[i]
   if a == "--model" then
     i = i + 1
-    opts.model = arg[i] or opts.model
+    if arg[i] == nil then fail("--model requires a value") end
+    opts.model = arg[i]
   elseif a == "--base-url" then
     i = i + 1
-    opts.base_url = arg[i] or opts.base_url
+    if arg[i] == nil then fail("--base-url requires a value") end
+    opts.base_url = arg[i]
   elseif a == "-h" or a == "--help" then
     print("usage: teleia.lua [--model MODEL] [--base-url URL]")
     print("  --model     default: " .. opts.model)
     print("  --base-url  default: " .. opts.base_url)
     os.exit(0)
+  else
+    fail("unknown argument: " .. tostring(a))
   end
   i = i + 1
 end
