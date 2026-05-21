@@ -436,6 +436,19 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
         .scroll((offset, 0));
     f.render_widget(log, chunks[0]);
 
+    // Horizontally scroll the input so the cursor is always visible.
+    // start_char is how many chars to skip from the left.
+    let inside = chunks[1];
+    let visible_width = inside.width.saturating_sub(4) as usize; // 2 borders + "> "
+    let cursor_chars = state.input[..state.input_cursor].chars().count();
+    let start_char = cursor_chars.saturating_sub(visible_width.saturating_sub(1));
+    let visible_text: String = state
+        .input
+        .chars()
+        .skip(start_char)
+        .take(visible_width)
+        .collect();
+
     let prompt_style = if state.working {
         Style::default().fg(TN_DIM)
     } else {
@@ -443,18 +456,14 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
     };
     let input_widget = Paragraph::new(Line::from(vec![
         Span::styled("> ", Style::default().fg(TN_CYAN)),
-        Span::styled(&state.input, prompt_style),
+        Span::styled(visible_text, prompt_style),
     ]))
     .block(Block::default().borders(Borders::ALL));
     f.render_widget(input_widget, chunks[1]);
 
-    // Show the terminal cursor at state.input_cursor. ratatui hides the
-    // cursor by default; calling set_cursor_position each frame makes it
-    // visible at our chosen spot.
-    let inside = chunks[1];
-    let cursor_chars = state.input[..state.input_cursor].chars().count() as u16;
-    let cursor_x = inside.x + 1 /* border */ + 2 /* "> " */ + cursor_chars;
-    let cursor_x = cursor_x.min(inside.x + inside.width.saturating_sub(2));
+    // ratatui hides the cursor by default; positioning it each frame makes
+    // it visible at the edit point within the scrolled view.
+    let cursor_x = inside.x + 1 /* border */ + 2 /* "> " */ + (cursor_chars - start_char) as u16;
     let cursor_y = inside.y + 1;
     f.set_cursor_position((cursor_x, cursor_y));
 
