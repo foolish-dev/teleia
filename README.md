@@ -13,27 +13,37 @@ Minimal TUI coding agent — local Ollama backend, four tools, persistent sessio
   <img src="assets/screenshot.svg" alt="Teleia TUI session" width="780">
 </p>
 
+## Install
+
+One-liner — clones, builds, drops `teleia` into `~/.local/bin` (requires cargo + git):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/foolish-dev/Teleia/dev/install.sh | sh
+```
+
+Override the location with `PREFIX=/usr/local/bin sh -c "$(curl -fsSL …)"`.
+
+Or with cargo directly:
+
+```sh
+cargo install --git https://github.com/foolish-dev/Teleia teleia-cli
+```
+
 ## Run
+
+```sh
+teleia
+# with options
+teleia --model hf.co/FoolDev/Janus-35B:Q4_K_M --base-url http://127.0.0.1:11434
+```
+
+Requires Ollama running locally with a tool-capable model pulled. Default model: `hf.co/FoolDev/Thanatos-27B:Q4_K_M`.
+
+For development from a workspace clone:
 
 ```sh
 cargo run --release
 ```
-
-With options:
-
-```sh
-cargo run --release -- \
-  --model hf.co/FoolDev/Janus-35B:Q4_K_M \
-  --base-url http://127.0.0.1:11434
-```
-
-Or drop the `teleia` binary onto your PATH:
-
-```sh
-cargo install --path crates/teleia-cli
-```
-
-Requires Ollama running locally with a tool-capable model pulled. Default model: `hf.co/FoolDev/Thanatos-27B:Q4_K_M`.
 
 ## Features
 
