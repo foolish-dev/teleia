@@ -84,21 +84,38 @@ class Store:
 
 
 def _to_jsonable(m: Message) -> dict:
+    """Serialize using the OpenAI-standard nested tool_calls shape so the
+    on-disk format matches the other four impls (cross-impl /save + /load)."""
     out: dict = {"role": m.role}
     if m.content is not None:
         out["content"] = m.content
     if m.tool_calls:
-        out["tool_calls"] = [{"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in m.tool_calls]
+        out["tool_calls"] = [
+            {
+                "id": tc.id,
+                "type": "function",
+                "function": {"name": tc.name, "arguments": tc.arguments},
+            }
+            for tc in m.tool_calls
+        ]
     if m.tool_call_id is not None:
         out["tool_call_id"] = m.tool_call_id
     return out
 
 
 def _from_jsonable(raw: dict) -> Message:
+    tool_calls = []
+    for tc in raw.get("tool_calls", []):
+        # Accept both nested (OpenAI / other impls) and the legacy flat shape
+        # we previously emitted, so old Python-saved sessions still load.
+        fn = tc.get("function") or {}
+        name = fn.get("name") or tc.get("name", "")
+        arguments = fn.get("arguments") if fn.get("arguments") is not None else tc.get("arguments", "")
+        tool_calls.append(ToolCall(id=tc.get("id", ""), name=name, arguments=arguments))
     return Message(
         role=raw["role"],
         content=raw.get("content"),
-        tool_calls=[ToolCall(id=tc["id"], name=tc["name"], arguments=tc["arguments"]) for tc in raw.get("tool_calls", [])],
+        tool_calls=tool_calls,
         tool_call_id=raw.get("tool_call_id"),
     )
 
