@@ -975,11 +975,15 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
         .split(f.area());
 
     let frame = state.frame;
-    let lines: Vec<Line> = state
-        .history
-        .iter()
-        .flat_map(|e| render_entry(e, frame))
-        .collect();
+    let lines: Vec<Line> = if state.history.is_empty() {
+        welcome_banner(chunks[0].width, frame)
+    } else {
+        state
+            .history
+            .iter()
+            .flat_map(|e| render_entry(e, frame))
+            .collect()
+    };
     let visible = chunks[0].height.saturating_sub(2) as usize;
     let total = lines.len();
     let max_offset = total.saturating_sub(visible) as u16;
@@ -1158,6 +1162,81 @@ fn format_count(n: u64) -> String {
 fn short_model(model: &str) -> &str {
     let tail = model.rsplit('/').next().unwrap_or(model);
     tail.split(':').next().unwrap_or(tail)
+}
+
+/// Empty-state welcome banner: an ASCII-art "TELEIA" logo that shimmers
+/// between TN_PURPLE and TN_BLUE per character, with a blinking red Greek
+/// period below — same motif as the SVG banner in the README. Centred
+/// horizontally to the available `width`.
+fn welcome_banner(width: u16, frame: usize) -> Vec<Line<'static>> {
+    const LOGO: &[&str] = &[
+        "████████╗███████╗██╗     ███████╗██╗ █████╗ ",
+        "╚══██╔══╝██╔════╝██║     ██╔════╝██║██╔══██╗",
+        "   ██║   █████╗  ██║     █████╗  ██║███████║",
+        "   ██║   ██╔══╝  ██║     ██╔══╝  ██║██╔══██║",
+        "   ██║   ███████╗███████╗███████╗██║██║  ██║",
+        "   ╚═╝   ╚══════╝╚══════╝╚══════╝╚═╝╚═╝  ╚═╝",
+    ];
+    let logo_width = LOGO[0].chars().count();
+    let logo_pad = (width as usize).saturating_sub(logo_width) / 2;
+    let logo_indent = " ".repeat(logo_pad);
+
+    let mut out = Vec::new();
+    out.push(Line::from(""));
+    out.push(Line::from(""));
+
+    for row in LOGO {
+        let mut spans: Vec<Span<'static>> = vec![Span::raw(logo_indent.clone())];
+        for (i, c) in row.chars().enumerate() {
+            // Per-character colour alternation; the phase shifts with frame
+            // to give a slow shimmer reading left-to-right.
+            let color = if (i + frame / 4).is_multiple_of(2) {
+                TN_PURPLE
+            } else {
+                TN_BLUE
+            };
+            spans.push(Span::styled(
+                c.to_string(),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ));
+        }
+        out.push(Line::from(spans));
+    }
+
+    // Greek period (●) blinks under the end of the logo at ~2 Hz.
+    let dot_visible = (frame / 10).is_multiple_of(2);
+    let dot_col = logo_pad + logo_width.saturating_sub(2);
+    if dot_visible && dot_col < width as usize {
+        out.push(Line::from(vec![
+            Span::raw(" ".repeat(dot_col)),
+            Span::styled("●", Style::default().fg(TN_RED)),
+        ]));
+    } else {
+        out.push(Line::from(""));
+    }
+
+    out.push(Line::from(""));
+
+    let center = |s: &str, style: Style| -> Line<'static> {
+        let pad = (width as usize).saturating_sub(s.chars().count()) / 2;
+        Line::from(Span::styled(format!("{}{s}", " ".repeat(pad)), style))
+    };
+    out.push(center(
+        "the distilled coding agent",
+        Style::default().fg(TN_CYAN).add_modifier(Modifier::ITALIC),
+    ));
+    out.push(center(
+        "τελεία · full stop",
+        Style::default().fg(TN_DIM).add_modifier(Modifier::ITALIC),
+    ));
+    out.push(Line::from(""));
+    out.push(Line::from(""));
+    out.push(center(
+        "Type to start · /help for commands · esc for normal mode",
+        Style::default().fg(TN_DIM),
+    ));
+
+    out
 }
 
 /// Walk an assistant message looking for ```lang ... ``` code fences. Plain
