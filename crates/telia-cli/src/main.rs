@@ -13,7 +13,10 @@ use telia_store::Store;
 /// can switch between them without a fresh download. The active `--model`
 /// is added to this set automatically if it isn't already in it. Only
 /// pulled when the resolved base URL looks like Ollama.
-const DEFAULT_OLLAMA_MODELS: &[&str] = &["hf.co/FoolDev/Janus-35B:Q4_K_M"];
+const DEFAULT_OLLAMA_MODELS: &[&str] = &[
+    "hf.co/FoolDev/Thanatos-27B:Q4_K_M",
+    "hf.co/FoolDev/Janus-35B:Q4_K_M",
+];
 
 /// Cloud models surfaced in the `/model` dropdown even though they
 /// aren't backed by anything that can be `ollama pull`-ed. Selecting
@@ -33,7 +36,7 @@ struct Args {
     /// `gpt-*`/`o1*`/`o3*` → OpenAI, everything else → local Ollama.
     /// The choice of base-url and API key follow this detection unless
     /// overridden.
-    #[arg(long, default_value = "hf.co/FoolDev/Janus-35B:Q4_K_M")]
+    #[arg(long, default_value = "hf.co/FoolDev/Thanatos-27B:Q4_K_M")]
     model: String,
     /// Override the auto-detected base URL. By default `claude-*` models
     /// route to https://api.anthropic.com/v1, `gpt-*` to OpenAI, and
@@ -106,7 +109,7 @@ async fn main() -> Result<()> {
 /// Pre-flight: if Ollama can be reached and reports the model isn't
 /// cached, stream `/api/pull` and render an animated progress bar before
 /// the TUI takes over the screen. Models like the default
-/// `hf.co/FoolDev/Janus-35B:Q4_K_M` resolve to a HuggingFace pull
+/// `hf.co/FoolDev/Thanatos-27B:Q4_K_M` resolve to a HuggingFace pull
 /// automatically via Ollama's bridge.
 ///
 /// If `/api/show` is unreachable (non-Ollama backend, or Ollama not
