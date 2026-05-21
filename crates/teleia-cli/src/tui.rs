@@ -11,11 +11,11 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Gauge, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Wrap},
     Terminal,
 };
 use std::{io, time::Duration};
-use teleia_agent::{Agent, TurnEvent, MAX_TOOL_HOPS};
+use teleia_agent::{Agent, TurnEvent};
 
 const HINTS: &str = "enter send · esc normal · :q quit · tab accept · /help";
 
@@ -78,7 +78,6 @@ struct State {
     scroll: u16, // offset from auto-scroll bottom; 0 = follow
     working: bool,
     should_quit: bool,
-    hop: usize, // 0..=MAX_TOOL_HOPS, 0 = idle
     suggestion: Option<Suggestion>,
     mode: Mode,
     command_buf: String,
@@ -99,7 +98,6 @@ impl State {
             scroll: 0,
             working: false,
             should_quit: false,
-            hop: 0,
             suggestion: None,
             mode: Mode::Insert,
             command_buf: String::new(),
@@ -115,7 +113,6 @@ impl State {
     fn apply(&mut self, evt: TurnEvent) {
         match evt {
             TurnEvent::AssistantStart => {
-                self.hop = (self.hop + 1).min(MAX_TOOL_HOPS);
                 self.push(Entry::Assistant {
                     text: String::new(),
                     complete: false,
@@ -164,9 +161,7 @@ impl State {
                     self.scroll = 0;
                 }
             }
-            TurnEvent::TurnEnd => {
-                self.hop = 0;
-            }
+            TurnEvent::TurnEnd => {}
         }
     }
 }
@@ -425,7 +420,6 @@ async fn submit_input<B: ratatui::backend::Backend>(
     state.working = true;
     run_turn(terminal, state, agent, trimmed.to_string()).await;
     state.working = false;
-    state.hop = 0;
     state.status = format!(
         "session {} · ready",
         &agent.session_id()[..agent.session_id().len().min(12)]
@@ -736,7 +730,6 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
             Constraint::Min(3),
             Constraint::Length(3),
             Constraint::Length(1),
-            Constraint::Length(1),
         ])
         .split(f.area());
 
@@ -801,16 +794,6 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
     let cursor_y = inside.y + 1;
     f.set_cursor_position((cursor_x, cursor_y));
 
-    let ratio = (state.hop as f64 / MAX_TOOL_HOPS as f64).clamp(0.0, 1.0);
-    let gauge = Gauge::default()
-        .gauge_style(Style::default().fg(TN_PURPLE).bg(Color::Reset))
-        .label(Span::styled(
-            format!("hops {}/{}", state.hop, MAX_TOOL_HOPS),
-            Style::default().fg(TN_FG),
-        ))
-        .ratio(ratio);
-    f.render_widget(gauge, chunks[2]);
-
     let (mode_label, mode_color) = match state.mode {
         Mode::Insert => ("INS", TN_CYAN),
         Mode::Normal => ("NOR", TN_GREEN),
@@ -834,7 +817,7 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
         Span::raw("   "),
         Span::styled(HINTS, Style::default().fg(TN_DIM)),
     ]);
-    f.render_widget(Paragraph::new(status_line), chunks[3]);
+    f.render_widget(Paragraph::new(status_line), chunks[2]);
 }
 
 /// Compact "hf.co/FoolDev/Thanatos-27B:Q4_K_M" → "Thanatos-27B" for status-
