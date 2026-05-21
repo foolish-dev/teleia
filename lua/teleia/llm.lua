@@ -1,4 +1,4 @@
--- Ollama OpenAI-compat client via shell-out to curl.
+-- Ollama OpenAI-compat client. Streaming via `curl -N` piped through io.popen.
 local json = require("teleia.json")
 
 local M = {}
@@ -16,71 +16,94 @@ function M.new(base_url, model)
   }
 end
 
-function M.chat(client, messages, tools)
+-- Iterator returning stream events:
+--   { kind = "content", text = "..." }
+--   { kind = "done", tool_calls = {...} }
+function M.stream(client, messages, tools)
   local body = {
     model = client.model,
     messages = messages,
-    stream = false,
+    stream = true,
   }
   if tools and #tools > 0 then
     body.tools = tools
   end
   local payload = json.encode(body)
 
-  local cmd = string.format(
-    "curl -fsS -X POST -H 'content-type: application/json' --data-binary @- %s",
-    shell_escape(client.base_url .. "/chat/completions")
-  )
-  -- write payload via stdin to avoid argv length and quoting hazards.
-  local pipe = io.popen(cmd, "w")
-  if not pipe then error("failed to spawn curl") end
-  -- io.popen in mode "w" loses stdout; instead use a temp-file pattern:
-  pipe:close()
-
   local tmp_in = os.tmpname()
-  local tmp_out = os.tmpname()
   local fin = assert(io.open(tmp_in, "w"))
   fin:write(payload)
   fin:close()
 
-  local rc = os.execute(string.format(
-    "curl -fsS -X POST -H 'content-type: application/json' --data-binary @%s %s > %s 2>&1",
-    shell_escape(tmp_in), shell_escape(client.base_url .. "/chat/completions"), shell_escape(tmp_out)
-  ))
-  local fout = assert(io.open(tmp_out, "r"))
-  local raw = fout:read("*a")
-  fout:close()
-  os.remove(tmp_in)
-  os.remove(tmp_out)
+  local cmd = string.format(
+    "curl -fsS -N -X POST -H 'content-type: application/json' --data-binary @%s %s 2>/dev/null",
+    shell_escape(tmp_in),
+    shell_escape(client.base_url .. "/chat/completions")
+  )
+  local pipe = assert(io.popen(cmd, "r"))
 
-  if rc ~= true and rc ~= 0 then
-    error("ollama call failed: " .. raw)
+  local acc = {}
+  local indices = {}
+  local done = false
+  local queue = {}
+
+  local function flush_done()
+    table.sort(indices)
+    local tool_calls = {}
+    for _, idx in ipairs(indices) do
+      local slot = acc[idx]
+      table.insert(tool_calls, {
+        id = slot.id or "",
+        ["type"] = "function",
+        ["function"] = { name = slot.name or "", arguments = slot.arguments or "" },
+      })
+    end
+    return { kind = "done", tool_calls = tool_calls }
   end
 
-  local ok, parsed = pcall(json.decode, raw)
-  if not ok then error("decode response: " .. raw) end
-
-  local choice = parsed.choices and parsed.choices[1] or {}
-  local msg = choice.message or {}
-  local tool_calls = {}
-  for _, raw_tc in ipairs(msg.tool_calls or {}) do
-    table.insert(tool_calls, {
-      id = raw_tc.id or "",
-      ["type"] = raw_tc["type"] or "function",
-      ["function"] = {
-        name = (raw_tc["function"] or {}).name or "",
-        arguments = (raw_tc["function"] or {}).arguments or "{}",
-      },
-    })
+  local function ingest_line(line)
+    if not line:match("^data:") then return end
+    local raw = line:sub(6):gsub("^%s+", "")
+    if raw == "" or raw == "[DONE]" then return end
+    local ok, chunk = pcall(json.decode, raw)
+    if not ok or not chunk then return end
+    for _, choice in ipairs(chunk.choices or {}) do
+      local delta = choice.delta or {}
+      if delta.content and delta.content ~= "" then
+        table.insert(queue, { kind = "content", text = delta.content })
+      end
+      for _, tcd in ipairs(delta.tool_calls or {}) do
+        local idx = tcd.index or 0
+        if not acc[idx] then
+          acc[idx] = { id = "", name = "", arguments = "" }
+          table.insert(indices, idx)
+        end
+        local slot = acc[idx]
+        if tcd.id and tcd.id ~= "" then slot.id = tcd.id end
+        local fn = tcd["function"] or {}
+        if fn.name and fn.name ~= "" then slot.name = fn.name end
+        if fn.arguments then slot.arguments = slot.arguments .. fn.arguments end
+      end
+    end
   end
-  local content = msg.content
-  if content == "" then content = nil end
 
-  return {
-    role = "assistant",
-    content = content,
-    tool_calls = tool_calls,
-  }
+  return function()
+    while #queue == 0 and not done do
+      local line = pipe:read("*l")
+      if line == nil then
+        done = true
+        pipe:close()
+        os.remove(tmp_in)
+        table.insert(queue, flush_done())
+        break
+      end
+      ingest_line(line)
+    end
+    if #queue > 0 then
+      return table.remove(queue, 1)
+    end
+    return nil
+  end
 end
 
 return M

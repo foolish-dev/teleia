@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any
-from urllib import request, error
+from typing import Any, Iterator
+from urllib import error, request
 
 DEFAULT_BASE_URL = "http://127.0.0.1:11434/v1"
 
@@ -57,16 +57,31 @@ class Message:
         return out
 
 
+@dataclass
+class ContentDelta:
+    text: str
+
+
+@dataclass
+class StreamDone:
+    tool_calls: list[ToolCall]
+
+
+StreamEvent = ContentDelta | StreamDone
+
+
 class LlmClient:
     def __init__(self, base_url: str, model: str) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
 
-    def chat(self, messages: list[Message], tools: list[ToolDef] | None = None) -> Message:
+    def stream(
+        self, messages: list[Message], tools: list[ToolDef] | None = None
+    ) -> Iterator[StreamEvent]:
         body: dict[str, Any] = {
             "model": self.model,
             "messages": [m.to_wire() for m in messages],
-            "stream": False,
+            "stream": True,
         }
         if tools:
             body["tools"] = [t.to_wire() for t in tools]
@@ -77,23 +92,52 @@ class LlmClient:
             headers={"content-type": "application/json"},
             method="POST",
         )
+
+        accumulated: dict[int, dict[str, str]] = {}
+
         try:
-            with request.urlopen(req, timeout=300) as resp:
-                payload = json.loads(resp.read())
+            resp = request.urlopen(req, timeout=300)
         except error.HTTPError as e:
             raise RuntimeError(f"ollama {e.code}: {e.read().decode('utf-8', 'replace')}") from e
 
-        choice = (payload.get("choices") or [{}])[0]
-        msg = choice.get("message") or {}
-        tool_calls = []
-        for raw in msg.get("tool_calls") or []:
-            fn = raw.get("function") or {}
-            tool_calls.append(
-                ToolCall(
-                    id=raw.get("id", ""),
-                    name=fn.get("name", ""),
-                    arguments=fn.get("arguments", "{}"),
-                )
+        with resp:
+            for raw_line in resp:
+                line = raw_line.decode("utf-8", "replace").rstrip("\n").rstrip("\r")
+                if not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                if not payload or payload == "[DONE]":
+                    continue
+                try:
+                    chunk = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+                for choice in chunk.get("choices") or []:
+                    delta = choice.get("delta") or {}
+                    text = delta.get("content")
+                    if text:
+                        yield ContentDelta(text)
+                    for tcd in delta.get("tool_calls") or []:
+                        _accumulate(accumulated, tcd)
+
+        tool_calls = [
+            ToolCall(
+                id=acc.get("id", ""),
+                name=acc.get("name", ""),
+                arguments=acc.get("arguments", ""),
             )
-        content = msg.get("content") or None
-        return Message(role="assistant", content=content, tool_calls=tool_calls)
+            for _, acc in sorted(accumulated.items())
+        ]
+        yield StreamDone(tool_calls)
+
+
+def _accumulate(acc: dict[int, dict[str, str]], delta: dict[str, Any]) -> None:
+    idx = int(delta.get("index", 0))
+    slot = acc.setdefault(idx, {"id": "", "name": "", "arguments": ""})
+    if delta.get("id"):
+        slot["id"] = delta["id"]
+    fn = delta.get("function") or {}
+    if fn.get("name"):
+        slot["name"] = fn["name"]
+    if fn.get("arguments") is not None:
+        slot["arguments"] += fn["arguments"]

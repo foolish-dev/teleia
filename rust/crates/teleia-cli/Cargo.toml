@@ -17,6 +17,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
+futures-util.workspace = true
 teleia-llm.workspace = true
 teleia-agent.workspace = true
 teleia-store.workspace = true

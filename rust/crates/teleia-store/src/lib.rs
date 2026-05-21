@@ -1,6 +1,6 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use directories::ProjectDirs;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::path::PathBuf;
 use teleia_llm::Message;
 
@@ -27,7 +27,12 @@ impl Store {
                 seq INTEGER NOT NULL,
                 payload TEXT NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, seq);",
+            CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, seq);
+            CREATE TABLE IF NOT EXISTS aliases (
+                name TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                created_at INTEGER NOT NULL
+            );",
         )?;
         Ok(Self { conn })
     }
@@ -63,6 +68,26 @@ impl Store {
             out.push(message);
         }
         Ok(out)
+    }
+
+    pub fn save_alias(&self, name: &str, session_id: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO aliases (name, session_id, created_at) VALUES (?1, ?2, ?3)",
+            params![name, session_id, unix_seconds()],
+        )?;
+        Ok(())
+    }
+
+    pub fn resolve_alias(&self, name: &str) -> Result<String> {
+        let id: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT session_id FROM aliases WHERE name = ?1",
+                params![name],
+                |row| row.get(0),
+            )
+            .optional()?;
+        id.ok_or_else(|| anyhow!("no session saved as '{name}'"))
     }
 }
 

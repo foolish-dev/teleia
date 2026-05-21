@@ -9,9 +9,13 @@ const SYSTEM_PROMPT =
 
 const MAX_TOOL_HOPS = 16
 
-export type Step =
-  | { kind: "assistant"; text: string }
-  | { kind: "tool"; name: string; arguments: string; output: string }
+export type TurnEvent =
+  | { kind: "assistant_start" }
+  | { kind: "assistant_delta"; text: string }
+  | { kind: "assistant_end" }
+  | { kind: "tool_start"; name: string; arguments: string }
+  | { kind: "tool_end"; name: string; output: string }
+  | { kind: "turn_end" }
 
 export class Agent {
   llm: LlmClient
@@ -35,44 +39,71 @@ export class Agent {
     this.messages.push(m)
   }
 
-  async turn(userInput: string): Promise<Step[]> {
+  reset(): void {
+    this.sessionId = this.store.createSession(this.llm.model)
+    this.messages = []
+    this.seq = 0
+    this.push({ role: "system", content: SYSTEM_PROMPT })
+  }
+
+  saveAlias(name: string): void {
+    this.store.saveAlias(name, this.sessionId)
+  }
+
+  loadAlias(name: string): string {
+    const id = this.store.resolveAlias(name)
+    this.sessionId = id
+    this.messages = this.store.load(id)
+    this.seq = this.messages.length
+    return id
+  }
+
+  async *turn(userInput: string): AsyncGenerator<TurnEvent> {
     this.push({ role: "user", content: userInput })
-    const steps: Step[] = []
 
     for (let hop = 0; hop < MAX_TOOL_HOPS; hop++) {
-      const reply = await this.llm.chat(this.messages, this.tools)
-      this.push(reply)
+      yield { kind: "assistant_start" }
+      let contentBuf = ""
+      let toolCalls: import("./llm").ToolCall[] = []
 
-      if (reply.role !== "assistant") continue
-
-      if (reply.content) {
-        steps.push({ kind: "assistant", text: reply.content })
+      for await (const ev of this.llm.stream(this.messages, this.tools)) {
+        if (ev.kind === "content") {
+          contentBuf += ev.text
+          yield { kind: "assistant_delta", text: ev.text }
+        } else {
+          toolCalls = ev.tool_calls
+        }
       }
 
-      const calls = reply.tool_calls ?? []
-      if (calls.length === 0) return steps
+      yield { kind: "assistant_end" }
+      this.push({
+        role: "assistant",
+        content: contentBuf || null,
+        tool_calls: toolCalls,
+      })
 
-      for (const call of calls) {
+      if (toolCalls.length === 0) {
+        yield { kind: "turn_end" }
+        return
+      }
+
+      for (const call of toolCalls) {
+        yield { kind: "tool_start", name: call.function.name, arguments: call.function.arguments }
         let output: string
         try {
           output = await dispatch(call.function.name, call.function.arguments)
         } catch (e) {
           output = `error: ${(e as Error).message}`
         }
-        steps.push({
-          kind: "tool",
-          name: call.function.name,
-          arguments: call.function.arguments,
-          output,
-        })
+        yield { kind: "tool_end", name: call.function.name, output }
         this.push({ role: "tool", tool_call_id: call.id, content: output })
       }
     }
 
-    steps.push({
-      kind: "assistant",
+    yield {
+      kind: "assistant_delta",
       text: `[stopped: hit tool-hop limit of ${MAX_TOOL_HOPS}]`,
-    })
-    return steps
+    }
+    yield { kind: "turn_end" }
   }
 }

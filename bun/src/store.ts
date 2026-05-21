@@ -31,6 +31,11 @@ export class Store {
         payload TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, seq);
+      CREATE TABLE IF NOT EXISTS aliases (
+        name TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
     `)
   }
 
@@ -46,5 +51,28 @@ export class Store {
     this.db
       .prepare("INSERT INTO messages (session_id, seq, payload) VALUES (?, ?, ?)")
       .run(sessionId, seq, JSON.stringify(message))
+  }
+
+  load(sessionId: string): Message[] {
+    const rows = this.db
+      .prepare("SELECT payload FROM messages WHERE session_id = ? ORDER BY seq ASC")
+      .all(sessionId) as Array<{ payload: string }>
+    return rows.map((r) => JSON.parse(r.payload) as Message)
+  }
+
+  saveAlias(name: string, sessionId: string): void {
+    this.db
+      .prepare(
+        "INSERT OR REPLACE INTO aliases (name, session_id, created_at) VALUES (?, ?, ?)",
+      )
+      .run(name, sessionId, Math.floor(Date.now() / 1000))
+  }
+
+  resolveAlias(name: string): string {
+    const row = this.db
+      .prepare("SELECT session_id FROM aliases WHERE name = ?")
+      .get(name) as { session_id: string } | null
+    if (!row) throw new Error(`no session saved as '${name}'`)
+    return row.session_id
   }
 }

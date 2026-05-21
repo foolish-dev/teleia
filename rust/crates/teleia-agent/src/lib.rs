@@ -1,5 +1,7 @@
 use anyhow::Result;
-use teleia_llm::{LlmClient, Message, ToolDef};
+use async_stream::try_stream;
+use futures_util::{pin_mut, Stream, StreamExt};
+use teleia_llm::{ChatEvent, LlmClient, Message, ToolDef};
 use teleia_store::Store;
 
 const SYSTEM_PROMPT: &str = "You are Teleia, a terse coding assistant running in a terminal. \
@@ -8,6 +10,17 @@ Default to brief replies. When you finish a turn, stop — do not narrate.";
 
 const MAX_TOOL_HOPS: usize = 16;
 
+/// Events emitted by `turn()`. The TUI consumes these to render incrementally.
+#[derive(Debug, Clone)]
+pub enum TurnEvent {
+    AssistantStart,
+    AssistantDelta(String),
+    AssistantEnd,
+    ToolStart { name: String, arguments: String },
+    ToolEnd { name: String, output: String },
+    TurnEnd,
+}
+
 pub struct Agent {
     llm: LlmClient,
     tools: Vec<ToolDef>,
@@ -15,15 +28,6 @@ pub struct Agent {
     session_id: String,
     messages: Vec<Message>,
     seq: usize,
-}
-
-pub enum Step {
-    Assistant(String),
-    Tool {
-        name: String,
-        input: String,
-        output: String,
-    },
 }
 
 impl Agent {
@@ -37,10 +41,9 @@ impl Agent {
             messages: Vec::new(),
             seq: 0,
         };
-        let system = Message::System {
+        agent.push(Message::System {
             content: SYSTEM_PROMPT.to_string(),
-        };
-        agent.push(system)?;
+        })?;
         Ok(agent)
     }
 
@@ -48,58 +51,101 @@ impl Agent {
         &self.session_id
     }
 
-    pub async fn turn(&mut self, user_input: String) -> Result<Vec<Step>> {
-        self.push(Message::User {
-            content: user_input,
+    pub fn reset(&mut self) -> Result<()> {
+        let session_id = self.store.create_session(self.llm.model())?;
+        self.session_id = session_id;
+        self.messages.clear();
+        self.seq = 0;
+        self.push(Message::System {
+            content: SYSTEM_PROMPT.to_string(),
         })?;
-        let mut steps = Vec::new();
+        Ok(())
+    }
 
-        for _ in 0..MAX_TOOL_HOPS {
-            let reply = self.llm.chat(&self.messages, Some(&self.tools)).await?;
-            self.push(reply.clone())?;
+    pub fn load_alias(&mut self, name: &str) -> Result<String> {
+        let session_id = self.store.resolve_alias(name)?;
+        let messages = self.store.load(&session_id)?;
+        self.session_id = session_id.clone();
+        self.messages = messages;
+        self.seq = self.messages.len();
+        Ok(session_id)
+    }
 
-            let Message::Assistant {
-                content,
-                tool_calls,
-            } = reply
-            else {
-                continue;
-            };
+    pub fn save_alias(&self, name: &str) -> Result<()> {
+        self.store.save_alias(name, &self.session_id)
+    }
 
-            if let Some(text) = content.as_ref() {
-                if !text.is_empty() {
-                    steps.push(Step::Assistant(text.clone()));
+    pub fn turn<'a>(
+        &'a mut self,
+        user_input: String,
+    ) -> impl Stream<Item = Result<TurnEvent>> + 'a {
+        try_stream! {
+            self.push(Message::User { content: user_input })?;
+
+            for _ in 0..MAX_TOOL_HOPS {
+                yield TurnEvent::AssistantStart;
+                let mut content_buf = String::new();
+                let mut tool_calls = Vec::new();
+
+                {
+                    let stream = self.llm.stream(&self.messages, Some(&self.tools));
+                    pin_mut!(stream);
+                    while let Some(event) = stream.next().await {
+                        match event? {
+                            ChatEvent::ContentDelta(text) => {
+                                content_buf.push_str(&text);
+                                yield TurnEvent::AssistantDelta(text);
+                            }
+                            ChatEvent::Done { tool_calls: tcs } => {
+                                tool_calls = tcs;
+                            }
+                        }
+                    }
                 }
-            }
 
-            if tool_calls.is_empty() {
-                return Ok(steps);
-            }
+                yield TurnEvent::AssistantEnd;
 
-            for call in tool_calls {
-                let output =
-                    match teleia_tools::dispatch(&call.function.name, &call.function.arguments)
-                        .await
+                let assistant_msg = Message::Assistant {
+                    content: (!content_buf.is_empty()).then_some(content_buf.clone()),
+                    tool_calls: tool_calls.clone(),
+                };
+                self.push(assistant_msg)?;
+
+                if tool_calls.is_empty() {
+                    yield TurnEvent::TurnEnd;
+                    return;
+                }
+
+                for call in tool_calls {
+                    yield TurnEvent::ToolStart {
+                        name: call.function.name.clone(),
+                        arguments: call.function.arguments.clone(),
+                    };
+                    let output = match teleia_tools::dispatch(
+                        &call.function.name,
+                        &call.function.arguments,
+                    )
+                    .await
                     {
                         Ok(o) => o,
                         Err(e) => format!("error: {e}"),
                     };
-                steps.push(Step::Tool {
-                    name: call.function.name.clone(),
-                    input: call.function.arguments.clone(),
-                    output: output.clone(),
-                });
-                self.push(Message::Tool {
-                    tool_call_id: call.id.clone(),
-                    content: output,
-                })?;
+                    yield TurnEvent::ToolEnd {
+                        name: call.function.name.clone(),
+                        output: output.clone(),
+                    };
+                    self.push(Message::Tool {
+                        tool_call_id: call.id.clone(),
+                        content: output,
+                    })?;
+                }
             }
-        }
 
-        steps.push(Step::Assistant(format!(
-            "[stopped: hit tool-hop limit of {MAX_TOOL_HOPS}]"
-        )));
-        Ok(steps)
+            yield TurnEvent::AssistantDelta(format!(
+                "[stopped: hit tool-hop limit of {MAX_TOOL_HOPS}]"
+            ));
+            yield TurnEvent::TurnEnd;
+        }
     }
 
     fn push(&mut self, message: Message) -> Result<()> {

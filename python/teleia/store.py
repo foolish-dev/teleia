@@ -34,6 +34,11 @@ class Store:
                 payload TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, seq);
+            CREATE TABLE IF NOT EXISTS aliases (
+                name TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );
             """
         )
         self.conn.commit()
@@ -55,6 +60,28 @@ class Store:
         )
         self.conn.commit()
 
+    def load(self, session_id: str) -> list[Message]:
+        rows = self.conn.execute(
+            "SELECT payload FROM messages WHERE session_id = ? ORDER BY seq ASC",
+            (session_id,),
+        ).fetchall()
+        return [_from_jsonable(json.loads(p)) for (p,) in rows]
+
+    def save_alias(self, name: str, session_id: str) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO aliases (name, session_id, created_at) VALUES (?, ?, ?)",
+            (name, session_id, int(time.time())),
+        )
+        self.conn.commit()
+
+    def resolve_alias(self, name: str) -> str:
+        row = self.conn.execute(
+            "SELECT session_id FROM aliases WHERE name = ?", (name,)
+        ).fetchone()
+        if row is None:
+            raise RuntimeError(f"no session saved as '{name}'")
+        return row[0]
+
 
 def _to_jsonable(m: Message) -> dict:
     out: dict = {"role": m.role}
@@ -65,6 +92,15 @@ def _to_jsonable(m: Message) -> dict:
     if m.tool_call_id is not None:
         out["tool_call_id"] = m.tool_call_id
     return out
+
+
+def _from_jsonable(raw: dict) -> Message:
+    return Message(
+        role=raw["role"],
+        content=raw.get("content"),
+        tool_calls=[ToolCall(id=tc["id"], name=tc["name"], arguments=tc["arguments"]) for tc in raw.get("tool_calls", [])],
+        tool_call_id=raw.get("tool_call_id"),
+    )
 
 
 __all__ = ["Store", "Message", "ToolCall"]

@@ -42,11 +42,16 @@ cd bun && bun install && bun run start
 
 Requires Ollama running at `127.0.0.1:11434` with a tool-capable model installed.
 
-## Scope (v0)
+## Features (v1)
 
-Single provider · single session per run · four tools · turn-based UI.
+- **Streaming**: tokens render live as the model produces them (SSE).
+- **Tool loop**: read / write / edit / bash, with a 16-hop cap.
+- **Slash commands**: `/reset`, `/save NAME`, `/load NAME`, `/help`.
+- **Scrollback**: ↑ / ↓ (PageUp / PageDown) navigate history in rust/python/go/bun. Lua relies on terminal scrollback.
+- **Persistent sessions**: every message persists to `$XDG_DATA_HOME/teleia/teleia.sqlite`. Save/load by alias across runs and across implementations.
+- **Single provider**: Ollama (OpenAI-chat-compatible), one model per process.
 
-Not yet: MCP, LSP, plugins, subagents, streaming, multi-provider, web UI.
+Not yet: MCP, LSP, plugins, subagents, multi-provider, web UI.
 
 ## Why polyglot
 

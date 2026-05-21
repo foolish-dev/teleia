@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -42,6 +43,11 @@ func Open() (*Store, error) {
 			payload TEXT NOT NULL
 		);
 		CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, seq);
+		CREATE TABLE IF NOT EXISTS aliases (
+			name TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			created_at INTEGER NOT NULL
+		);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		return nil, err
@@ -60,12 +66,57 @@ func (s *Store) CreateSession(model string) (string, error) {
 	return id, err
 }
 
-func (s *Store) Append(sessionID string, seq int, m llm.Message, payload string) error {
-	_, err := s.db.Exec(
+func (s *Store) Append(sessionID string, seq int, m llm.Message) error {
+	payload, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(
 		"INSERT INTO messages (session_id, seq, payload) VALUES (?, ?, ?)",
-		sessionID, seq, payload,
+		sessionID, seq, string(payload),
 	)
 	return err
+}
+
+func (s *Store) Load(sessionID string) ([]llm.Message, error) {
+	rows, err := s.db.Query(
+		"SELECT payload FROM messages WHERE session_id = ? ORDER BY seq ASC",
+		sessionID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []llm.Message
+	for rows.Next() {
+		var payload string
+		if err := rows.Scan(&payload); err != nil {
+			return nil, err
+		}
+		var m llm.Message
+		if err := json.Unmarshal([]byte(payload), &m); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) SaveAlias(name, sessionID string) error {
+	_, err := s.db.Exec(
+		"INSERT OR REPLACE INTO aliases (name, session_id, created_at) VALUES (?, ?, ?)",
+		name, sessionID, time.Now().Unix(),
+	)
+	return err
+}
+
+func (s *Store) ResolveAlias(name string) (string, error) {
+	var id string
+	err := s.db.QueryRow("SELECT session_id FROM aliases WHERE name = ?", name).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", fmt.Errorf("no session saved as '%s'", name)
+	}
+	return id, err
 }
 
 func dataPath() (string, error) {
