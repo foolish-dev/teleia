@@ -92,8 +92,15 @@ function M.stream(client, messages, tools)
       local line = pipe:read("*l")
       if line == nil then
         done = true
-        pipe:close()
+        local close_ok, what, code = pipe:close()
         os.remove(tmp_in)
+        if not close_ok then
+          table.insert(queue, {
+            kind = "content",
+            text = string.format("[error: ollama request failed (curl %s %s)]",
+              tostring(what or "?"), tostring(code or "?"))
+          })
+        end
         table.insert(queue, flush_done())
         break
       end
