@@ -1107,6 +1107,37 @@ async fn run_turn<B: ratatui::backend::Backend>(
             return;
         }
 
+        // Drain whatever input events have piled up — without this, the
+        // outer event loop is parked awaiting this function and the TUI
+        // looks frozen: mouse wheel does nothing, Ctrl-C does nothing,
+        // the terminal cursor sits stuck on the input. Non-blocking,
+        // so a fast turn pays essentially nothing for this.
+        while event::poll(Duration::from_millis(0)).unwrap_or(false) {
+            let Ok(evt) = event::read() else { break };
+            match evt {
+                Event::Key(k)
+                    if k.modifiers.contains(KeyModifiers::CONTROL)
+                        && matches!(k.code, KeyCode::Char('c')) =>
+                {
+                    state.push(Entry::Info("(turn aborted)".into()));
+                    return;
+                }
+                Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::ScrollUp,
+                    ..
+                }) => state.scroll = state.scroll.saturating_add(3),
+                Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::ScrollDown,
+                    ..
+                }) => state.scroll = state.scroll.saturating_sub(3),
+                _ => {
+                    // Other keys/mouse buttons are dropped during a turn —
+                    // typing into the input mid-stream would be confusing
+                    // since we'd have to decide whether to queue it.
+                }
+            }
+        }
+
         tokio::select! {
             evt = stream.next() => {
                 match evt {
