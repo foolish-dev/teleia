@@ -34,7 +34,23 @@ const KNOWN_CLOUD_MODELS: &[&str] = &[
     name = "τέλεια",
     bin_name = "τέλεια",
     version,
-    about = "Minimal TUI coding agent"
+    about = "τέλεια — terminal coding agent. Streams chat, runs read/write/edit/bash, persists sessions to SQLite.",
+    long_about = "τέλεια is a small TUI coding agent.\n\
+                  \n\
+                  It talks to any OpenAI-compatible chat-completions endpoint — local Ollama (default), \
+                  Anthropic, or OpenAI — picking the provider automatically from the model name unless \
+                  --base-url is overridden. Four tools round-trip through a 16-hop loop: `read`, `write`, \
+                  `edit`, and `bash` (combined stdout/stderr, 30s timeout).\n\
+                  \n\
+                  The TUI offers vim-style Insert / Normal / Command modes, autocomplete with drop-down \
+                  menus for slash commands and saved aliases, ghost-text suggestions, readline-style input \
+                  history (Up/Down), Tokyo Night / Catppuccin / Dracula themes, a token tracker, and \
+                  desktop notifications when a turn completes. Sessions live in SQLite at \
+                  $XDG_DATA_HOME/telia/telia.sqlite and can be saved or loaded by alias across runs.\n\
+                  \n\
+                  When the resolved endpoint looks like Ollama, missing models trigger an interactive \
+                  pull prompt with an animated progress bar; pass --pull-yes to auto-confirm or --no-pull \
+                  to skip the pre-flight entirely."
 )]
 struct Args {
     /// Model to chat with. Detection by name: `claude-*` → Anthropic,
