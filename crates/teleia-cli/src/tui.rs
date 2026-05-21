@@ -114,6 +114,12 @@ struct State {
     mode: Mode,
     command_buf: String,
     command_cursor: usize,
+    /// Shell-style readline history: every non-empty submission, in order.
+    /// Consecutive duplicates are deduplicated.
+    input_history: Vec<String>,
+    /// Index into `input_history` when the user is browsing past inputs via
+    /// Up/Down. `None` means "not currently recalling".
+    recall_idx: Option<usize>,
 }
 
 impl State {
@@ -137,6 +143,8 @@ impl State {
             mode: Mode::Insert,
             command_buf: String::new(),
             command_cursor: 0,
+            input_history: Vec::new(),
+            recall_idx: None,
         }
     }
 
@@ -262,15 +270,19 @@ async fn event_loop<B: ratatui::backend::Backend>(
                             }
                         }
                     }
-                    KeyCode::Up | KeyCode::PageUp => {
-                        state.scroll = state
-                            .scroll
-                            .saturating_add(if key.code == KeyCode::PageUp { 5 } else { 1 });
+                    KeyCode::Up if recall_up_possible(state) => recall_up(state),
+                    KeyCode::Down if state.recall_idx.is_some() => recall_down(state),
+                    KeyCode::PageUp => {
+                        state.scroll = state.scroll.saturating_add(5);
                     }
-                    KeyCode::Down | KeyCode::PageDown => {
-                        state.scroll = state
-                            .scroll
-                            .saturating_sub(if key.code == KeyCode::PageDown { 5 } else { 1 });
+                    KeyCode::PageDown => {
+                        state.scroll = state.scroll.saturating_sub(5);
+                    }
+                    KeyCode::Up => {
+                        state.scroll = state.scroll.saturating_add(1);
+                    }
+                    KeyCode::Down => {
+                        state.scroll = state.scroll.saturating_sub(1);
                     }
                     KeyCode::Left => {
                         if let Some((i, _)) =
@@ -302,13 +314,18 @@ async fn event_loop<B: ratatui::backend::Backend>(
                                 'u' => {
                                     state.input.clear();
                                     state.input_cursor = 0;
+                                    state.recall_idx = None;
                                 }
-                                'w' => delete_word_before_cursor(state),
+                                'w' => {
+                                    delete_word_before_cursor(state);
+                                    state.recall_idx = None;
+                                }
                                 _ => {}
                             }
                         } else {
                             state.input.insert(state.input_cursor, c);
                             state.input_cursor += c.len_utf8();
+                            state.recall_idx = None;
                         }
                     }
                     KeyCode::Backspace if state.input_cursor > 0 => {
@@ -319,9 +336,11 @@ async fn event_loop<B: ratatui::backend::Backend>(
                         let new_cursor = state.input_cursor - prev.len_utf8();
                         state.input.remove(new_cursor);
                         state.input_cursor = new_cursor;
+                        state.recall_idx = None;
                     }
                     KeyCode::Delete if state.input_cursor < state.input.len() => {
                         state.input.remove(state.input_cursor);
+                        state.recall_idx = None;
                     }
                     KeyCode::Enter => {
                         submit_input(terminal, state, agent).await;
@@ -460,10 +479,15 @@ async fn submit_input<B: ratatui::backend::Backend>(
 ) {
     let raw = std::mem::take(&mut state.input);
     state.input_cursor = 0;
+    state.recall_idx = None;
     state.mode = Mode::Insert;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return;
+    }
+    // Record into readline-style history (dedupe consecutive repeats).
+    if state.input_history.last().map(String::as_str) != Some(trimmed) {
+        state.input_history.push(trimmed.to_string());
     }
     if let Some(cmd) = trimmed.strip_prefix('/') {
         handle_slash(state, agent, cmd);
@@ -716,6 +740,46 @@ fn accept_menu(state: &mut State) -> bool {
         }
     }
     true
+}
+
+/// Up is intercepted for input-history recall when the menu isn't already
+/// claiming it. We start recalling if the input is empty (no draft to
+/// lose), or continue going further back if we're already recalling.
+fn recall_up_possible(state: &State) -> bool {
+    if state.input_history.is_empty() {
+        return false;
+    }
+    state.recall_idx.is_some() || state.input.is_empty()
+}
+
+/// Move one step further back in input history.
+fn recall_up(state: &mut State) {
+    let next = match state.recall_idx {
+        Some(0) => return, // already at the oldest entry
+        Some(i) => i - 1,
+        None => state.input_history.len() - 1,
+    };
+    state.recall_idx = Some(next);
+    state.input = state.input_history[next].clone();
+    state.input_cursor = state.input.len();
+}
+
+/// Move forward toward the most recent input; from the newest entry, this
+/// clears the input and exits recall mode.
+fn recall_down(state: &mut State) {
+    let Some(i) = state.recall_idx else {
+        return;
+    };
+    if i + 1 < state.input_history.len() {
+        let next = i + 1;
+        state.recall_idx = Some(next);
+        state.input = state.input_history[next].clone();
+        state.input_cursor = state.input.len();
+    } else {
+        state.recall_idx = None;
+        state.input.clear();
+        state.input_cursor = 0;
+    }
 }
 
 /// Ctrl+W: walk back from the cursor past any trailing whitespace, then past
@@ -1535,5 +1599,69 @@ mod tests {
     fn format_count_uses_decimal_m_at_a_million_plus() {
         assert_eq!(format_count(1_000_000), "1.0M");
         assert_eq!(format_count(2_500_000), "2.5M");
+    }
+
+    fn recall_state(history: &[&str]) -> State {
+        let mut s = State::new("dummy-session-id", "dummy-model");
+        s.input_history = history.iter().map(|x| x.to_string()).collect();
+        s
+    }
+
+    #[test]
+    fn recall_starts_at_most_recent_entry() {
+        let mut s = recall_state(&["one", "two", "three"]);
+        recall_up(&mut s);
+        assert_eq!(s.input, "three");
+        assert_eq!(s.recall_idx, Some(2));
+    }
+
+    #[test]
+    fn recall_up_walks_back_then_stops_at_oldest() {
+        let mut s = recall_state(&["one", "two", "three"]);
+        recall_up(&mut s);
+        recall_up(&mut s);
+        recall_up(&mut s);
+        assert_eq!(s.input, "one");
+        assert_eq!(s.recall_idx, Some(0));
+        // Already at oldest — no further movement
+        recall_up(&mut s);
+        assert_eq!(s.input, "one");
+        assert_eq!(s.recall_idx, Some(0));
+    }
+
+    #[test]
+    fn recall_down_steps_forward_then_clears() {
+        let mut s = recall_state(&["one", "two"]);
+        recall_up(&mut s); // "two"
+        recall_up(&mut s); // "one"
+        recall_down(&mut s);
+        assert_eq!(s.input, "two");
+        assert_eq!(s.recall_idx, Some(1));
+        // Stepping past the newest entry clears the input and exits recall
+        recall_down(&mut s);
+        assert_eq!(s.input, "");
+        assert_eq!(s.recall_idx, None);
+    }
+
+    #[test]
+    fn recall_up_possible_requires_empty_input_or_existing_recall() {
+        let mut s = recall_state(&["one"]);
+        assert!(recall_up_possible(&s));
+        s.input = "draft".into();
+        assert!(!recall_up_possible(&s));
+        // Once recalling, even non-empty input keeps Up active.
+        s.input.clear();
+        recall_up(&mut s);
+        s.input = "modified".into();
+        // Note: real code resets recall_idx on edits; here we just check the
+        // predicate against state.
+        s.recall_idx = Some(0);
+        assert!(recall_up_possible(&s));
+    }
+
+    #[test]
+    fn recall_up_possible_false_for_empty_history() {
+        let s = recall_state(&[]);
+        assert!(!recall_up_possible(&s));
     }
 }

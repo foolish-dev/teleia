@@ -55,6 +55,7 @@ cargo run --release
 - **Tools** — `read` / `write` / `edit` / `bash`, with a 16-hop loop cap. While the agent is working the status bar shows an animated spinner.
 - **Syntax highlighting** — `read` output highlights by file extension; assistant code fences (```` ```rust ````) highlight by language hint. Powered by `syntect`.
 - **Slash commands** — `/reset`, `/clear`, `/save NAME`, `/load NAME`, `/delete NAME`, `/list`, `/model [NAME]`, `/show`, `/help`, `/quit`. Tab accepts ghost-text autocomplete (commands + saved alias names); a drop-down menu appears above the input when typing `/` (commands) or `/load`/`/delete`/`/rm` (alias names) — Up/Down to navigate, Tab to accept, Esc to dismiss.
+- **Input history** — readline-style. Up/Down (with empty input or already recalling) walks back through previous submissions; further edits exit recall mode. Consecutive duplicates are deduplicated.
 - **Vim keys** — `Esc` enters Normal mode; `i`/`a`/`I`/`A` go back to Insert; `h`/`l`/`0`/`$` move the cursor, `j`/`k` scroll history, `x` deletes a char. `:` opens an ex command line: `:q`, `:w NAME`, `:e NAME`, `:d NAME`, `:ls`, `:model …`, `:reset`, `:clear`, `:help` (slash commands also still work).
 - **Scrollback** — ↑ / ↓ (PageUp / PageDown).
 - **Sessions** — sqlite at `$XDG_DATA_HOME/teleia/teleia.sqlite`. Save/load by alias across runs.
