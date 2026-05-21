@@ -45,6 +45,8 @@ const TN_BLUE: Color = Color::Rgb(122, 162, 247); // #7aa2f7
 const TN_GREEN: Color = Color::Rgb(158, 206, 106); // #9ece6a
 const TN_DIM: Color = Color::Rgb(86, 95, 137); // #565f89
 const TN_FG: Color = Color::Rgb(192, 202, 245); // #c0caf5
+const TN_BG: Color = Color::Rgb(26, 27, 38); // #1a1b26 — terminal bg
+const TN_BG_HL: Color = Color::Rgb(40, 52, 87); // #283457 — selection bg
 
 enum Entry {
     User(String),
@@ -920,7 +922,15 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
     let offset = max_offset.saturating_sub(state.scroll);
 
     let log = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title(" teleia "))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(TN_DIM))
+                .title(Span::styled(
+                    " teleia ",
+                    Style::default().fg(TN_PURPLE).add_modifier(Modifier::BOLD),
+                )),
+        )
         .wrap(Wrap { trim: false })
         .scroll((offset, 0));
     f.render_widget(log, chunks[0]);
@@ -938,14 +948,22 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
             .map(|s| ListItem::new(s.clone()))
             .collect();
         let list = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title(title))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(TN_DIM))
+                    .title(Span::styled(
+                        title,
+                        Style::default().fg(TN_BLUE).add_modifier(Modifier::BOLD),
+                    )),
+            )
             .highlight_style(
                 Style::default()
                     .fg(TN_FG)
-                    .bg(TN_DIM)
+                    .bg(TN_BG_HL)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("› ");
+            .highlight_symbol("❯ ");
         let mut list_state = ListState::default();
         list_state.select(Some(menu.selected.min(menu.items.len().saturating_sub(1))));
         f.render_stateful_widget(list, chunks[1], &mut list_state);
@@ -1010,12 +1028,16 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
         Mode::Normal => ("NOR", TN_GREEN),
         Mode::Command => ("CMD", TN_YELLOW),
     };
+    // Chip-style mode badge: dark fg on the mode colour for contrast.
     let mut status_spans = vec![
         Span::styled(
-            mode_label,
-            Style::default().fg(mode_color).add_modifier(Modifier::BOLD),
+            format!(" {mode_label} "),
+            Style::default()
+                .fg(TN_BG)
+                .bg(mode_color)
+                .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" · "),
+        Span::styled(" · ", Style::default().fg(TN_DIM)),
     ];
     if state.working {
         let frame = SPINNER[state.frame % SPINNER.len()];
@@ -1033,19 +1055,19 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
             Style::default().fg(TN_DIM).add_modifier(Modifier::ITALIC),
         ));
     }
-    status_spans.push(Span::raw(" · "));
+    status_spans.push(Span::styled(" · ", Style::default().fg(TN_DIM)));
     status_spans.push(Span::styled(
         short_model(&state.model),
-        Style::default().fg(TN_DIM).add_modifier(Modifier::ITALIC),
+        Style::default().fg(TN_BLUE).add_modifier(Modifier::ITALIC),
     ));
-    status_spans.push(Span::raw(" · "));
+    status_spans.push(Span::styled(" · ", Style::default().fg(TN_DIM)));
     status_spans.push(Span::styled(
         format!(
             "↑{} ↓{}",
             format_count(state.tokens.prompt),
             format_count(state.tokens.completion)
         ),
-        Style::default().fg(TN_DIM),
+        Style::default().fg(TN_YELLOW),
     ));
     status_spans.push(Span::raw("   "));
     status_spans.push(Span::styled(
