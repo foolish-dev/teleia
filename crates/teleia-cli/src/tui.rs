@@ -46,6 +46,7 @@ enum Entry {
 
 struct State {
     input: String,
+    input_cursor: usize, // byte offset into input
     history: Vec<Entry>,
     status: String,
     scroll: u16, // offset from auto-scroll bottom; 0 = follow
@@ -58,6 +59,7 @@ impl State {
     fn new(session_id: &str) -> Self {
         Self {
             input: String::new(),
+            input_cursor: 0,
             history: Vec::new(),
             status: format!(
                 "session {} · ready",
@@ -187,12 +189,52 @@ async fn event_loop<B: ratatui::backend::Backend>(
                     .scroll
                     .saturating_sub(if key.code == KeyCode::PageDown { 5 } else { 1 });
             }
-            KeyCode::Char(c) => state.input.push(c),
-            KeyCode::Backspace => {
-                state.input.pop();
+            KeyCode::Left => {
+                if let Some((i, _)) = state.input[..state.input_cursor].char_indices().next_back() {
+                    state.input_cursor = i;
+                }
+            }
+            KeyCode::Right => {
+                if let Some(c) = state.input[state.input_cursor..].chars().next() {
+                    state.input_cursor += c.len_utf8();
+                }
+            }
+            KeyCode::Home => state.input_cursor = 0,
+            KeyCode::End => state.input_cursor = state.input.len(),
+            KeyCode::Char(c) => {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    match c {
+                        'a' => state.input_cursor = 0,
+                        'e' => state.input_cursor = state.input.len(),
+                        'u' => {
+                            state.input.clear();
+                            state.input_cursor = 0;
+                        }
+                        'w' => delete_word_before_cursor(state),
+                        // Ctrl+C handled above; other Ctrl+X ignored so they
+                        // don't get typed as literal characters.
+                        _ => {}
+                    }
+                } else {
+                    state.input.insert(state.input_cursor, c);
+                    state.input_cursor += c.len_utf8();
+                }
+            }
+            KeyCode::Backspace if state.input_cursor > 0 => {
+                let prev = state.input[..state.input_cursor]
+                    .chars()
+                    .next_back()
+                    .expect("cursor > 0 implies at least one char before");
+                let new_cursor = state.input_cursor - prev.len_utf8();
+                state.input.remove(new_cursor);
+                state.input_cursor = new_cursor;
+            }
+            KeyCode::Delete if state.input_cursor < state.input.len() => {
+                state.input.remove(state.input_cursor);
             }
             KeyCode::Enter => {
                 let raw = std::mem::take(&mut state.input);
+                state.input_cursor = 0;
                 let trimmed = raw.trim();
                 if trimmed.is_empty() {
                     continue;
@@ -215,6 +257,30 @@ async fn event_loop<B: ratatui::backend::Backend>(
             _ => {}
         }
     }
+}
+
+/// Ctrl+W: walk back from the cursor past any trailing whitespace, then past
+/// the word it sits in, and delete that span.
+fn delete_word_before_cursor(state: &mut State) {
+    if state.input_cursor == 0 {
+        return;
+    }
+    let chars_before: Vec<(usize, char)> =
+        state.input[..state.input_cursor].char_indices().collect();
+    let mut idx = chars_before.len();
+    // Skip trailing whitespace
+    while idx > 0 && chars_before[idx - 1].1.is_whitespace() {
+        idx -= 1;
+    }
+    // Skip the word
+    while idx > 0 && !chars_before[idx - 1].1.is_whitespace() {
+        idx -= 1;
+    }
+    let new_cursor = chars_before.get(idx).map(|&(i, _)| i).unwrap_or(0);
+    state
+        .input
+        .replace_range(new_cursor..state.input_cursor, "");
+    state.input_cursor = new_cursor;
 }
 
 async fn run_turn<B: ratatui::backend::Backend>(
@@ -382,11 +448,12 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
     .block(Block::default().borders(Borders::ALL));
     f.render_widget(input_widget, chunks[1]);
 
-    // Show the terminal cursor at the end of the input. ratatui hides the
+    // Show the terminal cursor at state.input_cursor. ratatui hides the
     // cursor by default; calling set_cursor_position each frame makes it
-    // visible at our chosen spot so users can see where they're typing.
+    // visible at our chosen spot.
     let inside = chunks[1];
-    let cursor_x = inside.x + 1 /* border */ + 2 /* "> " */ + state.input.chars().count() as u16;
+    let cursor_chars = state.input[..state.input_cursor].chars().count() as u16;
+    let cursor_x = inside.x + 1 /* border */ + 2 /* "> " */ + cursor_chars;
     let cursor_x = cursor_x.min(inside.x + inside.width.saturating_sub(2));
     let cursor_y = inside.y + 1;
     f.set_cursor_position((cursor_x, cursor_y));
@@ -573,5 +640,53 @@ mod tests {
         // plain text) and the fence markers removed.
         let lines = render_assistant_lines("```\nsome code\n```");
         assert_eq!(lines.len(), 1);
+    }
+
+    fn state_with(input: &str, cursor: usize) -> State {
+        let mut s = State::new("dummy-session-id");
+        s.input = input.into();
+        s.input_cursor = cursor;
+        s
+    }
+
+    #[test]
+    fn delete_word_at_cursor_0_is_noop() {
+        let mut s = state_with("hello", 0);
+        delete_word_before_cursor(&mut s);
+        assert_eq!(s.input, "hello");
+        assert_eq!(s.input_cursor, 0);
+    }
+
+    #[test]
+    fn delete_word_removes_trailing_word_and_one_space() {
+        let mut s = state_with("hello world", 11);
+        delete_word_before_cursor(&mut s);
+        assert_eq!(s.input, "hello ");
+        assert_eq!(s.input_cursor, 6);
+    }
+
+    #[test]
+    fn delete_word_skips_trailing_whitespace_first() {
+        let mut s = state_with("hello world  ", 13);
+        delete_word_before_cursor(&mut s);
+        assert_eq!(s.input, "hello ");
+        assert_eq!(s.input_cursor, 6);
+    }
+
+    #[test]
+    fn delete_word_with_only_whitespace_clears_to_start() {
+        let mut s = state_with("   ", 3);
+        delete_word_before_cursor(&mut s);
+        assert_eq!(s.input, "");
+        assert_eq!(s.input_cursor, 0);
+    }
+
+    #[test]
+    fn delete_word_in_middle_keeps_suffix() {
+        // cursor between "hello" and " world"
+        let mut s = state_with("hello world", 5);
+        delete_word_before_cursor(&mut s);
+        assert_eq!(s.input, " world");
+        assert_eq!(s.input_cursor, 0);
     }
 }
