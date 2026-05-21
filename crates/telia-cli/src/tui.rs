@@ -509,6 +509,22 @@ async fn event_loop<B: ratatui::backend::Backend>(
                     state.command_buf.clear();
                     state.command_cursor = 0;
                 }
+                KeyCode::Tab => {
+                    // Accept the highlighted item from the ex dropdown.
+                    accept_menu(state);
+                }
+                KeyCode::Up if state.menu.is_some() => {
+                    if let Some(m) = state.menu.as_mut() {
+                        m.selected = m.selected.saturating_sub(1);
+                    }
+                }
+                KeyCode::Down if state.menu.is_some() => {
+                    if let Some(m) = state.menu.as_mut() {
+                        if m.selected + 1 < m.items.len() {
+                            m.selected += 1;
+                        }
+                    }
+                }
                 KeyCode::Char(c) => {
                     state.command_buf.insert(state.command_cursor, c);
                     state.command_cursor += c.len_utf8();
