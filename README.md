@@ -75,6 +75,47 @@ When the resolved base URL looks like Ollama, `telia` walks the default Ollama l
 
 A `y` (default) streams `/api/pull` with an animated in-place progress bar. `n` skips that model and moves on. Pass `-y` / `--pull-yes` to auto-confirm every prompt, or `--no-pull` to skip the pre-flight entirely. Non-interactive stdin (scripts, CI, pipes) auto-confirms so unattended runs don't hang.
 
+## Configuration
+
+### Model
+
+Set the active model with `--model NAME`. The provider auto-detects from the name prefix (see the table above); `/model NAME` switches mid-session — the drop-down lists every Ollama-cached model plus the pre-populated cloud entries (`claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5-20251001`). `/model` with no arg prints the current model.
+
+Defaults:
+
+| flag         | env-var fallback                | default                                 |
+| ------------ | ------------------------------- | --------------------------------------- |
+| `--model`    | _none_                          | `hf.co/FoolDev/Thanatos-27B:Q4_K_M`     |
+| `--base-url` | _none_ (auto from model prefix) | `http://127.0.0.1:11434/v1` (Ollama)    |
+| `--api-key`  | `$ANTHROPIC_API_KEY` for `claude-*`; `$OPENAI_API_KEY` for `gpt-*`/`o1*`/`o3*` | _none_ (Ollama needs none) |
+| `--theme`    | _none_                          | `tokyo-night`                           |
+| `--no-pull`  | _none_                          | `false` (run the Ollama pre-flight)     |
+| `--pull-yes` | _none_                          | `false` (prompt before each pull)       |
+
+Sessions live in `$XDG_DATA_HOME/telia/telia.sqlite` (falls back to `~/.local/share/telia/telia.sqlite` when `XDG_DATA_HOME` is unset). Set `XDG_DATA_HOME` to move it.
+
+### MCP
+
+Not yet supported. The roadmap is to read an Anthropic-style MCP config — likely the same shape Claude Desktop uses:
+
+```jsonc
+// $XDG_CONFIG_HOME/telia/mcp.json (proposed)
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+    },
+    "github": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "ghcr.io/github/github-mcp-server"]
+    }
+  }
+}
+```
+
+— and merge any tools each server exposes into the same dispatch loop the built-in four (`read` / `write` / `edit` / `bash`) already run through. Until then, treat MCP as a TODO: tracked on the "Not yet" line below.
+
 ## Features
 
 - **Modes** — Insert (default), Normal (`Esc`), Command (`:`). The status bar chip and the input border colour signal the active mode.
