@@ -1,3 +1,4 @@
+use crate::highlight;
 use anyhow::Result;
 use crossterm::{
     event::{
@@ -408,6 +409,47 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
     f.render_widget(Paragraph::new(status_line), chunks[3]);
 }
 
+/// Walk an assistant message looking for ```lang ... ``` code fences. Plain
+/// prose lines render unchanged; fenced blocks are syntax-highlighted using
+/// the language token (or unhighlighted if syntect doesn't recognise it).
+fn render_assistant_lines(text: &str) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    let mut in_code = false;
+    let mut code_lang = String::new();
+    let mut code_buf = String::new();
+
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("```") {
+            if in_code {
+                for hl in highlight::highlight(&code_buf, &code_lang, "") {
+                    out.push(hl);
+                }
+                code_buf.clear();
+                code_lang.clear();
+                in_code = false;
+            } else {
+                code_lang = rest.trim().to_string();
+                in_code = true;
+            }
+        } else if in_code {
+            code_buf.push_str(line);
+            code_buf.push('\n');
+        } else {
+            out.push(Line::from(line.to_string()));
+        }
+    }
+
+    // If the message ended mid-fence (mid-stream), flush what we have so the
+    // user sees the partial code rather than nothing.
+    if in_code && !code_buf.is_empty() {
+        for hl in highlight::highlight(&code_buf, &code_lang, "") {
+            out.push(hl);
+        }
+    }
+
+    out
+}
+
 fn render_entry(entry: &Entry) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     match entry {
@@ -426,8 +468,8 @@ fn render_entry(entry: &Entry) -> Vec<Line<'static>> {
                 if *complete { "teleia" } else { "teleia ▌" },
                 Style::default().fg(TN_PURPLE).add_modifier(Modifier::BOLD),
             )));
-            for line in text.lines() {
-                out.push(Line::from(line.to_string()));
+            for line in render_assistant_lines(text) {
+                out.push(line);
             }
             out.push(Line::from(""));
         }
@@ -442,11 +484,23 @@ fn render_entry(entry: &Entry) -> Vec<Line<'static>> {
                 format!("{marker} {name}({args})"),
                 Style::default().fg(TN_YELLOW),
             )));
-            for line in output.lines().take(20) {
-                out.push(Line::from(Span::styled(
-                    format!("  {line}"),
-                    Style::default().fg(TN_DIM),
-                )));
+            let highlighted = if name == "read" {
+                highlight::extension_from_read_args(args)
+                    .map(|ext| highlight::highlight(output, &ext, "  "))
+            } else {
+                None
+            };
+            let body: Box<dyn Iterator<Item = Line<'static>>> = match highlighted {
+                Some(hl) => Box::new(hl.into_iter()),
+                None => Box::new(output.lines().take(20).map(|line| {
+                    Line::from(Span::styled(
+                        format!("  {line}"),
+                        Style::default().fg(TN_DIM),
+                    ))
+                })),
+            };
+            for line in body.take(20) {
+                out.push(line);
             }
             out.push(Line::from(""));
         }

@@ -1,3 +1,4 @@
+mod highlight;
 mod tui;
 
 use anyhow::Result;
