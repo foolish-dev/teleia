@@ -9,23 +9,6 @@ DEFAULT_BASE_URL = "http://127.0.0.1:11434/v1"
 
 
 @dataclass
-class ToolDef:
-    name: str
-    description: str
-    parameters: dict[str, Any]
-
-    def to_wire(self) -> dict[str, Any]:
-        return {
-            "type": "function",
-            "function": {
-                "name": self.name,
-                "description": self.description,
-                "parameters": self.parameters,
-            },
-        }
-
-
-@dataclass
 class ToolCall:
     id: str
     name: str
@@ -76,7 +59,7 @@ class LlmClient:
         self.model = model
 
     def stream(
-        self, messages: list[Message], tools: list[ToolDef] | None = None
+        self, messages: list[Message], tools: list[dict[str, Any]] | None = None
     ) -> Iterator[StreamEvent]:
         body: dict[str, Any] = {
             "model": self.model,
@@ -84,7 +67,7 @@ class LlmClient:
             "stream": True,
         }
         if tools:
-            body["tools"] = [t.to_wire() for t in tools]
+            body["tools"] = tools
         data = json.dumps(body).encode("utf-8")
         req = request.Request(
             f"{self.base_url}/chat/completions",

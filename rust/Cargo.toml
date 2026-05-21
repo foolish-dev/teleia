@@ -4,6 +4,7 @@ members = [
     "crates/teleia-cli",
     "crates/teleia-llm",
     "crates/teleia-tools",
+    "crates/teleia-tools-bin",
     "crates/teleia-store",
     "crates/teleia-agent",
 ]

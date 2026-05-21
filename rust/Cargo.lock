@@ -1496,6 +1496,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "teleia-tools-bin"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "teleia-tools",
+ "tokio",
+]
+
+[[package]]
 name = "thiserror"
 version = "2.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"

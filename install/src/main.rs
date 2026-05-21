@@ -59,11 +59,17 @@ fn main() {
             {
                 return Err("✗ build failed".into());
             }
+            // teleia binary (rust impl)
             let dst = prefix.join("teleia-rust");
             fs::copy(dir.join("target/release/teleia"), &dst)
                 .map_err(|e| format!("✗ copy failed: {e}"))?;
             fs::set_permissions(&dst, fs::Permissions::from_mode(0o755)).ok();
-            Ok(format!("✓ built {}", dst.display()))
+            // teleia-tools-bin (shared tool dispatcher used by all 5 impls)
+            let tools_dst = prefix.join("teleia-tools-bin");
+            fs::copy(dir.join("target/release/teleia-tools-bin"), &tools_dst)
+                .map_err(|e| format!("✗ copy teleia-tools-bin failed: {e}"))?;
+            fs::set_permissions(&tools_dst, fs::Permissions::from_mode(0o755)).ok();
+            Ok(format!("✓ built {} + teleia-tools-bin", dst.display()))
         }),
         try_install("python", || {
             if !have("python3") { return Err("skipped (python3 not in PATH)".into()); }
