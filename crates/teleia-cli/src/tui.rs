@@ -908,7 +908,12 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
         ])
         .split(f.area());
 
-    let lines: Vec<Line> = state.history.iter().flat_map(render_entry).collect();
+    let frame = state.frame;
+    let lines: Vec<Line> = state
+        .history
+        .iter()
+        .flat_map(|e| render_entry(e, frame))
+        .collect();
     let visible = chunks[0].height.saturating_sub(2) as usize;
     let total = lines.len();
     let max_offset = total.saturating_sub(visible) as u16;
@@ -1110,7 +1115,7 @@ fn render_assistant_lines(text: &str) -> Vec<Line<'static>> {
     out
 }
 
-fn render_entry(entry: &Entry) -> Vec<Line<'static>> {
+fn render_entry(entry: &Entry, frame: usize) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     match entry {
         Entry::User(text) => {
@@ -1124,8 +1129,17 @@ fn render_entry(entry: &Entry) -> Vec<Line<'static>> {
             out.push(Line::from(""));
         }
         Entry::Assistant { text, complete } => {
+            // Blink "▌" while streaming. Frame ticks every ~50ms; /10 gives
+            // ~2 Hz.
+            let header = if *complete {
+                "teleia"
+            } else if (frame / 10).is_multiple_of(2) {
+                "teleia ▌"
+            } else {
+                "teleia  "
+            };
             out.push(Line::from(Span::styled(
-                if *complete { "teleia" } else { "teleia ▌" },
+                header,
                 Style::default().fg(TN_PURPLE).add_modifier(Modifier::BOLD),
             )));
             for line in render_assistant_lines(text) {
@@ -1139,7 +1153,13 @@ fn render_entry(entry: &Entry) -> Vec<Line<'static>> {
             output,
             complete,
         } => {
-            let marker = if *complete { "⚙" } else { "⚙ …" };
+            // While the tool is running, cycle the spinner next to the gear
+            // so the user can see it's still going.
+            let marker = if *complete {
+                "⚙".to_string()
+            } else {
+                format!("⚙ {}", SPINNER[(frame / 5) % SPINNER.len()])
+            };
             out.push(Line::from(Span::styled(
                 format!("{marker} {name}({args})"),
                 Style::default().fg(TN_YELLOW),
