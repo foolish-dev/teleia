@@ -23,6 +23,10 @@ All five share scope and behaviour: same system prompt, same four tools, same 16
 
 Each subdir has its own README with deeper notes on stack choices and tradeoffs.
 
+<p align="center">
+  <img src="assets/architecture.svg" alt="five impls, one sqlite session store" width="820">
+</p>
+
 ## Quick start
 
 ```sh
@@ -43,6 +47,10 @@ cd bun && bun install && bun run start
 ```
 
 Requires Ollama running at `127.0.0.1:11434` with a tool-capable model installed. Override the model on any impl with `--model NAME` (and the endpoint with `--base-url URL`).
+
+<p align="center">
+  <img src="assets/screenshot.svg" alt="Teleia TUI session" width="780">
+</p>
 
 ## Features (v1)
 
