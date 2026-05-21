@@ -45,7 +45,11 @@ async fn main() -> Result<()> {
         ensure_model(&llm).await?;
     }
     let store = Store::open()?;
-    let agent = Agent::new(llm, store)?;
+    let mut agent = Agent::new(llm, store)?;
+    // Best-effort: cache the installed-model list once so the /model
+    // dropdown has something to show without hitting the network on
+    // every keypress.
+    agent.refresh_models().await;
 
     tui::run(agent).await
 }

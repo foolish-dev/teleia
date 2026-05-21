@@ -159,6 +159,9 @@ enum MenuKind {
     /// Ex command list (Command mode) — selecting replaces command_buf
     /// with the chosen ex command + trailing space if it takes an arg.
     Ex,
+    /// Ollama-installed model list — surfaced from agent.available_models();
+    /// arg-replacement like Alias/Theme but with a distinct title.
+    Model,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -736,7 +739,7 @@ fn arg_placeholder(cmd: &str) -> Option<&'static str> {
 /// Compute the dropdown menu (if any) for the current input. Pure function
 /// over `(input, aliases)` so the dispatch from `refresh_menu` can decide
 /// when to hit the store.
-fn compute_menu(input: &str, aliases: &[String]) -> Option<Menu> {
+fn compute_menu(input: &str, aliases: &[String], models: &[String]) -> Option<Menu> {
     let rest = input.strip_prefix('/')?;
 
     if let Some(space) = rest.find(' ') {
@@ -770,6 +773,21 @@ fn compute_menu(input: &str, aliases: &[String]) -> Option<Menu> {
                 items,
                 selected: 0,
                 kind: MenuKind::Theme,
+            });
+        }
+        if cmd == "model" {
+            let items: Vec<String> = models
+                .iter()
+                .filter(|n| n.starts_with(arg))
+                .cloned()
+                .collect();
+            if items.is_empty() {
+                return None;
+            }
+            return Some(Menu {
+                items,
+                selected: 0,
+                kind: MenuKind::Model,
             });
         }
         return None;
@@ -864,7 +882,7 @@ fn refresh_menu(state: &mut State, agent: &Agent) {
             } else {
                 Vec::new()
             };
-            compute_menu(&state.input, &aliases)
+            compute_menu(&state.input, &aliases, agent.available_models())
         }
         Mode::Command => compute_ex_menu(&state.command_buf),
         Mode::Normal => None,
@@ -900,7 +918,7 @@ fn accept_menu(state: &mut State) -> bool {
             state.input = format!("/{item}{trailing}");
             state.input_cursor = state.input.len();
         }
-        MenuKind::Alias | MenuKind::Theme => {
+        MenuKind::Alias | MenuKind::Theme | MenuKind::Model => {
             if let Some(space) = state.input.find(' ') {
                 let cmd_prefix = state.input[..=space].to_string();
                 state.input = format!("{cmd_prefix}{item}");
@@ -1213,6 +1231,7 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
             MenuKind::Alias => " aliases ",
             MenuKind::Theme => " themes ",
             MenuKind::Ex => " ex ",
+            MenuKind::Model => " models ",
         };
         let items: Vec<ListItem> = menu
             .items
@@ -1887,21 +1906,21 @@ mod tests {
 
     #[test]
     fn menu_command_list_filters_by_prefix() {
-        let m = compute_menu("/sa", &[]).unwrap();
+        let m = compute_menu("/sa", &[], &[]).unwrap();
         assert_eq!(m.kind, MenuKind::Command);
         assert_eq!(m.items, vec!["save"]);
     }
 
     #[test]
     fn menu_command_list_returns_all_for_lone_slash() {
-        let m = compute_menu("/", &[]).unwrap();
+        let m = compute_menu("/", &[], &[]).unwrap();
         assert_eq!(m.kind, MenuKind::Command);
         assert_eq!(m.items.len(), SLASH_COMMANDS.len());
     }
 
     #[test]
     fn menu_command_list_none_for_unknown_prefix() {
-        assert!(compute_menu("/zzz", &[]).is_none());
+        assert!(compute_menu("/zzz", &[], &[]).is_none());
     }
 
     #[test]
@@ -1911,7 +1930,7 @@ mod tests {
             "audit-pass-2".to_string(),
             "draft".to_string(),
         ];
-        let m = compute_menu("/load aud", &aliases).unwrap();
+        let m = compute_menu("/load aud", &aliases, &[]).unwrap();
         assert_eq!(m.kind, MenuKind::Alias);
         assert_eq!(m.items, vec!["audit-pass-1", "audit-pass-2"]);
     }
@@ -1919,7 +1938,7 @@ mod tests {
     #[test]
     fn menu_alias_shows_all_on_empty_arg() {
         let aliases = vec!["foo".to_string(), "bar".to_string()];
-        let m = compute_menu("/load ", &aliases).unwrap();
+        let m = compute_menu("/load ", &aliases, &[]).unwrap();
         assert_eq!(m.kind, MenuKind::Alias);
         assert_eq!(m.items.len(), 2);
     }
@@ -1927,19 +1946,19 @@ mod tests {
     #[test]
     fn menu_alias_none_when_no_aliases_match() {
         let aliases = vec!["foo".to_string()];
-        assert!(compute_menu("/load zzz", &aliases).is_none());
+        assert!(compute_menu("/load zzz", &aliases, &[]).is_none());
     }
 
     #[test]
     fn menu_none_for_non_alias_commands_with_space() {
         // /help takes no arg; once a space is typed, no menu.
-        assert!(compute_menu("/help ", &[]).is_none());
+        assert!(compute_menu("/help ", &[], &[]).is_none());
     }
 
     #[test]
     fn menu_none_for_empty_or_no_slash() {
-        assert!(compute_menu("", &[]).is_none());
-        assert!(compute_menu("hello", &[]).is_none());
+        assert!(compute_menu("", &[], &[]).is_none());
+        assert!(compute_menu("hello", &[], &[]).is_none());
     }
 
     #[test]
@@ -2064,14 +2083,14 @@ mod tests {
 
     #[test]
     fn menu_theme_filters_by_prefix() {
-        let m = compute_menu("/theme dra", &[]).unwrap();
+        let m = compute_menu("/theme dra", &[], &[]).unwrap();
         assert_eq!(m.kind, MenuKind::Theme);
         assert_eq!(m.items, vec!["dracula"]);
     }
 
     #[test]
     fn menu_theme_lists_all_when_arg_empty() {
-        let m = compute_menu("/theme ", &[]).unwrap();
+        let m = compute_menu("/theme ", &[], &[]).unwrap();
         assert_eq!(m.kind, MenuKind::Theme);
         // Three themes today: tokyo-night, catppuccin, dracula
         assert_eq!(m.items.len(), 3);
@@ -2097,5 +2116,31 @@ mod tests {
         // so it doesn't fight with arg entry.
         assert!(compute_ex_menu("theme dra").is_none());
         assert!(compute_ex_menu("q ").is_none());
+    }
+
+    #[test]
+    fn menu_model_filters_by_prefix() {
+        let models = vec![
+            "llama3:latest".to_string(),
+            "hf.co/FoolDev/Thanatos-27B:Q4_K_M".to_string(),
+            "hf.co/FoolDev/Janus-35B:Q4_K_M".to_string(),
+        ];
+        let m = compute_menu("/model hf.co", &[], &models).unwrap();
+        assert_eq!(m.kind, MenuKind::Model);
+        assert_eq!(m.items.len(), 2);
+    }
+
+    #[test]
+    fn menu_model_shows_all_on_empty_arg() {
+        let models = vec!["a".to_string(), "b".to_string()];
+        let m = compute_menu("/model ", &[], &models).unwrap();
+        assert_eq!(m.kind, MenuKind::Model);
+        assert_eq!(m.items.len(), 2);
+    }
+
+    #[test]
+    fn menu_model_none_when_no_models_cached() {
+        // Empty model list (Ollama unreachable at startup) → no menu.
+        assert!(compute_menu("/model anything", &[], &[]).is_none());
     }
 }

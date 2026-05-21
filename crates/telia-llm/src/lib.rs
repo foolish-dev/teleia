@@ -189,6 +189,36 @@ impl LlmClient {
         self.model = model;
     }
 
+    /// List models Ollama has cached locally. Returns the `name` field of
+    /// each entry in `/api/tags` (e.g. `"llama3:latest"`,
+    /// `"hf.co/FoolDev/Thanatos-27B:Q4_K_M"`). Best-effort — returns an
+    /// empty Vec if the endpoint isn't reachable or doesn't look like
+    /// Ollama.
+    pub async fn list_models(&self) -> Vec<String> {
+        let base = self.base_url.trim_end_matches('/');
+        let native = base.strip_suffix("/v1").unwrap_or(base);
+        let url = format!("{native}/api/tags");
+
+        #[derive(serde::Deserialize)]
+        struct ModelEntry {
+            name: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct Tags {
+            #[serde(default)]
+            models: Vec<ModelEntry>,
+        }
+
+        let resp = match self.http.get(&url).send().await {
+            Ok(r) if r.status().is_success() => r,
+            _ => return Vec::new(),
+        };
+        match resp.json::<Tags>().await {
+            Ok(t) => t.models.into_iter().map(|m| m.name).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
     /// Best-effort: does Ollama have this model locally?
     /// `Some(true)` / `Some(false)` for definite answers (via /api/show),
     /// `None` if the endpoint isn't reachable or doesn't respond as expected

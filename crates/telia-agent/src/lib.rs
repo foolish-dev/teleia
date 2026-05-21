@@ -35,6 +35,7 @@ pub struct Agent {
     messages: Vec<Message>,
     seq: usize,
     tokens: TokenCounts,
+    available_models: Vec<String>,
 }
 
 impl Agent {
@@ -48,11 +49,25 @@ impl Agent {
             messages: Vec::new(),
             seq: 0,
             tokens: TokenCounts::default(),
+            available_models: Vec::new(),
         };
         agent.push(Message::System {
             content: SYSTEM_PROMPT.to_string(),
         })?;
         Ok(agent)
+    }
+
+    /// Cached list of Ollama-installed models; populated once via
+    /// `refresh_models()` at startup, used by the TUI to render the
+    /// `/model <prefix>` dropdown.
+    pub fn available_models(&self) -> &[String] {
+        &self.available_models
+    }
+
+    /// Re-query Ollama's `/api/tags` and cache the results. No-op if
+    /// the endpoint isn't reachable.
+    pub async fn refresh_models(&mut self) {
+        self.available_models = self.llm.list_models().await;
     }
 
     pub fn session_id(&self) -> &str {
