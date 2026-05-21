@@ -84,6 +84,21 @@ pub struct Usage {
     pub completion_tokens: u32,
 }
 
+/// One progress update from Ollama's streaming `/api/pull` endpoint.
+/// `total`/`completed` are only present while a specific layer is
+/// downloading; status-only lines (`"pulling manifest"`, `"success"`)
+/// leave them as `None`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PullProgress {
+    pub status: String,
+    #[serde(default)]
+    pub digest: Option<String>,
+    #[serde(default)]
+    pub total: Option<u64>,
+    #[serde(default)]
+    pub completed: Option<u64>,
+}
+
 /// Streaming events from the chat endpoint.
 #[derive(Debug, Clone)]
 pub enum ChatEvent {
@@ -190,6 +205,46 @@ impl LlmClient {
             .await
             .ok()?;
         Some(resp.status().is_success())
+    }
+
+    /// Stream progress updates from Ollama's `/api/pull`. Each yielded
+    /// `PullProgress` reflects one NDJSON line from the server: a status
+    /// message, optional digest of the current layer, and byte counters
+    /// when known. The stream completes when Ollama emits `status:
+    /// "success"` (or the connection closes).
+    pub fn pull_model(&self) -> impl Stream<Item = Result<PullProgress>> + '_ {
+        try_stream! {
+            let base = self.base_url.trim_end_matches('/');
+            let native = base.strip_suffix("/v1").unwrap_or(base);
+            let url = format!("{native}/api/pull");
+            let body = serde_json::json!({ "model": self.model, "stream": true });
+
+            let resp = self.http.post(&url).json(&body).send().await
+                .with_context(|| format!("POST {url}"))?;
+
+            if !resp.status().is_success() {
+                let s = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                Err(anyhow!("ollama pull returned {s}: {body}"))?;
+                return;
+            }
+
+            let mut bytes = resp.bytes_stream();
+            let mut buf = String::new();
+            while let Some(chunk) = bytes.next().await {
+                let chunk = chunk.context("read pull chunk")?;
+                buf.push_str(&String::from_utf8_lossy(&chunk));
+
+                while let Some(pos) = buf.find('\n') {
+                    let line: String = buf.drain(..=pos).collect();
+                    let line = line.trim();
+                    if line.is_empty() { continue; }
+                    if let Ok(prog) = serde_json::from_str::<PullProgress>(line) {
+                        yield prog;
+                    }
+                }
+            }
+        }
     }
 
     /// Stream chat completions as `ChatEvent`s. The final event is always `Done`.

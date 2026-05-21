@@ -1,10 +1,12 @@
 mod highlight;
 mod tui;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::Result;
 use clap::Parser;
+use futures_util::{pin_mut, StreamExt};
+use std::io::Write;
 use telia_agent::Agent;
-use telia_llm::{LlmClient, DEFAULT_BASE_URL};
+use telia_llm::{LlmClient, PullProgress, DEFAULT_BASE_URL};
 use telia_store::Store;
 
 #[derive(Parser, Debug)]
@@ -49,10 +51,10 @@ async fn main() -> Result<()> {
 }
 
 /// Pre-flight: if Ollama can be reached and reports the model isn't
-/// cached, shell out to `ollama pull MODEL` so the user sees Ollama's
-/// native download progress before the TUI takes over the screen. Models
-/// like the default `hf.co/FoolDev/Thanatos-27B:Q4_K_M` resolve to a
-/// HuggingFace pull automatically.
+/// cached, stream `/api/pull` and render an animated progress bar before
+/// the TUI takes over the screen. Models like the default
+/// `hf.co/FoolDev/Thanatos-27B:Q4_K_M` resolve to a HuggingFace pull
+/// automatically via Ollama's bridge.
 ///
 /// If `/api/show` is unreachable (non-Ollama backend, or Ollama not
 /// running) we silently skip — let the actual chat request surface the
@@ -60,21 +62,69 @@ async fn main() -> Result<()> {
 async fn ensure_model(llm: &LlmClient) -> Result<()> {
     let model = llm.model().to_string();
     match llm.has_model().await {
-        Some(true) | None => Ok(()),
-        Some(false) => {
-            eprintln!("· model '{model}' not cached locally — pulling via ollama...");
-            let status = std::process::Command::new("ollama")
-                .args(["pull", &model])
-                .status()
-                .context("running `ollama pull` (is the ollama CLI installed and on PATH?)")?;
-            if status.success() {
-                Ok(())
-            } else {
-                Err(anyhow!(
-                    "ollama pull failed for {model} (exit {})",
-                    status.code().unwrap_or(-1)
-                ))
-            }
+        Some(true) | None => return Ok(()),
+        Some(false) => {}
+    }
+
+    eprintln!("↓ pulling {model}");
+    let stream = llm.pull_model();
+    pin_mut!(stream);
+
+    const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let mut tick: usize = 0;
+
+    while let Some(event) = stream.next().await {
+        let prog = event?;
+        if prog.status == "success" {
+            break;
         }
+        render_pull_line(&prog, SPINNER[tick % SPINNER.len()]);
+        tick = tick.wrapping_add(1);
+    }
+    eprintln!("\r  ✓ ready{:>40}", " ");
+    Ok(())
+}
+
+fn render_pull_line(prog: &PullProgress, spinner: &str) {
+    const BAR_WIDTH: usize = 24;
+    let digest_short = prog
+        .digest
+        .as_deref()
+        .map(|d| {
+            let trimmed = d.trim_start_matches("sha256:");
+            &trimmed[..12.min(trimmed.len())]
+        })
+        .unwrap_or("");
+
+    let line = match (prog.completed, prog.total) {
+        (Some(done), Some(total)) if total > 0 => {
+            let pct = (done * 100 / total) as usize;
+            let filled = pct * BAR_WIDTH / 100;
+            let bar = format!("[{}{}]", "█".repeat(filled), "░".repeat(BAR_WIDTH - filled));
+            format!(
+                "\r  {spinner} {status} {digest_short} {bar} {pct:>3}% ({done}/{total})  ",
+                status = prog.status,
+                done = human_bytes(done),
+                total = human_bytes(total),
+            )
+        }
+        _ => format!("\r  {spinner} {} {digest_short}{:>40}", prog.status, " "),
+    };
+    let _ = std::io::stderr().write_all(line.as_bytes());
+    let _ = std::io::stderr().flush();
+}
+
+fn human_bytes(n: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * 1024;
+    const GB: u64 = 1024 * 1024 * 1024;
+    if n >= GB {
+        format!("{:.1}GB", n as f64 / GB as f64)
+    } else if n >= MB {
+        format!("{:.1}MB", n as f64 / MB as f64)
+    } else if n >= KB {
+        format!("{:.1}KB", n as f64 / KB as f64)
+    } else {
+        format!("{n}B")
     }
 }
