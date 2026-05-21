@@ -63,7 +63,6 @@ function M.turn(agent, user_input)
   local stream_iter = nil
   local content_buf = ""
   local tool_calls = {}
-  local tool_queue = {}
   local turn_done = false
   local pending = {}
 
@@ -73,7 +72,6 @@ function M.turn(agent, user_input)
     stream_iter = llm_mod.stream(agent.llm, agent.messages, agent.tools)
     content_buf = ""
     tool_calls = {}
-    tool_queue = {}
   end
 
   start_stream()
@@ -81,20 +79,6 @@ function M.turn(agent, user_input)
   return function()
     if turn_done then return nil end
     if #pending > 0 then
-      return table.remove(pending, 1)
-    end
-
-    -- Drain tool queue first
-    if #tool_queue > 0 then
-      local pending_call = table.remove(tool_queue, 1)
-      pending_call.fired = true
-      local ok, output = pcall(tools_mod.dispatch, pending_call.name, pending_call.arguments)
-      if not ok then output = "error: " .. tostring(output) end
-      push(agent, { role = "tool", tool_call_id = pending_call.id, content = output })
-      table.insert(pending, { kind = "tool_end", name = pending_call.name, output = output })
-      table.insert(pending, { kind = "tool_start_next" }) -- marker
-      -- Actually emit tool_start before dispatching... need to restructure.
-      -- Simpler: emit tool_start when we encounter the call, run dispatch synchronously, then emit tool_end.
       return table.remove(pending, 1)
     end
 
