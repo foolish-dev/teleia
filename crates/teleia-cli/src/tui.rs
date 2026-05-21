@@ -34,19 +34,91 @@ fn mode_hints(mode: Mode) -> &'static str {
 /// autocomplete to avoid suggesting ambiguous short prefixes).
 const SLASH_COMMANDS: &[&str] = &[
     "clear", "delete", "exit", "help", "list", "load", "model", "quit", "reset", "save", "show",
+    "theme",
 ];
 
-// Tokyo Night palette
-const TN_CYAN: Color = Color::Rgb(125, 207, 255); // #7dcfff
-const TN_PURPLE: Color = Color::Rgb(187, 154, 247); // #bb9af7
-const TN_YELLOW: Color = Color::Rgb(224, 175, 104); // #e0af68
-const TN_RED: Color = Color::Rgb(247, 118, 142); // #f7768e
-const TN_BLUE: Color = Color::Rgb(122, 162, 247); // #7aa2f7
-const TN_GREEN: Color = Color::Rgb(158, 206, 106); // #9ece6a
-const TN_DIM: Color = Color::Rgb(86, 95, 137); // #565f89
-const TN_FG: Color = Color::Rgb(192, 202, 245); // #c0caf5
-const TN_BG: Color = Color::Rgb(26, 27, 38); // #1a1b26 — terminal bg
-const TN_BG_HL: Color = Color::Rgb(40, 52, 87); // #283457 — selection bg
+#[derive(Debug, Clone, Copy)]
+struct Theme {
+    cyan: Color,
+    purple: Color,
+    yellow: Color,
+    red: Color,
+    blue: Color,
+    green: Color,
+    dim: Color,
+    fg: Color,
+    bg: Color,
+    bg_hl: Color,
+}
+
+const TOKYO_NIGHT: Theme = Theme {
+    cyan: Color::Rgb(125, 207, 255),
+    purple: Color::Rgb(187, 154, 247),
+    yellow: Color::Rgb(224, 175, 104),
+    red: Color::Rgb(247, 118, 142),
+    blue: Color::Rgb(122, 162, 247),
+    green: Color::Rgb(158, 206, 106),
+    dim: Color::Rgb(86, 95, 137),
+    fg: Color::Rgb(192, 202, 245),
+    bg: Color::Rgb(26, 27, 38),
+    bg_hl: Color::Rgb(40, 52, 87),
+};
+
+const CATPPUCCIN: Theme = Theme {
+    cyan: Color::Rgb(148, 226, 213),   // teal
+    purple: Color::Rgb(203, 166, 247), // mauve
+    yellow: Color::Rgb(249, 226, 175),
+    red: Color::Rgb(243, 139, 168),
+    blue: Color::Rgb(137, 180, 250),
+    green: Color::Rgb(166, 227, 161),
+    dim: Color::Rgb(108, 112, 134), // overlay1
+    fg: Color::Rgb(205, 214, 244),  // text
+    bg: Color::Rgb(30, 30, 46),     // base
+    bg_hl: Color::Rgb(49, 50, 68),  // surface0
+};
+
+const DRACULA: Theme = Theme {
+    cyan: Color::Rgb(139, 233, 253),
+    purple: Color::Rgb(189, 147, 249),
+    yellow: Color::Rgb(241, 250, 140),
+    red: Color::Rgb(255, 85, 85),
+    blue: Color::Rgb(139, 233, 253), // Dracula reuses cyan-ish for accent
+    green: Color::Rgb(80, 250, 123),
+    dim: Color::Rgb(98, 114, 164), // comment
+    fg: Color::Rgb(248, 248, 242),
+    bg: Color::Rgb(40, 42, 54),
+    bg_hl: Color::Rgb(68, 71, 90), // current line
+};
+
+const THEMES: &[(&str, &Theme)] = &[
+    ("tokyo-night", &TOKYO_NIGHT),
+    ("catppuccin", &CATPPUCCIN),
+    ("dracula", &DRACULA),
+];
+
+static CURRENT_THEME: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn theme() -> &'static Theme {
+    let idx = CURRENT_THEME.load(std::sync::atomic::Ordering::Relaxed);
+    THEMES[idx.min(THEMES.len() - 1)].1
+}
+
+/// Switch the active theme by name. Returns the matched canonical name on
+/// success, `None` if `name` doesn't correspond to a known theme.
+pub fn set_theme(name: &str) -> Option<&'static str> {
+    let (idx, &(canonical, _)) = THEMES.iter().enumerate().find(|(_, (n, _))| *n == name)?;
+    CURRENT_THEME.store(idx, std::sync::atomic::Ordering::Relaxed);
+    Some(canonical)
+}
+
+pub fn theme_names() -> Vec<&'static str> {
+    THEMES.iter().map(|(n, _)| *n).collect()
+}
+
+fn current_theme_name() -> &'static str {
+    let idx = CURRENT_THEME.load(std::sync::atomic::Ordering::Relaxed);
+    THEMES[idx.min(THEMES.len() - 1)].0
+}
 
 enum Entry {
     User(String),
@@ -541,6 +613,7 @@ fn translate_ex(cmd: &str) -> Result<String, String> {
         "reset" => "reset".to_string(),
         "clear" => "clear".to_string(),
         "show" | "info" => "show".to_string(),
+        "theme" | "colorscheme" | "colo" => format!("theme {arg}"),
         other => return Err(format!("unknown ex command: :{other}")),
     };
     Ok(translated)
@@ -629,6 +702,7 @@ fn arg_placeholder(cmd: &str) -> Option<&'static str> {
     match cmd {
         "save" | "load" | "delete" | "rm" => Some(" NAME"),
         "model" => Some(" [NAME]"),
+        "theme" => Some(" [NAME]"),
         _ => None,
     }
 }
@@ -928,6 +1002,23 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                 state.push(Entry::Info(format!("switched model to {arg}")));
             }
         }
+        "theme" => {
+            if arg.is_empty() {
+                let names = theme_names().join(", ");
+                state.push(Entry::Info(format!(
+                    "current theme: {}\navailable: {}",
+                    current_theme_name(),
+                    names
+                )));
+            } else if let Some(canonical) = set_theme(arg) {
+                state.push(Entry::Info(format!("switched theme to {canonical}")));
+            } else {
+                state.push(Entry::Error(format!(
+                    "unknown theme '{arg}'. try one of: {}",
+                    theme_names().join(", ")
+                )));
+            }
+        }
         "show" | "info" => {
             let session_id = agent.session_id().to_string();
             let model = agent.model().to_string();
@@ -950,7 +1041,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
         }
         "help" | "?" => {
             state.push(Entry::Info(
-                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /show · /help · /quit"
+                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /theme [NAME] · /show · /help · /quit"
                     .into(),
             ));
         }
@@ -961,6 +1052,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
 }
 
 fn draw(f: &mut ratatui::Frame, state: &State) {
+    let th = theme();
     // Up to 6 menu items inline above the input. Includes 2 for the border.
     let menu_height: u16 = state
         .menu
@@ -997,16 +1089,16 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(TN_DIM))
+                .border_style(Style::default().fg(th.dim))
                 .title(Line::from(vec![
                     Span::styled(
                         " teleia ",
-                        Style::default().fg(TN_PURPLE).add_modifier(Modifier::BOLD),
+                        Style::default().fg(th.purple).add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled("@ ", Style::default().fg(TN_DIM)),
+                    Span::styled("@ ", Style::default().fg(th.dim)),
                     Span::styled(
                         format!("{} ", state.hostname),
-                        Style::default().fg(TN_CYAN).add_modifier(Modifier::ITALIC),
+                        Style::default().fg(th.cyan).add_modifier(Modifier::ITALIC),
                     ),
                 ])),
         )
@@ -1030,16 +1122,16 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(TN_DIM))
+                    .border_style(Style::default().fg(th.dim))
                     .title(Span::styled(
                         title,
-                        Style::default().fg(TN_BLUE).add_modifier(Modifier::BOLD),
+                        Style::default().fg(th.blue).add_modifier(Modifier::BOLD),
                     )),
             )
             .highlight_style(
                 Style::default()
-                    .fg(TN_FG)
-                    .bg(TN_BG_HL)
+                    .fg(th.fg)
+                    .bg(th.bg_hl)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("❯ ");
@@ -1050,9 +1142,9 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
 
     // Pick prompt + active buffer per mode.
     let (prompt, prompt_color, buf, buf_cursor) = match state.mode {
-        Mode::Insert => ("> ", TN_CYAN, &state.input, state.input_cursor),
-        Mode::Normal => ("> ", TN_GREEN, &state.input, state.input_cursor),
-        Mode::Command => (": ", TN_YELLOW, &state.command_buf, state.command_cursor),
+        Mode::Insert => ("> ", th.cyan, &state.input, state.input_cursor),
+        Mode::Normal => ("> ", th.green, &state.input, state.input_cursor),
+        Mode::Command => (": ", th.yellow, &state.command_buf, state.command_cursor),
     };
 
     // Horizontally scroll so the cursor is always visible.
@@ -1063,9 +1155,9 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
     let visible_text: String = buf.chars().skip(start_char).take(visible_width).collect();
 
     let body_style = if state.working {
-        Style::default().fg(TN_DIM)
+        Style::default().fg(th.dim)
     } else {
-        Style::default().fg(TN_FG)
+        Style::default().fg(th.fg)
     };
     let mut spans = vec![
         Span::styled(prompt, Style::default().fg(prompt_color)),
@@ -1085,7 +1177,7 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
                 .take(remaining)
                 .collect();
             if !ghost.is_empty() {
-                spans.push(Span::styled(ghost, Style::default().fg(TN_DIM)));
+                spans.push(Span::styled(ghost, Style::default().fg(th.dim)));
             }
         }
     }
@@ -1103,55 +1195,55 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
     f.set_cursor_position((cursor_x, cursor_y));
 
     let (mode_label, mode_color) = match state.mode {
-        Mode::Insert => ("INS", TN_CYAN),
-        Mode::Normal => ("NOR", TN_GREEN),
-        Mode::Command => ("CMD", TN_YELLOW),
+        Mode::Insert => ("INS", th.cyan),
+        Mode::Normal => ("NOR", th.green),
+        Mode::Command => ("CMD", th.yellow),
     };
     // Chip-style mode badge: dark fg on the mode colour for contrast.
     let mut status_spans = vec![
         Span::styled(
             format!(" {mode_label} "),
             Style::default()
-                .fg(TN_BG)
+                .fg(th.bg)
                 .bg(mode_color)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" · ", Style::default().fg(TN_DIM)),
+        Span::styled(" · ", Style::default().fg(th.dim)),
     ];
     if state.working {
         let frame = SPINNER[state.frame % SPINNER.len()];
-        status_spans.push(Span::styled(frame, Style::default().fg(TN_PURPLE)));
+        status_spans.push(Span::styled(frame, Style::default().fg(th.purple)));
         status_spans.push(Span::raw(" "));
         status_spans.push(Span::styled(
             "thinking…",
             Style::default()
-                .fg(TN_PURPLE)
+                .fg(th.purple)
                 .add_modifier(Modifier::ITALIC),
         ));
     } else {
         status_spans.push(Span::styled(
             &state.status,
-            Style::default().fg(TN_DIM).add_modifier(Modifier::ITALIC),
+            Style::default().fg(th.dim).add_modifier(Modifier::ITALIC),
         ));
     }
-    status_spans.push(Span::styled(" · ", Style::default().fg(TN_DIM)));
+    status_spans.push(Span::styled(" · ", Style::default().fg(th.dim)));
     status_spans.push(Span::styled(
         short_model(&state.model),
-        Style::default().fg(TN_BLUE).add_modifier(Modifier::ITALIC),
+        Style::default().fg(th.blue).add_modifier(Modifier::ITALIC),
     ));
-    status_spans.push(Span::styled(" · ", Style::default().fg(TN_DIM)));
+    status_spans.push(Span::styled(" · ", Style::default().fg(th.dim)));
     status_spans.push(Span::styled(
         format!(
             "↑{} ↓{}",
             format_count(state.tokens.prompt),
             format_count(state.tokens.completion)
         ),
-        Style::default().fg(TN_YELLOW),
+        Style::default().fg(th.yellow),
     ));
     status_spans.push(Span::raw("   "));
     status_spans.push(Span::styled(
         mode_hints(state.mode),
-        Style::default().fg(TN_DIM),
+        Style::default().fg(th.dim),
     ));
     f.render_widget(Paragraph::new(Line::from(status_spans)), chunks[3]);
 }
@@ -1196,10 +1288,11 @@ fn hostname() -> String {
 }
 
 /// Empty-state welcome banner: an ASCII-art "TELEIA" logo that shimmers
-/// between TN_PURPLE and TN_BLUE per character, with a blinking red Greek
+/// between th.purple and th.blue per character, with a blinking red Greek
 /// period below — same motif as the SVG banner in the README. Centred
 /// horizontally to the available `width`.
 fn welcome_banner(width: u16, frame: usize) -> Vec<Line<'static>> {
+    let th = theme();
     const LOGO: &[&str] = &[
         "████████╗███████╗██╗     ███████╗██╗ █████╗ ",
         "╚══██╔══╝██╔════╝██║     ██╔════╝██║██╔══██╗",
@@ -1222,9 +1315,9 @@ fn welcome_banner(width: u16, frame: usize) -> Vec<Line<'static>> {
             // Per-character colour alternation; the phase shifts with frame
             // to give a slow shimmer reading left-to-right.
             let color = if (i + frame / 4).is_multiple_of(2) {
-                TN_PURPLE
+                th.purple
             } else {
-                TN_BLUE
+                th.blue
             };
             spans.push(Span::styled(
                 c.to_string(),
@@ -1240,7 +1333,7 @@ fn welcome_banner(width: u16, frame: usize) -> Vec<Line<'static>> {
     if dot_visible && dot_col < width as usize {
         out.push(Line::from(vec![
             Span::raw(" ".repeat(dot_col)),
-            Span::styled("●", Style::default().fg(TN_RED)),
+            Span::styled("●", Style::default().fg(th.red)),
         ]));
     } else {
         out.push(Line::from(""));
@@ -1254,17 +1347,17 @@ fn welcome_banner(width: u16, frame: usize) -> Vec<Line<'static>> {
     };
     out.push(center(
         "the distilled coding agent",
-        Style::default().fg(TN_CYAN).add_modifier(Modifier::ITALIC),
+        Style::default().fg(th.cyan).add_modifier(Modifier::ITALIC),
     ));
     out.push(center(
         "τελεία · full stop",
-        Style::default().fg(TN_DIM).add_modifier(Modifier::ITALIC),
+        Style::default().fg(th.dim).add_modifier(Modifier::ITALIC),
     ));
     out.push(Line::from(""));
     out.push(Line::from(""));
     out.push(center(
         "Type to start · /help for commands · esc for normal mode",
-        Style::default().fg(TN_DIM),
+        Style::default().fg(th.dim),
     ));
 
     out
@@ -1312,12 +1405,13 @@ fn render_assistant_lines(text: &str) -> Vec<Line<'static>> {
 }
 
 fn render_entry(entry: &Entry, frame: usize) -> Vec<Line<'static>> {
+    let th = theme();
     let mut out = Vec::new();
     match entry {
         Entry::User(text) => {
             out.push(Line::from(Span::styled(
                 "you",
-                Style::default().fg(TN_CYAN).add_modifier(Modifier::BOLD),
+                Style::default().fg(th.cyan).add_modifier(Modifier::BOLD),
             )));
             for line in text.lines() {
                 out.push(Line::from(line.to_string()));
@@ -1336,7 +1430,7 @@ fn render_entry(entry: &Entry, frame: usize) -> Vec<Line<'static>> {
             };
             out.push(Line::from(Span::styled(
                 header,
-                Style::default().fg(TN_PURPLE).add_modifier(Modifier::BOLD),
+                Style::default().fg(th.purple).add_modifier(Modifier::BOLD),
             )));
             for line in render_assistant_lines(text) {
                 out.push(line);
@@ -1358,7 +1452,7 @@ fn render_entry(entry: &Entry, frame: usize) -> Vec<Line<'static>> {
             };
             out.push(Line::from(Span::styled(
                 format!("{marker} {name}({args})"),
-                Style::default().fg(TN_YELLOW),
+                Style::default().fg(th.yellow),
             )));
             let highlighted = if name == "read" {
                 highlight::extension_from_read_args(args)
@@ -1371,7 +1465,7 @@ fn render_entry(entry: &Entry, frame: usize) -> Vec<Line<'static>> {
                 None => Box::new(output.lines().take(20).map(|line| {
                     Line::from(Span::styled(
                         format!("  {line}"),
-                        Style::default().fg(TN_DIM),
+                        Style::default().fg(th.dim),
                     ))
                 })),
             };
@@ -1383,7 +1477,7 @@ fn render_entry(entry: &Entry, frame: usize) -> Vec<Line<'static>> {
         Entry::Error(text) => {
             out.push(Line::from(Span::styled(
                 format!("error: {text}"),
-                Style::default().fg(TN_RED),
+                Style::default().fg(th.red),
             )));
             out.push(Line::from(""));
         }
@@ -1393,7 +1487,7 @@ fn render_entry(entry: &Entry, frame: usize) -> Vec<Line<'static>> {
                 let prefix = if first { "· " } else { "  " };
                 out.push(Line::from(Span::styled(
                     format!("{prefix}{line}"),
-                    Style::default().fg(TN_BLUE),
+                    Style::default().fg(th.blue),
                 )));
                 first = false;
             }
@@ -1773,5 +1867,41 @@ mod tests {
     fn recall_up_possible_false_for_empty_history() {
         let s = recall_state(&[]);
         assert!(!recall_up_possible(&s));
+    }
+
+    #[test]
+    fn set_theme_returns_canonical_for_known() {
+        assert_eq!(set_theme("tokyo-night"), Some("tokyo-night"));
+        assert_eq!(set_theme("catppuccin"), Some("catppuccin"));
+        assert_eq!(set_theme("dracula"), Some("dracula"));
+    }
+
+    #[test]
+    fn set_theme_returns_none_for_unknown() {
+        assert_eq!(set_theme("solarized"), None);
+        assert_eq!(set_theme(""), None);
+    }
+
+    #[test]
+    fn theme_names_lists_all_three() {
+        let names = theme_names();
+        assert!(names.contains(&"tokyo-night"));
+        assert!(names.contains(&"catppuccin"));
+        assert!(names.contains(&"dracula"));
+    }
+
+    #[test]
+    fn ex_translates_theme_command() {
+        assert_eq!(translate_ex("theme").unwrap(), "theme ");
+        assert_eq!(
+            translate_ex("theme catppuccin").unwrap(),
+            "theme catppuccin"
+        );
+        // vim "colo" / "colorscheme" alias map to the same slash command
+        assert_eq!(translate_ex("colo dracula").unwrap(), "theme dracula");
+        assert_eq!(
+            translate_ex("colorscheme tokyo-night").unwrap(),
+            "theme tokyo-night"
+        );
     }
 }

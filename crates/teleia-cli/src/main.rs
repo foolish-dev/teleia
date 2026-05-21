@@ -14,6 +14,9 @@ struct Args {
     model: String,
     #[arg(long, default_value = DEFAULT_BASE_URL)]
     base_url: String,
+    /// Colour theme. Known: tokyo-night (default), catppuccin, dracula.
+    #[arg(long, default_value = "tokyo-night")]
+    theme: String,
 }
 
 #[tokio::main]
@@ -24,6 +27,13 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
+    if tui::set_theme(&args.theme).is_none() {
+        eprintln!(
+            "warning: unknown theme '{}'. Known: {}",
+            args.theme,
+            tui::theme_names().join(", ")
+        );
+    }
     let llm = LlmClient::new(args.base_url, args.model);
     let store = Store::open()?;
     let agent = Agent::new(llm, store)?;
