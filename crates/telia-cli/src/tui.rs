@@ -1312,8 +1312,13 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
         let frame = SPINNER[state.frame % SPINNER.len()];
         status_spans.push(Span::styled(frame, Style::default().fg(th.purple)));
         status_spans.push(Span::raw(" "));
+        // Cycle the trailing ellipsis 0 → 1 → 2 → 3 → 0 dots at ~2.5 Hz
+        // (32 frames ≈ 1.6 s full loop). Pad to three columns so the
+        // segments after "thinking" don't shift as the dots tick.
+        let dots = (state.frame / 8) % 4;
+        let trailing: String = ".".repeat(dots) + &" ".repeat(3 - dots);
         status_spans.push(Span::styled(
-            "thinking…",
+            format!("thinking{trailing}"),
             Style::default()
                 .fg(th.purple)
                 .add_modifier(Modifier::ITALIC),
