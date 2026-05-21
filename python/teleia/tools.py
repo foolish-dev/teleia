@@ -93,23 +93,15 @@ def _bash(command: str) -> str:
     try:
         result = subprocess.run(
             ["bash", "-lc", command],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
             timeout=30,
             env=os.environ.copy(),
         )
     except subprocess.TimeoutExpired as e:
-        out = e.stdout or ""
-        if e.stderr:
-            if out and not out.endswith("\n"):
-                out += "\n"
-            out += e.stderr
-        return out + "\n[bash timed out after 30s]"
+        return (e.stdout or "") + "\n[bash timed out after 30s]"
     out = result.stdout
-    if result.stderr:
-        if out and not out.endswith("\n"):
-            out += "\n"
-        out += result.stderr
     if result.returncode != 0:
         out += f"\n[exit {result.returncode}]"
     return out

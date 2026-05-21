@@ -141,22 +141,26 @@ struct BashArgs {
 
 async fn bash_tool(args: Value) -> Result<String> {
     let BashArgs { command } = serde_json::from_value(args)?;
-    let output = Command::new("timeout")
-        .arg("30")
-        .arg("bash")
-        .arg("-lc")
-        .arg(&command)
+    let mut cmd = Command::new("timeout");
+    cmd.arg("30").arg("bash").arg("-lc").arg(&command);
+    // SAFETY: pre_exec runs in the forked child before exec. dup2(1, 2)
+    // redirects the child's stderr fd onto stdout's pipe, so writes from
+    // both streams land in one buffer in emit order — matching go's
+    // CombinedOutput and lua's outer `> tmp 2>&1` redirect.
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::dup2(1, 2) == -1 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+    let output = cmd
         .output()
         .await
         .with_context(|| format!("spawn timeout/bash for: {command}"))?;
-    let mut out = String::new();
-    out.push_str(&String::from_utf8_lossy(&output.stdout));
-    if !output.stderr.is_empty() {
-        if !out.is_empty() && !out.ends_with('\n') {
-            out.push('\n');
-        }
-        out.push_str(&String::from_utf8_lossy(&output.stderr));
-    }
+    let mut out = String::from_utf8_lossy(&output.stdout).into_owned();
     let exit_code = output.status.code().unwrap_or(-1);
     if exit_code == 124 {
         out.push_str("\n[bash timed out after 30s]");

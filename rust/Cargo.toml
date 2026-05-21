@@ -30,6 +30,7 @@ clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ulid = "1"
+libc = "0.2"
 
 teleia-llm = { path = "crates/teleia-llm" }
 teleia-tools = { path = "crates/teleia-tools" }

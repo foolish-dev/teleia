@@ -90,14 +90,8 @@ export async function dispatch(name: string, argumentsJson: string): Promise<str
       return `edited ${args.path}`
     }
     case "bash": {
-      const result = await $`timeout 30 bash -lc ${args.command!}`.quiet().nothrow()
-      const stdout = result.stdout.toString()
-      const stderr = result.stderr.toString()
-      let out = stdout
-      if (stderr) {
-        if (out && !out.endsWith("\n")) out += "\n"
-        out += stderr
-      }
+      const result = await $`timeout 30 bash -lc ${args.command!} 2>&1`.quiet().nothrow()
+      let out = result.stdout.toString()
       if (result.exitCode === 124) {
         out += `\n[bash timed out after 30s]`
       } else if (result.exitCode !== 0) {
