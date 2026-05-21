@@ -49,6 +49,7 @@ struct State {
     input_cursor: usize, // byte offset into input
     history: Vec<Entry>,
     status: String,
+    model: String,
     scroll: u16, // offset from auto-scroll bottom; 0 = follow
     working: bool,
     should_quit: bool,
@@ -56,7 +57,7 @@ struct State {
 }
 
 impl State {
-    fn new(session_id: &str) -> Self {
+    fn new(session_id: &str, model: &str) -> Self {
         Self {
             input: String::new(),
             input_cursor: 0,
@@ -65,6 +66,7 @@ impl State {
                 "session {} · ready",
                 &session_id[..session_id.len().min(12)]
             ),
+            model: model.to_string(),
             scroll: 0,
             working: false,
             should_quit: false,
@@ -143,7 +145,7 @@ pub async fn run(mut agent: Agent) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut state = State::new(agent.session_id());
+    let mut state = State::new(agent.session_id(), agent.model());
     let result = event_loop(&mut terminal, &mut state, &mut agent).await;
 
     disable_raw_mode()?;
@@ -395,6 +397,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                 state.push(Entry::Info(format!("current model: {}", agent.model())));
             } else {
                 agent.set_model(arg.to_string());
+                state.model = arg.to_string();
                 state.push(Entry::Info(format!("switched model to {arg}")));
             }
         }
@@ -482,10 +485,23 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
             &state.status,
             Style::default().fg(TN_DIM).add_modifier(Modifier::ITALIC),
         ),
+        Span::raw(" · "),
+        Span::styled(
+            short_model(&state.model),
+            Style::default().fg(TN_DIM).add_modifier(Modifier::ITALIC),
+        ),
         Span::raw("   "),
         Span::styled(HINTS, Style::default().fg(TN_DIM)),
     ]);
     f.render_widget(Paragraph::new(status_line), chunks[3]);
+}
+
+/// Compact "hf.co/FoolDev/Thanatos-27B:Q4_K_M" → "Thanatos-27B" for status-
+/// bar use: take the segment after the last '/', then drop everything from
+/// the first ':'. Leaves short names like "llama3" alone.
+fn short_model(model: &str) -> &str {
+    let tail = model.rsplit('/').next().unwrap_or(model);
+    tail.split(':').next().unwrap_or(tail)
 }
 
 /// Walk an assistant message looking for ```lang ... ``` code fences. Plain
@@ -652,7 +668,7 @@ mod tests {
     }
 
     fn state_with(input: &str, cursor: usize) -> State {
-        let mut s = State::new("dummy-session-id");
+        let mut s = State::new("dummy-session-id", "dummy-model");
         s.input = input.into();
         s.input_cursor = cursor;
         s
@@ -697,5 +713,25 @@ mod tests {
         delete_word_before_cursor(&mut s);
         assert_eq!(s.input, " world");
         assert_eq!(s.input_cursor, 0);
+    }
+
+    #[test]
+    fn short_model_strips_hub_prefix_and_quant_suffix() {
+        assert_eq!(
+            short_model("hf.co/FoolDev/Thanatos-27B:Q4_K_M"),
+            "Thanatos-27B"
+        );
+    }
+
+    #[test]
+    fn short_model_leaves_simple_names_alone() {
+        assert_eq!(short_model("llama3"), "llama3");
+        assert_eq!(short_model("qwen2.5"), "qwen2.5");
+    }
+
+    #[test]
+    fn short_model_handles_slash_only_or_colon_only() {
+        assert_eq!(short_model("a/b"), "b");
+        assert_eq!(short_model("model:tag"), "model");
     }
 }
