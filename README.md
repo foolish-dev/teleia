@@ -6,6 +6,7 @@
   <a href="https://github.com/foolish-dev/telia/actions/workflows/ci.yml"><img alt="ci" src="https://github.com/foolish-dev/telia/actions/workflows/ci.yml/badge.svg?branch=dev"></a>
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
+>Currently adding other models, local models run fine
 
 Minimal TUI coding agent. Talks to a local Ollama or a cloud chat-completions endpoint, runs four tools (`read` / `write` / `edit` / `bash`), persists sessions to SQLite. Single binary, no daemon.
 
