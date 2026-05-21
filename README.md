@@ -55,7 +55,7 @@ The model name picks the provider automatically:
 
 ### Ollama pre-flight
 
-When the resolved base URL looks like Ollama, `telia` walks a list of default Ollama models — currently [`hf.co/FoolDev/Thanatos-27B`](https://huggingface.co/FoolDev/Thanatos-27B) and [`hf.co/FoolDev/Janus-35B`](https://huggingface.co/FoolDev/Janus-35B), plus the active `--model` if it isn't already on that list — asks Ollama which of them are already cached, and streams `/api/pull` (with an animated in-place progress bar) for the ones that aren't. Once they're all cached, `/model` can switch between them without another download. Pass `--no-pull` to skip the pre-flight entirely. The pre-flight is automatically skipped for non-Ollama endpoints.
+When the resolved base URL looks like Ollama, `telia` walks the list of default Ollama models — currently just [`hf.co/FoolDev/Janus-35B`](https://huggingface.co/FoolDev/Janus-35B), plus the active `--model` if it isn't already on that list — asks Ollama which of them are already cached, and streams `/api/pull` (with an animated in-place progress bar) for the ones that aren't. Once they're cached, `/model` switches between them without another download. Pass `--no-pull` to skip the pre-flight entirely. The pre-flight is automatically skipped for non-Ollama endpoints.
 
 For development from a workspace clone:
 
