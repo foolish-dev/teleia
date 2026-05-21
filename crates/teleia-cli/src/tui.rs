@@ -12,11 +12,11 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Gauge, Paragraph, Wrap},
     Terminal,
 };
 use std::{io, time::Duration};
-use teleia_agent::{Agent, TurnEvent};
+use teleia_agent::{Agent, TurnEvent, MAX_TOOL_HOPS};
 
 const HINTS: &str = "enter send · ↑↓ scroll · /help cmds · ctrl-c quit";
 
@@ -51,6 +51,8 @@ struct State {
     status: String,
     scroll: u16, // offset from auto-scroll bottom; 0 = follow
     working: bool,
+    should_quit: bool,
+    hop: usize, // 0..=MAX_TOOL_HOPS, 0 = idle
 }
 
 impl State {
@@ -64,6 +66,8 @@ impl State {
             ),
             scroll: 0,
             working: false,
+            should_quit: false,
+            hop: 0,
         }
     }
 
@@ -75,6 +79,7 @@ impl State {
     fn apply(&mut self, evt: TurnEvent) {
         match evt {
             TurnEvent::AssistantStart => {
+                self.hop = (self.hop + 1).min(MAX_TOOL_HOPS);
                 self.push(Entry::Assistant {
                     text: String::new(),
                     complete: false,
@@ -123,7 +128,9 @@ impl State {
                     self.scroll = 0;
                 }
             }
-            TurnEvent::TurnEnd => {}
+            TurnEvent::TurnEnd => {
+                self.hop = 0;
+            }
         }
     }
 }
@@ -154,6 +161,9 @@ async fn event_loop<B: ratatui::backend::Backend>(
     agent: &mut Agent,
 ) -> Result<()> {
     loop {
+        if state.should_quit {
+            return Ok(());
+        }
         terminal.draw(|f| draw(f, state))?;
 
         if !event::poll(Duration::from_millis(50))? {
@@ -201,6 +211,7 @@ async fn event_loop<B: ratatui::backend::Backend>(
                 state.working = true;
                 run_turn(terminal, state, agent, trimmed.to_string()).await;
                 state.working = false;
+                state.hop = 0;
                 state.status = format!(
                     "session {} · ready",
                     &agent.session_id()[..agent.session_id().len().min(12)]
@@ -288,9 +299,41 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                 Err(e) => state.push(Entry::Error(format!("load: {e}"))),
             }
         }
+        "list" => match agent.list_aliases() {
+            Ok(aliases) if aliases.is_empty() => {
+                state.push(Entry::Info("no saved aliases".into()));
+            }
+            Ok(aliases) => {
+                let mut text = format!("saved aliases ({}):", aliases.len());
+                for (name, session_id, _) in aliases {
+                    text.push_str(&format!(
+                        "\n  {name} → {}",
+                        &session_id[..session_id.len().min(12)]
+                    ));
+                }
+                state.push(Entry::Info(text));
+            }
+            Err(e) => state.push(Entry::Error(format!("list: {e}"))),
+        },
+        "clear" => {
+            state.history.clear();
+            state.scroll = 0;
+        }
+        "model" => {
+            if arg.is_empty() {
+                state.push(Entry::Info(format!("current model: {}", agent.model())));
+            } else {
+                agent.set_model(arg.to_string());
+                state.push(Entry::Info(format!("switched model to {arg}")));
+            }
+        }
+        "quit" | "exit" | "q" => {
+            state.should_quit = true;
+        }
         "help" | "?" => {
             state.push(Entry::Info(
-                "commands: /reset · /save NAME · /load NAME · /help".into(),
+                "commands: /reset · /clear · /save NAME · /load NAME · /list · /model [NAME] · /help · /quit"
+                    .into(),
             ));
         }
         other => {
@@ -305,6 +348,7 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
         .constraints([
             Constraint::Min(3),
             Constraint::Length(3),
+            Constraint::Length(1),
             Constraint::Length(1),
         ])
         .split(f.area());
@@ -333,6 +377,16 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
     .block(Block::default().borders(Borders::ALL));
     f.render_widget(input_widget, chunks[1]);
 
+    let ratio = (state.hop as f64 / MAX_TOOL_HOPS as f64).clamp(0.0, 1.0);
+    let gauge = Gauge::default()
+        .gauge_style(Style::default().fg(TN_PURPLE).bg(Color::Reset))
+        .label(Span::styled(
+            format!("hops {}/{}", state.hop, MAX_TOOL_HOPS),
+            Style::default().fg(TN_FG),
+        ))
+        .ratio(ratio);
+    f.render_widget(gauge, chunks[2]);
+
     let status_line = Line::from(vec![
         Span::styled(
             &state.status,
@@ -341,7 +395,7 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
         Span::raw("   "),
         Span::styled(HINTS, Style::default().fg(TN_DIM)),
     ]);
-    f.render_widget(Paragraph::new(status_line), chunks[2]);
+    f.render_widget(Paragraph::new(status_line), chunks[3]);
 }
 
 fn render_entry(entry: &Entry) -> Vec<Line<'static>> {
@@ -394,10 +448,15 @@ fn render_entry(entry: &Entry) -> Vec<Line<'static>> {
             out.push(Line::from(""));
         }
         Entry::Info(text) => {
-            out.push(Line::from(Span::styled(
-                format!("· {text}"),
-                Style::default().fg(TN_BLUE),
-            )));
+            let mut first = true;
+            for line in text.lines() {
+                let prefix = if first { "· " } else { "  " };
+                out.push(Line::from(Span::styled(
+                    format!("{prefix}{line}"),
+                    Style::default().fg(TN_BLUE),
+                )));
+                first = false;
+            }
             out.push(Line::from(""));
         }
     }

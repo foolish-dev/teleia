@@ -146,6 +146,10 @@ impl LlmClient {
         &self.model
     }
 
+    pub fn set_model(&mut self, model: String) {
+        self.model = model;
+    }
+
     /// Stream chat completions as `ChatEvent`s. The final event is always `Done`.
     pub fn stream<'a>(
         &'a self,

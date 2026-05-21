@@ -52,8 +52,8 @@ cargo run --release
 ## Features
 
 - **Streaming** — tokens render live via SSE.
-- **Tools** — `read` / `write` / `edit` / `bash`, with a 16-hop loop cap.
-- **Slash commands** — `/reset`, `/save NAME`, `/load NAME`, `/help`.
+- **Tools** — `read` / `write` / `edit` / `bash`, with a 16-hop loop cap and a live gauge.
+- **Slash commands** — `/reset`, `/clear`, `/save NAME`, `/load NAME`, `/list`, `/model [NAME]`, `/help`, `/quit`.
 - **Scrollback** — ↑ / ↓ (PageUp / PageDown).
 - **Sessions** — sqlite at `$XDG_DATA_HOME/teleia/teleia.sqlite`. Save/load by alias across runs.
 

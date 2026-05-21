@@ -88,6 +88,24 @@ impl Store {
             .optional()?;
         id.ok_or_else(|| anyhow!("no session saved as '{name}'"))
     }
+
+    pub fn list_aliases(&self) -> Result<Vec<(String, String, i64)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT name, session_id, created_at FROM aliases ORDER BY created_at DESC")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
 }
 
 fn data_path() -> Result<PathBuf> {

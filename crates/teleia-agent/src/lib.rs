@@ -8,7 +8,7 @@ const SYSTEM_PROMPT: &str = "You are Teleia, a terse coding assistant running in
 Use the provided tools (read, write, edit, bash) to do real work. \
 Default to brief replies. When you finish a turn, stop — do not narrate.";
 
-const MAX_TOOL_HOPS: usize = 16;
+pub const MAX_TOOL_HOPS: usize = 16;
 
 /// Events emitted by `turn()`. The TUI consumes these to render incrementally.
 #[derive(Debug, Clone)]
@@ -73,6 +73,18 @@ impl Agent {
 
     pub fn save_alias(&self, name: &str) -> Result<()> {
         self.store.save_alias(name, &self.session_id)
+    }
+
+    pub fn list_aliases(&self) -> Result<Vec<(String, String, i64)>> {
+        self.store.list_aliases()
+    }
+
+    pub fn model(&self) -> &str {
+        self.llm.model()
+    }
+
+    pub fn set_model(&mut self, model: String) {
+        self.llm.set_model(model);
     }
 
     pub fn turn<'a>(
