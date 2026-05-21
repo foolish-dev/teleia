@@ -15,7 +15,7 @@ use ratatui::{
     Terminal,
 };
 use std::{io, time::Duration};
-use teleia_agent::{Agent, TokenCounts, TurnEvent, MAX_TOOL_HOPS};
+use teleia_agent::{Agent, TokenCounts, TurnEvent};
 
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -105,7 +105,6 @@ struct State {
     scroll: u16, // offset from auto-scroll bottom; 0 = follow
     working: bool,
     should_quit: bool,
-    hop: usize,   // 0..=MAX_TOOL_HOPS, 0 = idle
     frame: usize, // monotonic tick driving the spinner animation
     tokens: TokenCounts,
     suggestion: Option<Suggestion>,
@@ -129,7 +128,6 @@ impl State {
             scroll: 0,
             working: false,
             should_quit: false,
-            hop: 0,
             frame: 0,
             tokens: TokenCounts::default(),
             suggestion: None,
@@ -148,7 +146,6 @@ impl State {
     fn apply(&mut self, evt: TurnEvent) {
         match evt {
             TurnEvent::AssistantStart => {
-                self.hop = (self.hop + 1).min(MAX_TOOL_HOPS);
                 self.push(Entry::Assistant {
                     text: String::new(),
                     complete: false,
@@ -197,9 +194,7 @@ impl State {
                     self.scroll = 0;
                 }
             }
-            TurnEvent::TurnEnd => {
-                self.hop = 0;
-            }
+            TurnEvent::TurnEnd => {}
         }
     }
 }
@@ -476,7 +471,6 @@ async fn submit_input<B: ratatui::backend::Backend>(
     state.working = true;
     run_turn(terminal, state, agent, trimmed.to_string()).await;
     state.working = false;
-    state.hop = 0;
     state.tokens = agent.tokens();
     state.status = format!(
         "session {} · ready",
@@ -1023,7 +1017,7 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
         status_spans.push(Span::styled(frame, Style::default().fg(TN_PURPLE)));
         status_spans.push(Span::raw(" "));
         status_spans.push(Span::styled(
-            format!("hops {}/{}", state.hop, MAX_TOOL_HOPS),
+            "thinking…",
             Style::default()
                 .fg(TN_PURPLE)
                 .add_modifier(Modifier::ITALIC),
