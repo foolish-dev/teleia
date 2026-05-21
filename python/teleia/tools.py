@@ -98,8 +98,13 @@ def _bash(command: str) -> str:
             timeout=30,
             env=os.environ.copy(),
         )
-    except subprocess.TimeoutExpired:
-        return "[bash timed out after 30s]"
+    except subprocess.TimeoutExpired as e:
+        out = e.stdout or ""
+        if e.stderr:
+            if out and not out.endswith("\n"):
+                out += "\n"
+            out += e.stderr
+        return out + "\n[bash timed out after 30s]"
     out = result.stdout
     if result.stderr:
         if out and not out.endswith("\n"):

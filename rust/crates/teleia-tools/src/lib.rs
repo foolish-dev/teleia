@@ -141,11 +141,14 @@ struct BashArgs {
 
 async fn bash_tool(args: Value) -> Result<String> {
     let BashArgs { command } = serde_json::from_value(args)?;
-    let fut = Command::new("bash").arg("-lc").arg(&command).output();
-    let output = tokio::time::timeout(std::time::Duration::from_secs(30), fut)
+    let output = Command::new("timeout")
+        .arg("30")
+        .arg("bash")
+        .arg("-lc")
+        .arg(&command)
+        .output()
         .await
-        .map_err(|_| anyhow!("bash command timed out after 30s"))?
-        .with_context(|| format!("spawn bash for: {command}"))?;
+        .with_context(|| format!("spawn timeout/bash for: {command}"))?;
     let mut out = String::new();
     out.push_str(&String::from_utf8_lossy(&output.stdout));
     if !output.stderr.is_empty() {
@@ -154,8 +157,11 @@ async fn bash_tool(args: Value) -> Result<String> {
         }
         out.push_str(&String::from_utf8_lossy(&output.stderr));
     }
-    if !output.status.success() {
-        out.push_str(&format!("\n[exit {}]", output.status.code().unwrap_or(-1)));
+    let exit_code = output.status.code().unwrap_or(-1);
+    if exit_code == 124 {
+        out.push_str("\n[bash timed out after 30s]");
+    } else if !output.status.success() {
+        out.push_str(&format!("\n[exit {exit_code}]"));
     }
     Ok(out)
 }
