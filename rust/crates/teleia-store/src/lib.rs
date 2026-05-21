@@ -1,5 +1,4 @@
 use anyhow::{anyhow, Context, Result};
-use directories::ProjectDirs;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::PathBuf;
 use teleia_llm::Message;
@@ -92,9 +91,14 @@ impl Store {
 }
 
 fn data_path() -> Result<PathBuf> {
-    let dirs = ProjectDirs::from("dev", "foolish", "teleia")
-        .context("could not resolve project directories")?;
-    Ok(dirs.data_dir().join("teleia.sqlite"))
+    let base = match std::env::var_os("XDG_DATA_HOME") {
+        Some(v) if !v.is_empty() => PathBuf::from(v),
+        _ => {
+            let home = std::env::var_os("HOME").context("HOME not set")?;
+            PathBuf::from(home).join(".local").join("share")
+        }
+    };
+    Ok(base.join("teleia").join("teleia.sqlite"))
 }
 
 fn unix_seconds() -> i64 {

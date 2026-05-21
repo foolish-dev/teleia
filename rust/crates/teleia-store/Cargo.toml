@@ -10,6 +10,5 @@ anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 rusqlite.workspace = true
-directories.workspace = true
 ulid.workspace = true
 teleia-llm.workspace = true
