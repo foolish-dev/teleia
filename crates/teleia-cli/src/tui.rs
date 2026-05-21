@@ -382,6 +382,15 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
     .block(Block::default().borders(Borders::ALL));
     f.render_widget(input_widget, chunks[1]);
 
+    // Show the terminal cursor at the end of the input. ratatui hides the
+    // cursor by default; calling set_cursor_position each frame makes it
+    // visible at our chosen spot so users can see where they're typing.
+    let inside = chunks[1];
+    let cursor_x = inside.x + 1 /* border */ + 2 /* "> " */ + state.input.chars().count() as u16;
+    let cursor_x = cursor_x.min(inside.x + inside.width.saturating_sub(2));
+    let cursor_y = inside.y + 1;
+    f.set_cursor_position((cursor_x, cursor_y));
+
     let ratio = (state.hop as f64 / MAX_TOOL_HOPS as f64).clamp(0.0, 1.0);
     let gauge = Gauge::default()
         .gauge_style(Style::default().fg(TN_PURPLE).bg(Color::Reset))
