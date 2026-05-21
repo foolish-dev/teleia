@@ -11,7 +11,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Terminal,
 };
 use std::{io, time::Duration};
@@ -63,6 +63,23 @@ struct Suggestion {
     placeholder: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MenuKind {
+    /// Slash command list — selecting an item replaces the whole input
+    /// with `/cmd ` (trailing space if the command takes an arg).
+    Command,
+    /// Alias name list — selecting an item replaces the arg portion of
+    /// the input (everything after the first space).
+    Alias,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Menu {
+    items: Vec<String>,
+    selected: usize,
+    kind: MenuKind,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Mode {
     #[default]
@@ -83,6 +100,7 @@ struct State {
     hop: usize,   // 0..=MAX_TOOL_HOPS, 0 = idle
     frame: usize, // monotonic tick driving the spinner animation
     suggestion: Option<Suggestion>,
+    menu: Option<Menu>,
     mode: Mode,
     command_buf: String,
     command_cursor: usize,
@@ -105,6 +123,7 @@ impl State {
             hop: 0,
             frame: 0,
             suggestion: None,
+            menu: None,
             mode: Mode::Insert,
             command_buf: String::new(),
             command_cursor: 0,
@@ -220,8 +239,21 @@ async fn event_loop<B: ratatui::backend::Backend>(
         match state.mode {
             Mode::Insert => {
                 match key.code {
-                    KeyCode::Esc => {
+                    KeyCode::Esc if state.menu.take().is_none() => {
                         state.mode = Mode::Normal;
+                    }
+                    KeyCode::Esc => {}
+                    KeyCode::Up if state.menu.is_some() => {
+                        if let Some(m) = state.menu.as_mut() {
+                            m.selected = m.selected.saturating_sub(1);
+                        }
+                    }
+                    KeyCode::Down if state.menu.is_some() => {
+                        if let Some(m) = state.menu.as_mut() {
+                            if m.selected + 1 < m.items.len() {
+                                m.selected += 1;
+                            }
+                        }
                     }
                     KeyCode::Up | KeyCode::PageUp => {
                         state.scroll = state
@@ -248,7 +280,9 @@ async fn event_loop<B: ratatui::backend::Backend>(
                     KeyCode::Home => state.input_cursor = 0,
                     KeyCode::End => state.input_cursor = state.input.len(),
                     KeyCode::Tab => {
-                        if let Some(s) = state.suggestion.clone() {
+                        if accept_menu(state) {
+                            // accepted from menu
+                        } else if let Some(s) = state.suggestion.clone() {
                             state.input.push_str(&s.completion);
                             state.input_cursor = state.input.len();
                         }
@@ -404,6 +438,7 @@ async fn event_loop<B: ratatui::backend::Backend>(
         }
 
         refresh_suggestion(state, agent);
+        refresh_menu(state, agent);
     }
 }
 
@@ -559,6 +594,119 @@ fn arg_placeholder(cmd: &str) -> Option<&'static str> {
         "model" => Some(" [NAME]"),
         _ => None,
     }
+}
+
+/// Compute the dropdown menu (if any) for the current input. Pure function
+/// over `(input, aliases)` so the dispatch from `refresh_menu` can decide
+/// when to hit the store.
+fn compute_menu(input: &str, aliases: &[String]) -> Option<Menu> {
+    let rest = input.strip_prefix('/')?;
+
+    if let Some(space) = rest.find(' ') {
+        let cmd = &rest[..space];
+        let arg = rest[space + 1..].trim_start();
+        if matches!(cmd, "load" | "delete" | "rm") {
+            let items: Vec<String> = aliases
+                .iter()
+                .filter(|n| n.starts_with(arg))
+                .cloned()
+                .collect();
+            if items.is_empty() {
+                return None;
+            }
+            return Some(Menu {
+                items,
+                selected: 0,
+                kind: MenuKind::Alias,
+            });
+        }
+        return None;
+    }
+
+    let items: Vec<String> = SLASH_COMMANDS
+        .iter()
+        .filter(|c| c.starts_with(rest))
+        .map(|s| s.to_string())
+        .collect();
+    if items.is_empty() {
+        return None;
+    }
+    Some(Menu {
+        items,
+        selected: 0,
+        kind: MenuKind::Command,
+    })
+}
+
+/// Refresh state.menu based on current input, preserving the highlighted
+/// selection when the new menu has the same kind and the index is still
+/// in range. Only hits the store for the load/delete/rm arg case.
+fn refresh_menu(state: &mut State, agent: &Agent) {
+    if state.mode != Mode::Insert {
+        state.menu = None;
+        return;
+    }
+
+    let needs_aliases = matches!(
+        state
+            .input
+            .strip_prefix('/')
+            .and_then(|r| r.split_once(' '))
+            .map(|(c, _)| c),
+        Some("load") | Some("delete") | Some("rm")
+    );
+    let aliases: Vec<String> = if needs_aliases {
+        agent
+            .list_aliases()
+            .ok()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(n, _, _)| n)
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let next = compute_menu(&state.input, &aliases);
+    state.menu = match (state.menu.take(), next) {
+        (Some(prev), Some(mut new)) if prev.kind == new.kind => {
+            new.selected = prev.selected.min(new.items.len().saturating_sub(1));
+            Some(new)
+        }
+        (_, next) => next,
+    };
+}
+
+/// Apply a Tab/Enter acceptance of the current menu selection, mutating
+/// state.input + cursor. Returns true if a selection was applied.
+fn accept_menu(state: &mut State) -> bool {
+    let menu = match state.menu.take() {
+        Some(m) => m,
+        None => return false,
+    };
+    let item = match menu.items.get(menu.selected) {
+        Some(s) => s.clone(),
+        None => return false,
+    };
+    match menu.kind {
+        MenuKind::Command => {
+            let trailing = if arg_placeholder(&item).is_some() {
+                " "
+            } else {
+                ""
+            };
+            state.input = format!("/{item}{trailing}");
+            state.input_cursor = state.input.len();
+        }
+        MenuKind::Alias => {
+            if let Some(space) = state.input.find(' ') {
+                let cmd_prefix = state.input[..=space].to_string();
+                state.input = format!("{cmd_prefix}{item}");
+                state.input_cursor = state.input.len();
+            }
+        }
+    }
+    true
 }
 
 /// Ctrl+W: walk back from the cursor past any trailing whitespace, then past
@@ -734,10 +882,18 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
 }
 
 fn draw(f: &mut ratatui::Frame, state: &State) {
+    // Up to 6 menu items inline above the input. Includes 2 for the border.
+    let menu_height: u16 = state
+        .menu
+        .as_ref()
+        .map(|m| (m.items.len().min(6) as u16) + 2)
+        .unwrap_or(0);
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(3),
+            Constraint::Length(menu_height),
             Constraint::Length(3),
             Constraint::Length(1),
         ])
@@ -755,6 +911,32 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
         .scroll((offset, 0));
     f.render_widget(log, chunks[0]);
 
+    // Render the menu (if any) directly above the input.
+    if let Some(menu) = &state.menu {
+        let title = match menu.kind {
+            MenuKind::Command => " commands ",
+            MenuKind::Alias => " aliases ",
+        };
+        let items: Vec<ListItem> = menu
+            .items
+            .iter()
+            .take(6)
+            .map(|s| ListItem::new(s.clone()))
+            .collect();
+        let list = List::new(items)
+            .block(Block::default().borders(Borders::ALL).title(title))
+            .highlight_style(
+                Style::default()
+                    .fg(TN_FG)
+                    .bg(TN_DIM)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("› ");
+        let mut list_state = ListState::default();
+        list_state.select(Some(menu.selected.min(menu.items.len().saturating_sub(1))));
+        f.render_stateful_widget(list, chunks[1], &mut list_state);
+    }
+
     // Pick prompt + active buffer per mode.
     let (prompt, prompt_color, buf, buf_cursor) = match state.mode {
         Mode::Insert => ("> ", TN_CYAN, &state.input, state.input_cursor),
@@ -763,7 +945,7 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
     };
 
     // Horizontally scroll so the cursor is always visible.
-    let inside = chunks[1];
+    let inside = chunks[2];
     let visible_width = inside.width.saturating_sub(4) as usize; // 2 borders + prefix (2)
     let cursor_chars = buf[..buf_cursor].chars().count();
     let start_char = cursor_chars.saturating_sub(visible_width.saturating_sub(1));
@@ -778,8 +960,10 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
         Span::styled(prompt, Style::default().fg(prompt_color)),
         Span::styled(visible_text, body_style),
     ];
-    // Ghost-text suggestion only in Insert when the cursor is at the end.
-    if state.mode == Mode::Insert && state.input_cursor == state.input.len() {
+    // Ghost-text suggestion only in Insert when the cursor is at the end
+    // and the menu isn't already showing the same matches.
+    if state.mode == Mode::Insert && state.menu.is_none() && state.input_cursor == state.input.len()
+    {
         if let Some(s) = &state.suggestion {
             let used = cursor_chars - start_char;
             let remaining = visible_width.saturating_sub(used);
@@ -796,7 +980,7 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
     }
     let input_widget =
         Paragraph::new(Line::from(spans)).block(Block::default().borders(Borders::ALL));
-    f.render_widget(input_widget, chunks[1]);
+    f.render_widget(input_widget, chunks[2]);
 
     // ratatui hides the cursor by default; positioning it each frame makes
     // it visible at the edit point within the scrolled view.
@@ -839,7 +1023,7 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
     ));
     status_spans.push(Span::raw("   "));
     status_spans.push(Span::styled(HINTS, Style::default().fg(TN_DIM)));
-    f.render_widget(Paragraph::new(Line::from(status_spans)), chunks[2]);
+    f.render_widget(Paragraph::new(Line::from(status_spans)), chunks[3]);
 }
 
 /// Compact "hf.co/FoolDev/Thanatos-27B:Q4_K_M" → "Thanatos-27B" for status-
@@ -1197,5 +1381,62 @@ mod tests {
     fn ex_translates_show_and_info() {
         assert_eq!(translate_ex("show").unwrap(), "show");
         assert_eq!(translate_ex("info").unwrap(), "show");
+    }
+
+    #[test]
+    fn menu_command_list_filters_by_prefix() {
+        let m = compute_menu("/sa", &[]).unwrap();
+        assert_eq!(m.kind, MenuKind::Command);
+        assert_eq!(m.items, vec!["save"]);
+    }
+
+    #[test]
+    fn menu_command_list_returns_all_for_lone_slash() {
+        let m = compute_menu("/", &[]).unwrap();
+        assert_eq!(m.kind, MenuKind::Command);
+        assert_eq!(m.items.len(), SLASH_COMMANDS.len());
+    }
+
+    #[test]
+    fn menu_command_list_none_for_unknown_prefix() {
+        assert!(compute_menu("/zzz", &[]).is_none());
+    }
+
+    #[test]
+    fn menu_alias_filters_by_prefix() {
+        let aliases = vec![
+            "audit-pass-1".to_string(),
+            "audit-pass-2".to_string(),
+            "draft".to_string(),
+        ];
+        let m = compute_menu("/load aud", &aliases).unwrap();
+        assert_eq!(m.kind, MenuKind::Alias);
+        assert_eq!(m.items, vec!["audit-pass-1", "audit-pass-2"]);
+    }
+
+    #[test]
+    fn menu_alias_shows_all_on_empty_arg() {
+        let aliases = vec!["foo".to_string(), "bar".to_string()];
+        let m = compute_menu("/load ", &aliases).unwrap();
+        assert_eq!(m.kind, MenuKind::Alias);
+        assert_eq!(m.items.len(), 2);
+    }
+
+    #[test]
+    fn menu_alias_none_when_no_aliases_match() {
+        let aliases = vec!["foo".to_string()];
+        assert!(compute_menu("/load zzz", &aliases).is_none());
+    }
+
+    #[test]
+    fn menu_none_for_non_alias_commands_with_space() {
+        // /help takes no arg; once a space is typed, no menu.
+        assert!(compute_menu("/help ", &[]).is_none());
+    }
+
+    #[test]
+    fn menu_none_for_empty_or_no_slash() {
+        assert!(compute_menu("", &[]).is_none());
+        assert!(compute_menu("hello", &[]).is_none());
     }
 }
