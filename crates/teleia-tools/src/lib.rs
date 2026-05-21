@@ -189,3 +189,105 @@ async fn bash_tool(args: Value) -> Result<String> {
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn tmp_path(name: &str) -> PathBuf {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "teleia-tools-test-{}-{}-{}",
+            std::process::id(),
+            n,
+            name
+        ))
+    }
+
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn read_returns_file_contents() {
+        let path = tmp_path("read.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "hello world").unwrap();
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        assert_eq!(dispatch("read", &args).await.unwrap(), "hello world");
+    }
+
+    #[tokio::test]
+    async fn read_errors_on_missing_file() {
+        let path = tmp_path("does-not-exist.txt");
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        assert!(dispatch("read", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn write_creates_file_and_reports_bytes() {
+        let path = tmp_path("write.txt");
+        let _c = Cleanup(path.clone());
+        let args = json!({ "path": path.to_str().unwrap(), "content": "data" }).to_string();
+        let result = dispatch("write", &args).await.unwrap();
+        assert!(result.contains("wrote 4 bytes"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "data");
+    }
+
+    #[tokio::test]
+    async fn edit_replaces_unique_substring() {
+        let path = tmp_path("edit.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "hello world").unwrap();
+        let args = json!({
+            "path": path.to_str().unwrap(),
+            "old_string": "world",
+            "new_string": "rust"
+        })
+        .to_string();
+        let result = dispatch("edit", &args).await.unwrap();
+        assert!(result.contains("edited"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello rust");
+    }
+
+    #[tokio::test]
+    async fn edit_errors_when_old_string_missing() {
+        let path = tmp_path("edit-missing.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "hello world").unwrap();
+        let args = json!({
+            "path": path.to_str().unwrap(),
+            "old_string": "nope",
+            "new_string": "x"
+        })
+        .to_string();
+        let err = dispatch("edit", &args).await.unwrap_err().to_string();
+        assert!(err.contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn edit_errors_when_old_string_not_unique() {
+        let path = tmp_path("edit-dup.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "abc abc").unwrap();
+        let args = json!({
+            "path": path.to_str().unwrap(),
+            "old_string": "abc",
+            "new_string": "x"
+        })
+        .to_string();
+        let err = dispatch("edit", &args).await.unwrap_err().to_string();
+        assert!(err.contains("unique"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_rejects_unknown_tool() {
+        assert!(dispatch("nonsense", "{}").await.is_err());
+    }
+}

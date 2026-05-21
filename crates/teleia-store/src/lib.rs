@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use teleia_llm::Message;
 
 pub struct Store {
@@ -9,11 +9,14 @@ pub struct Store {
 
 impl Store {
     pub fn open() -> Result<Self> {
-        let path = data_path()?;
+        Self::open_at(&data_path()?)
+    }
+
+    pub fn open_at(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).with_context(|| format!("mkdir {parent:?}"))?;
         }
-        let conn = Connection::open(&path).with_context(|| format!("open {path:?}"))?;
+        let conn = Connection::open(path).with_context(|| format!("open {path:?}"))?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS sessions (
                 id TEXT PRIMARY KEY,
@@ -134,4 +137,99 @@ fn unix_seconds() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use teleia_llm::Message;
+
+    fn tmp_db() -> PathBuf {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("teleia-test-{}-{}.sqlite", std::process::id(), n))
+    }
+
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    fn alias_save_resolve_list_delete_roundtrip() {
+        let path = tmp_db();
+        let _cleanup = Cleanup(path.clone());
+        let store = Store::open_at(&path).unwrap();
+        let session = store.create_session("test-model").unwrap();
+
+        store.save_alias("foo", &session).unwrap();
+        store.save_alias("bar", &session).unwrap();
+
+        assert_eq!(store.resolve_alias("foo").unwrap(), session);
+        assert!(store.resolve_alias("missing").is_err());
+
+        let aliases = store.list_aliases().unwrap();
+        assert_eq!(aliases.len(), 2);
+        let names: Vec<_> = aliases.iter().map(|(n, _, _)| n.as_str()).collect();
+        assert!(names.contains(&"foo"));
+        assert!(names.contains(&"bar"));
+
+        store.delete_alias("foo").unwrap();
+        assert!(store.resolve_alias("foo").is_err());
+        assert!(store.delete_alias("foo").is_err()); // already gone
+        assert_eq!(store.list_aliases().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn save_alias_overwrites_existing() {
+        let path = tmp_db();
+        let _cleanup = Cleanup(path.clone());
+        let store = Store::open_at(&path).unwrap();
+        let a = store.create_session("m").unwrap();
+        let b = store.create_session("m").unwrap();
+
+        store.save_alias("x", &a).unwrap();
+        store.save_alias("x", &b).unwrap();
+
+        assert_eq!(store.resolve_alias("x").unwrap(), b);
+        assert_eq!(store.list_aliases().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn messages_persist_in_seq_order() {
+        let path = tmp_db();
+        let _cleanup = Cleanup(path.clone());
+        let store = Store::open_at(&path).unwrap();
+        let session = store.create_session("m").unwrap();
+
+        store
+            .append(
+                &session,
+                0,
+                &Message::User {
+                    content: "hi".into(),
+                },
+            )
+            .unwrap();
+        store
+            .append(
+                &session,
+                1,
+                &Message::Assistant {
+                    content: Some("hello".into()),
+                    tool_calls: vec![],
+                },
+            )
+            .unwrap();
+
+        let messages = store.load(&session).unwrap();
+        assert_eq!(messages.len(), 2);
+        assert!(matches!(&messages[0], Message::User { content } if content == "hi"));
+        assert!(
+            matches!(&messages[1], Message::Assistant { content: Some(c), .. } if c == "hello")
+        );
+    }
 }
