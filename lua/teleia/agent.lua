@@ -4,7 +4,7 @@ local store_mod = require("teleia.store")
 
 local SYSTEM_PROMPT = "You are Teleia, a terse coding assistant running in a terminal. " ..
   "Use the provided tools (read, write, edit, bash) to do real work. " ..
-  "Default to brief replies. When you finish a turn, stop -- do not narrate."
+  "Default to brief replies. When you finish a turn, stop — do not narrate."
 
 local MAX_TOOL_HOPS = 16
 
