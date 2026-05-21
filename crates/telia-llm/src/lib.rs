@@ -174,6 +174,24 @@ impl LlmClient {
         self.model = model;
     }
 
+    /// Best-effort: does Ollama have this model locally?
+    /// `Some(true)` / `Some(false)` for definite answers (via /api/show),
+    /// `None` if the endpoint isn't reachable or doesn't respond as expected
+    /// (e.g. the base URL points at a non-Ollama server).
+    pub async fn has_model(&self) -> Option<bool> {
+        let base = self.base_url.trim_end_matches('/');
+        let native = base.strip_suffix("/v1").unwrap_or(base);
+        let url = format!("{native}/api/show");
+        let resp = self
+            .http
+            .post(&url)
+            .json(&serde_json::json!({ "name": self.model }))
+            .send()
+            .await
+            .ok()?;
+        Some(resp.status().is_success())
+    }
+
     /// Stream chat completions as `ChatEvent`s. The final event is always `Done`.
     pub fn stream<'a>(
         &'a self,
