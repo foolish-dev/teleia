@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" role="img" aria-label="Teleia — the distilled coding agent">
-  <title>Teleia</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" role="img" aria-label="τέλεια — the distilled coding agent">
+  <title>τέλεια</title>
   <defs>
     <linearGradient id="t" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#7aa2f7"/>
@@ -15,7 +15,7 @@
     </linearGradient>
     <clipPath id="word">
       <text x="324" y="160" font-size="108" font-weight="700" letter-spacing="-2"
-            font-family="Iosevka, 'JetBrains Mono', 'IBM Plex Mono', Menlo, monospace">Teleia</text>
+            font-family="Iosevka, 'JetBrains Mono', 'IBM Plex Mono', Menlo, monospace">τέλεια</text>
     </clipPath>
   </defs>
 
@@ -24,7 +24,7 @@
   <!-- subtle prompt rule under the wordmark line -->
   <line x1="324" y1="172" x2="1080" y2="172" stroke="#414868" stroke-width="1" stroke-dasharray="2 6" opacity="0.5"/>
 
-  <!-- mark: T with greek period -->
+  <!-- mark: tau (Τ) with greek period -->
   <g transform="translate(96 70)">
     <g fill="url(#t)">
       <rect x="0" y="0" width="160" height="24" rx="4"/>
@@ -40,7 +40,7 @@
 
   <!-- wordmark + terminal cursor accent -->
   <g font-family="Iosevka, 'JetBrains Mono', 'IBM Plex Mono', Menlo, monospace">
-    <text x="324" y="160" font-size="108" font-weight="700" letter-spacing="-2" fill="#c0caf5">Teleia</text>
+    <text x="324" y="160" font-size="108" font-weight="700" letter-spacing="-2" fill="#c0caf5">τέλεια</text>
     <!-- block cursor next to the wordmark; blinks in sync with the period dot -->
     <rect x="720" y="78" width="22" height="86" fill="#7dcfff" opacity="0.85">
       <animate attributeName="opacity"
@@ -56,6 +56,6 @@
       </rect>
     </g>
     <text x="328" y="208" font-size="28" fill="#7dcfff" opacity="0.9">the distilled coding agent</text>
-    <text x="328" y="244" font-size="20" fill="#565f89" font-style="italic">τελεία · full stop</text>
+    <text x="328" y="244" font-size="20" fill="#565f89" font-style="italic">telia · full stop</text>
   </g>
 </svg>

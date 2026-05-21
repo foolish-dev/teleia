@@ -7,7 +7,7 @@
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 
-Minimal TUI coding agent — local Ollama backend, four tools, persistent sessions. Single binary, no daemon, no cloud round-trip.
+Minimal TUI coding agent. Talks to a local Ollama or a cloud chat-completions endpoint, runs four tools (`read` / `write` / `edit` / `bash`), persists sessions to SQLite. Single binary, no daemon.
 
 <p align="center">
   <img src="assets/screenshot.svg" alt="τέλεια TUI session" width="780">
@@ -21,7 +21,7 @@ One-liner — clones, builds, drops `telia` into `~/.local/bin` (requires cargo 
 curl -fsSL https://raw.githubusercontent.com/foolish-dev/telia/dev/install.sh | sh
 ```
 
-Override with `PREFIX=/usr/local/bin` (or any target) by piping into a `sh` that already has it set:
+Override the install location:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/foolish-dev/telia/dev/install.sh | PREFIX=/usr/local/bin sh
@@ -37,53 +37,52 @@ cargo install --git https://github.com/foolish-dev/telia telia-cli
 
 ```sh
 telia
-# with options
+# explicit options
 telia --model hf.co/FoolDev/Janus-35B:Q4_K_M --base-url http://127.0.0.1:11434/v1
+# cloud
+telia --model claude-opus-4-7  # picks up $ANTHROPIC_API_KEY
 ```
 
-### Providers
+`cargo run --release` works from a workspace clone.
+
+## Providers
 
 The model name picks the provider automatically:
 
-| pattern                | provider  | base URL (default)                  | API key env         |
-| ---------------------- | --------- | ----------------------------------- | ------------------- |
-| `claude-*`             | Anthropic | `https://api.anthropic.com/v1`      | `ANTHROPIC_API_KEY` |
-| `gpt-*`, `o1*`, `o3*`  | OpenAI    | `https://api.openai.com/v1`         | `OPENAI_API_KEY`    |
-| anything else          | Ollama    | `http://127.0.0.1:11434/v1`         | _none_              |
+| pattern                | provider  | base URL (default)             | API key env         |
+| ---------------------- | --------- | ------------------------------ | ------------------- |
+| `claude-*`             | Anthropic | `https://api.anthropic.com/v1` | `ANTHROPIC_API_KEY` |
+| `gpt-*`, `o1*`, `o3*`  | OpenAI    | `https://api.openai.com/v1`    | `OPENAI_API_KEY`    |
+| anything else          | Ollama    | `http://127.0.0.1:11434/v1`    | _none_              |
 
-`--base-url URL` overrides the detected endpoint; `--api-key KEY` overrides the env-var fallback. Cloud models such as `claude-opus-4-7`, `claude-sonnet-4-6`, and `claude-haiku-4-5-20251001` are pre-populated in the `/model` dropdown so they're switchable mid-session.
+`--base-url URL` overrides the detected endpoint; `--api-key KEY` overrides the env-var fallback. The `/model` drop-down pre-populates with [`claude-opus-4-7`](https://www.anthropic.com/claude), `claude-sonnet-4-6`, and `claude-haiku-4-5-20251001` alongside whatever Ollama has cached locally, so switching is one Tab away.
 
 ### Ollama pre-flight
 
-When the resolved base URL looks like Ollama, `telia` walks a list of default Ollama models — currently [`hf.co/FoolDev/Thanatos-27B`](https://huggingface.co/FoolDev/Thanatos-27B) and [`hf.co/FoolDev/Janus-35B`](https://huggingface.co/FoolDev/Janus-35B), plus the active `--model` if it isn't already on that list — asks Ollama which of them are already cached, and for each missing one prompts:
+When the resolved base URL looks like Ollama, `telia` walks the default Ollama list — [`hf.co/FoolDev/Thanatos-27B`](https://huggingface.co/FoolDev/Thanatos-27B) and [`hf.co/FoolDev/Janus-35B`](https://huggingface.co/FoolDev/Janus-35B), plus the active `--model` — and for each one missing locally asks:
 
 ```
-· pull hf.co/FoolDev/Thanatos-27B:Q4_K_M from Ollama now? [Y/n]
+· pull hf.co/FoolDev/Janus-35B:Q4_K_M from Ollama now? [Y/n]
 ```
 
-A `y` (default) streams `/api/pull` with an animated in-place progress bar; an `n` skips that model. Pass `-y` / `--pull-yes` to auto-confirm every prompt (the old always-pull behaviour), or `--no-pull` to skip the whole pre-flight. Non-interactive runs (stdin isn't a TTY — scripts, CI, pipes) auto-confirm so they don't block waiting for input. Once a model is cached, `/model` switches into it without another download. The pre-flight is automatically skipped for non-Ollama endpoints.
-
-For development from a workspace clone:
-
-```sh
-cargo run --release
-```
+A `y` (default) streams `/api/pull` with an animated in-place progress bar. `n` skips that model and moves on. Pass `-y` / `--pull-yes` to auto-confirm every prompt, or `--no-pull` to skip the pre-flight entirely. Non-interactive stdin (scripts, CI, pipes) auto-confirms so unattended runs don't hang.
 
 ## Features
 
-- **Streaming** — tokens render live via SSE.
-- **Tools** — `read` / `write` / `edit` / `bash`, with a 16-hop loop cap. While the agent is working the status bar shows an animated spinner.
-- **Syntax highlighting** — `read` output highlights by file extension; assistant code fences (```` ```rust ````) highlight by language hint. Powered by `syntect`.
-- **Slash commands** — `/reset`, `/clear`, `/save NAME`, `/load NAME`, `/delete NAME`, `/list`, `/model [NAME]`, `/theme [NAME]`, `/notify [on|off]`, `/show`, `/help`, `/quit`. Tab accepts ghost-text autocomplete (commands + saved alias names); a drop-down menu appears above the input when typing `/` (commands) or `/load`/`/delete`/`/rm` (alias names) — Up/Down to navigate, Tab to accept, Esc to dismiss.
-- **Desktop notifications** — after each chat turn ends, `notify-send` (Linux) fires with the first ~120 chars of the assistant's reply, so you can task-switch during long turns and get pinged when the response is ready. Toggle at runtime with `/notify on|off` (default on); `notify-send` missing or no notification daemon → silent noop.
-- **Themes** — `tokyo-night` (default), `catppuccin`, `dracula`. Pick at startup with `--theme NAME`, or switch live with `/theme NAME` (vim users: `:colo NAME`).
-- **Input history** — readline-style. Up/Down (with empty input or already recalling) walks back through previous submissions; further edits exit recall mode. Consecutive duplicates are deduplicated.
-- **Vim keys** — `Esc` enters Normal mode; `i`/`a`/`I`/`A` go back to Insert; `h`/`l`/`0`/`$` move the cursor, `j`/`k` scroll history, `x` deletes a char. `:` opens an ex command line: `:q`, `:w NAME`, `:e NAME`, `:d NAME`, `:ls`, `:model …`, `:reset`, `:clear`, `:help` (slash commands also still work).
-- **Scrollback** — ↑/↓ (1 line) and PageUp/PageDown (5 lines); mouse wheel also scrolls (3 lines per tick); in Normal mode `Ctrl+U` / `Ctrl+D` are half-page (12 lines), `G` jumps to the bottom.
+- **Modes** — Insert (default), Normal (`Esc`), Command (`:`). The status bar chip and the input border colour signal the active mode.
+- **Slash commands** — `/reset`, `/clear`, `/save NAME`, `/load NAME`, `/delete NAME`, `/list`, `/model [NAME]`, `/theme [NAME]`, `/notify [on|off]`, `/show`, `/help`, `/quit`. Vim users get the same set as `:q`, `:w NAME`, `:e NAME`, `:colo NAME`, etc.
+- **Autocomplete** — ghost-text suggests the best single completion as you type; a drop-down panel above the input lists every match (commands, saved aliases, themes, installed Ollama models, ex commands). Up/Down navigates, Tab accepts, Esc dismisses.
+- **Input editing** — full readline-style: Left/Right/Home/End, Backspace/Delete, Ctrl+A/E/U/W, plus Up/Down to recall previous submissions when the input is empty.
+- **Scrollback** — ↑/↓ (1 line), PageUp/PageDown (5 lines), mouse wheel (3 lines/tick); in Normal mode `Ctrl+U` / `Ctrl+D` half-page (12 lines), `G` jumps to the bottom.
+- **Streaming** — tokens render live via SSE. The streaming caret blinks; tool calls show a braille spinner; the "thinking" indicator has a running dot. All animations stay alive during a turn.
+- **Tools** — `read` / `write` / `edit` / `bash`, capped at a 16-hop loop. `read` output is syntax-highlighted by file extension (`syntect`, 50+ languages); assistant code fences (```` ```rust ````) highlight by language hint.
+- **Themes** — `tokyo-night` (default), `catppuccin`, `dracula`. Pick at startup with `--theme NAME` or switch live with `/theme NAME`.
 - **Sessions** — sqlite at `$XDG_DATA_HOME/telia/telia.sqlite`. Save/load by alias across runs.
-- **Token tracker** — status bar shows `↑prompt ↓completion` totals for the current session (cumulative across turns; resets on `/reset` or `/load`). Counts come from the `usage` field in Ollama's final stream chunk (request includes `stream_options.include_usage`).
+- **Token tracker** — status bar shows `↑prompt ↓completion` totals for the current session (cumulative, resets on `/reset` / `/load`). Counts come from Ollama's `usage` block on the final stream chunk.
+- **Desktop notifications** — `notify-send` fires when a chat turn ends, with the first ~120 chars of the assistant's reply. Toggle with `/notify on|off`.
+- **Hostname / username** — title bar shows `τέλεια @ HOST`, user-message header is the login name. Distinguishes remote sessions and saved transcripts.
 
-Not yet: MCP, LSP, plugins, subagents, multi-provider, web UI.
+Not yet: MCP, LSP, plugins, subagents, web UI.
 
 ## Stack
 
@@ -93,12 +92,13 @@ Not yet: MCP, LSP, plugins, subagents, multi-provider, web UI.
 | HTTP  | `reqwest` (rustls) |
 | JSON  | `serde_json` |
 | Store | `rusqlite` (bundled) |
+| Highlight | `syntect` (default-fancy, no C deps) |
 
 ## Layout
 
 - `crates/telia-cli` — `telia` binary, TUI entry point
-- `crates/telia-agent` — turn loop, 16-hop cap, event stream
-- `crates/telia-llm` — Ollama streaming client, message + tool types
+- `crates/telia-agent` — turn loop, 16-hop cap, event stream, model cache
+- `crates/telia-llm` — chat / pull / tags streaming client, provider detection
 - `crates/telia-tools` — `read` / `write` / `edit` / `bash` dispatch
 - `crates/telia-tools-bin` — same dispatch, exposed as a stdin/stdout CLI
 - `crates/telia-store` — sqlite session persistence
