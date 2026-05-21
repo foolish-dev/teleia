@@ -20,10 +20,10 @@ use teleia_agent::{Agent, TurnEvent, MAX_TOOL_HOPS};
 const HINTS: &str = "enter send · esc normal · :q quit · tab accept · /help";
 
 /// Slash commands in their canonical form (aliases like `/q`, `/rm`,
-/// `/exit` are accepted by `handle_slash` but not surfaced by
+/// `/exit`, `/info` are accepted by `handle_slash` but not surfaced by
 /// autocomplete to avoid suggesting ambiguous short prefixes).
 const SLASH_COMMANDS: &[&str] = &[
-    "clear", "delete", "exit", "help", "list", "load", "model", "quit", "reset", "save",
+    "clear", "delete", "exit", "help", "list", "load", "model", "quit", "reset", "save", "show",
 ];
 
 // Tokyo Night palette
@@ -464,6 +464,7 @@ fn translate_ex(cmd: &str) -> Result<String, String> {
         "help" | "h" => "help".to_string(),
         "reset" => "reset".to_string(),
         "clear" => "clear".to_string(),
+        "show" | "info" => "show".to_string(),
         other => return Err(format!("unknown ex command: :{other}")),
     };
     Ok(translated)
@@ -696,12 +697,29 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                 state.push(Entry::Info(format!("switched model to {arg}")));
             }
         }
+        "show" | "info" => {
+            let session_id = agent.session_id().to_string();
+            let model = agent.model().to_string();
+            let aliases_here: Vec<String> = agent
+                .list_aliases()
+                .ok()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|(_, sid, _)| *sid == session_id)
+                .map(|(n, _, _)| n)
+                .collect();
+            let mut text = format!("session: {session_id}\nmodel:   {model}");
+            if !aliases_here.is_empty() {
+                text.push_str(&format!("\naliases: {}", aliases_here.join(", ")));
+            }
+            state.push(Entry::Info(text));
+        }
         "quit" | "exit" | "q" => {
             state.should_quit = true;
         }
         "help" | "?" => {
             state.push(Entry::Info(
-                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /help · /quit"
+                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /show · /help · /quit"
                     .into(),
             ));
         }
@@ -1168,5 +1186,11 @@ mod tests {
     fn ex_rejects_unknown_command() {
         let err = translate_ex("nonsense").unwrap_err();
         assert!(err.contains("nonsense"));
+    }
+
+    #[test]
+    fn ex_translates_show_and_info() {
+        assert_eq!(translate_ex("show").unwrap(), "show");
+        assert_eq!(translate_ex("info").unwrap(), "show");
     }
 }
