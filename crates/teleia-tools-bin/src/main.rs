@@ -1,4 +1,4 @@
-// Shared tool dispatcher used by all 5 polyglot impls. CLI:
+// Standalone CLI exposing teleia_tools over stdin/stdout:
 //   teleia-tools-bin defs        — print OpenAI-format tool definitions JSON
 //   teleia-tools-bin run NAME    — read JSON args on stdin, dispatch, write
 //                                  tool output to stdout. Errors are

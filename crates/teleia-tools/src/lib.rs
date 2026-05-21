@@ -148,8 +148,7 @@ async fn bash_tool(args: Value) -> Result<String> {
     cmd.arg("-lc").arg(&command).stdout(Stdio::piped());
     // SAFETY: pre_exec runs in the forked child before exec. dup2(1, 2)
     // routes the child's stderr fd onto stdout's pipe, so writes from
-    // both streams land in one buffer in emit order — matches go's
-    // CombinedOutput at the OS level.
+    // both streams land in one buffer in emit order.
     unsafe {
         cmd.pre_exec(|| {
             if libc::dup2(1, 2) == -1 {
