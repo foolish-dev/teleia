@@ -55,7 +55,13 @@ The model name picks the provider automatically:
 
 ### Ollama pre-flight
 
-When the resolved base URL looks like Ollama, `telia` walks a list of default Ollama models — currently [`hf.co/FoolDev/Thanatos-27B`](https://huggingface.co/FoolDev/Thanatos-27B) and [`hf.co/FoolDev/Janus-35B`](https://huggingface.co/FoolDev/Janus-35B), plus the active `--model` if it isn't already on that list — asks Ollama which of them are already cached, and streams `/api/pull` (with an animated in-place progress bar) for the ones that aren't. Once they're all cached, `/model` can switch between them without another download. Pass `--no-pull` to skip the pre-flight entirely. The pre-flight is automatically skipped for non-Ollama endpoints.
+When the resolved base URL looks like Ollama, `telia` walks a list of default Ollama models — currently [`hf.co/FoolDev/Thanatos-27B`](https://huggingface.co/FoolDev/Thanatos-27B) and [`hf.co/FoolDev/Janus-35B`](https://huggingface.co/FoolDev/Janus-35B), plus the active `--model` if it isn't already on that list — asks Ollama which of them are already cached, and for each missing one prompts:
+
+```
+· pull hf.co/FoolDev/Thanatos-27B:Q4_K_M from Ollama now? [Y/n]
+```
+
+A `y` (default) streams `/api/pull` with an animated in-place progress bar; an `n` skips that model. Pass `-y` / `--pull-yes` to auto-confirm every prompt (the old always-pull behaviour), or `--no-pull` to skip the whole pre-flight. Non-interactive runs (stdin isn't a TTY — scripts, CI, pipes) auto-confirm so they don't block waiting for input. Once a model is cached, `/model` switches into it without another download. The pre-flight is automatically skipped for non-Ollama endpoints.
 
 For development from a workspace clone:
 

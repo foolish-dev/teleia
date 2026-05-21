@@ -4,7 +4,7 @@ mod tui;
 use anyhow::Result;
 use clap::Parser;
 use futures_util::{pin_mut, StreamExt};
-use std::io::Write;
+use std::io::{BufRead, IsTerminal, Write};
 use telia_agent::Agent;
 use telia_llm::{detect_endpoint, looks_like_ollama, LlmClient, PullProgress};
 use telia_store::Store;
@@ -50,10 +50,17 @@ struct Args {
     /// Colour theme. Known: tokyo-night (default), catppuccin, dracula.
     #[arg(long, default_value = "tokyo-night")]
     theme: String,
-    /// Skip the pre-flight check that auto-pulls the model via Ollama when
-    /// it isn't already cached locally. Useful for non-Ollama backends.
+    /// Skip the pre-flight check that pulls missing models via Ollama.
+    /// Useful for non-Ollama backends, or when you've already pulled
+    /// what you want by hand.
     #[arg(long)]
     no_pull: bool,
+    /// Auto-confirm every "pull this model?" prompt during the
+    /// pre-flight. Without this flag, telia asks interactively for
+    /// each missing model (non-interactive runs default to yes so
+    /// scripts don't hang on stdin).
+    #[arg(long, alias = "yes", short = 'y')]
+    pull_yes: bool,
 }
 
 #[tokio::main]
@@ -79,8 +86,9 @@ async fn main() -> Result<()> {
     let api_key = args.api_key.or(auto_key);
 
     if !args.no_pull && looks_like_ollama(&base_url) {
-        // Pull every default Ollama model plus the active --model (deduped)
-        // so /model can switch between them without a fresh download.
+        // Walk every default Ollama model plus the active --model
+        // (deduped). For each missing one, ask the user before pulling —
+        // unless --pull-yes / -y is set or stdin isn't a TTY (scripts).
         let mut want: Vec<String> = DEFAULT_OLLAMA_MODELS
             .iter()
             .map(|s| s.to_string())
@@ -90,7 +98,7 @@ async fn main() -> Result<()> {
         }
         for model in &want {
             let pre = LlmClient::new(base_url.clone(), model.clone());
-            ensure_model(&pre).await?;
+            ensure_model(&pre, args.pull_yes).await?;
         }
     }
 
@@ -107,19 +115,25 @@ async fn main() -> Result<()> {
 }
 
 /// Pre-flight: if Ollama can be reached and reports the model isn't
-/// cached, stream `/api/pull` and render an animated progress bar before
-/// the TUI takes over the screen. Models like the default
+/// cached, prompt the user (or auto-confirm when `pull_yes` is set or
+/// stdin isn't a TTY) and on a "yes" stream `/api/pull` with an
+/// animated progress bar. Models like the default
 /// `hf.co/FoolDev/Thanatos-27B:Q4_K_M` resolve to a HuggingFace pull
 /// automatically via Ollama's bridge.
 ///
 /// If `/api/show` is unreachable (non-Ollama backend, or Ollama not
 /// running) we silently skip — let the actual chat request surface the
 /// real failure later.
-async fn ensure_model(llm: &LlmClient) -> Result<()> {
+async fn ensure_model(llm: &LlmClient, pull_yes: bool) -> Result<()> {
     let model = llm.model().to_string();
     match llm.has_model().await {
         Some(true) | None => return Ok(()),
         Some(false) => {}
+    }
+
+    if !pull_yes && !confirm_pull(&model) {
+        eprintln!("· skipped {model} (not cached locally)");
+        return Ok(());
     }
 
     eprintln!("↓ pulling {model}");
@@ -168,6 +182,23 @@ fn render_pull_line(prog: &PullProgress, spinner: &str) {
     };
     let _ = std::io::stderr().write_all(line.as_bytes());
     let _ = std::io::stderr().flush();
+}
+
+/// Ask the user whether to pull a missing model. Non-TTY stdin (scripts,
+/// pipes, CI) defaults to yes so unattended runs still get the model.
+/// Defaults to yes on an empty line; anything starting with 'n' is a no.
+fn confirm_pull(model: &str) -> bool {
+    if !std::io::stdin().is_terminal() {
+        return true;
+    }
+    eprint!("· pull {model} from Ollama now? [Y/n] ");
+    let _ = std::io::stderr().flush();
+    let mut line = String::new();
+    if std::io::stdin().lock().read_line(&mut line).is_err() {
+        return true;
+    }
+    let trimmed = line.trim().to_lowercase();
+    !trimmed.starts_with('n')
 }
 
 fn human_bytes(n: u64) -> String {
