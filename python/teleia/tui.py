@@ -196,7 +196,10 @@ def _handle_slash(agent: Agent, cmd: str) -> tuple[str | None, str | None]:
     name = name.strip()
     arg = arg.strip()
     if name == "reset":
-        agent.reset()
+        try:
+            agent.reset()
+        except Exception as e:  # noqa: BLE001
+            return (None, f"reset: {e}")
         return (f"started new session {agent.session_id[:12]}", None)
     if name == "save":
         if not arg:

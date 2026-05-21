@@ -32,7 +32,11 @@ local function handle_slash(agent, raw)
   name = name or ""
   arg = (arg or ""):gsub("^%s+", ""):gsub("%s+$", "")
   if name == "reset" then
-    agent_mod.reset(agent)
+    local ok, err = pcall(agent_mod.reset, agent)
+    if not ok then
+      io.write(C.err .. "error: reset: " .. tostring(err) .. C.reset .. "\n\n")
+      return
+    end
     io.write(C.info .. "· started new session " .. short_id(agent.session_id) .. C.reset .. "\n\n")
   elseif name == "save" then
     if arg == "" then
