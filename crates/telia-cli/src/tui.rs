@@ -1582,16 +1582,15 @@ fn username() -> String {
 /// horizontally to the available `width`.
 fn welcome_banner(width: u16, frame: usize) -> Vec<Line<'static>> {
     let th = theme();
-    // ΤΕΛΕΙΑ. Same ANSI-Shadow figlet shape as before; the only structural
-    // difference from a Latin "TELEIA" is the third letter: capital lambda
-    // (Λ) rendered as an A without its crossbar.
+    // ΤΕΛΕΙΑ. Flatter 5-row block style — no shadow "╝" chars, just
+    // solid █ and spaces — for a sharper "pixel-poster" feel. Λ is an
+    // A without the crossbar; Ι is a single column.
     const LOGO: &[&str] = &[
-        "████████╗███████╗ █████╗ ███████╗██╗ █████╗ ",
-        "╚══██╔══╝██╔════╝██╔══██╗██╔════╝██║██╔══██╗",
-        "   ██║   █████╗  ██║  ██║█████╗  ██║███████║",
-        "   ██║   ██╔══╝  ██║  ██║██╔══╝  ██║██╔══██║",
-        "   ██║   ███████╗██║  ██║███████╗██║██║  ██║",
-        "   ╚═╝   ╚══════╝╚═╝  ╚═╝╚══════╝╚═╝╚═╝  ╚═╝",
+        "███████ ███████  █████  ███████ █  █████ ",
+        "   █       █    █     █    █    █  █   █ ",
+        "   █    █████   █     █ █████   █  ██████",
+        "   █       █    █     █    █    █  █   █ ",
+        "   █    ██████  █     █ ██████  █  █   █ ",
     ];
     let logo_width = LOGO[0].chars().count();
     let logo_pad = (width as usize).saturating_sub(logo_width) / 2;
@@ -1615,17 +1614,23 @@ fn welcome_banner(width: u16, frame: usize) -> Vec<Line<'static>> {
     for row in LOGO {
         let mut spans: Vec<Span<'static>> = vec![Span::raw(logo_indent.clone())];
         for (i, c) in row.chars().enumerate().take(revealed) {
-            // Per-character colour alternation; the phase shifts with frame
-            // to give a slow shimmer reading left-to-right.
-            let color = if (i + frame / 4).is_multiple_of(2) {
-                th.purple
+            // 4-phase colour sweep: purple → blue → cyan → blue → purple.
+            // Bands are 2 cells wide and the whole pattern slides one
+            // band every 3 frames, so it reads as a wave moving L→R.
+            let style = if c == ' ' {
+                // Don't waste a styled span on whitespace.
+                Style::default()
             } else {
-                th.blue
+                let phase = (i + frame / 3) % 8;
+                let color = match phase {
+                    0 | 1 => th.purple,
+                    2 | 3 => th.blue,
+                    4 | 5 => th.cyan,
+                    _ => th.blue,
+                };
+                Style::default().fg(color).add_modifier(Modifier::BOLD)
             };
-            spans.push(Span::styled(
-                c.to_string(),
-                Style::default().fg(color).add_modifier(Modifier::BOLD),
-            ));
+            spans.push(Span::styled(c.to_string(), style));
         }
         // A leading caret rides the reveal edge so the type-on reads as
         // an active cursor sweeping across.
