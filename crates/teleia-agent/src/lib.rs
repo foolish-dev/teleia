@@ -4,6 +4,12 @@ use futures_util::{pin_mut, Stream, StreamExt};
 use teleia_llm::{ChatEvent, LlmClient, Message, ToolDef};
 use teleia_store::Store;
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TokenCounts {
+    pub prompt: u64,
+    pub completion: u64,
+}
+
 const SYSTEM_PROMPT: &str = "You are Teleia, a terse coding assistant running in a terminal. \
 Use the provided tools (read, write, edit, bash) to do real work. \
 Default to brief replies. When you finish a turn, stop — do not narrate.";
@@ -28,6 +34,7 @@ pub struct Agent {
     session_id: String,
     messages: Vec<Message>,
     seq: usize,
+    tokens: TokenCounts,
 }
 
 impl Agent {
@@ -40,6 +47,7 @@ impl Agent {
             session_id,
             messages: Vec::new(),
             seq: 0,
+            tokens: TokenCounts::default(),
         };
         agent.push(Message::System {
             content: SYSTEM_PROMPT.to_string(),
@@ -56,6 +64,7 @@ impl Agent {
         self.session_id = session_id;
         self.messages.clear();
         self.seq = 0;
+        self.tokens = TokenCounts::default();
         self.push(Message::System {
             content: SYSTEM_PROMPT.to_string(),
         })?;
@@ -68,7 +77,12 @@ impl Agent {
         self.session_id = session_id.clone();
         self.messages = messages;
         self.seq = self.messages.len();
+        self.tokens = TokenCounts::default();
         Ok(session_id)
+    }
+
+    pub fn tokens(&self) -> TokenCounts {
+        self.tokens
     }
 
     pub fn save_alias(&self, name: &str) -> Result<()> {
@@ -112,8 +126,18 @@ impl Agent {
                                 content_buf.push_str(&text);
                                 yield TurnEvent::AssistantDelta(text);
                             }
-                            ChatEvent::Done { tool_calls: tcs } => {
+                            ChatEvent::Done { tool_calls: tcs, usage } => {
                                 tool_calls = tcs;
+                                if let Some(u) = usage {
+                                    self.tokens.prompt = self
+                                        .tokens
+                                        .prompt
+                                        .saturating_add(u.prompt_tokens as u64);
+                                    self.tokens.completion = self
+                                        .tokens
+                                        .completion
+                                        .saturating_add(u.completion_tokens as u64);
+                                }
                             }
                         }
                     }

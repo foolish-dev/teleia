@@ -58,6 +58,7 @@ cargo run --release
 - **Vim keys** — `Esc` enters Normal mode; `i`/`a`/`I`/`A` go back to Insert; `h`/`l`/`0`/`$` move the cursor, `j`/`k` scroll history, `x` deletes a char. `:` opens an ex command line: `:q`, `:w NAME`, `:e NAME`, `:d NAME`, `:ls`, `:model …`, `:reset`, `:clear`, `:help` (slash commands also still work).
 - **Scrollback** — ↑ / ↓ (PageUp / PageDown).
 - **Sessions** — sqlite at `$XDG_DATA_HOME/teleia/teleia.sqlite`. Save/load by alias across runs.
+- **Token tracker** — status bar shows `↑prompt ↓completion` totals for the current session (cumulative across turns; resets on `/reset` or `/load`). Counts come from the `usage` field in Ollama's final stream chunk (request includes `stream_options.include_usage`).
 
 Not yet: MCP, LSP, plugins, subagents, multi-provider, web UI.
 

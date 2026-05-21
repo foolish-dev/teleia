@@ -73,11 +73,25 @@ impl ToolDef {
     }
 }
 
+/// Token usage reported by the OpenAI-compatible /chat/completions endpoint.
+/// Ollama emits these in the final SSE chunk when `stream_options.include_usage`
+/// is set on the request.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Usage {
+    #[serde(default)]
+    pub prompt_tokens: u32,
+    #[serde(default)]
+    pub completion_tokens: u32,
+}
+
 /// Streaming events from the chat endpoint.
 #[derive(Debug, Clone)]
 pub enum ChatEvent {
     ContentDelta(String),
-    Done { tool_calls: Vec<ToolCall> },
+    Done {
+        tool_calls: Vec<ToolCall>,
+        usage: Option<Usage>,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -87,11 +101,21 @@ struct ChatRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<&'a [ToolDef]>,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<StreamOptions>,
+}
+
+#[derive(Debug, Serialize)]
+struct StreamOptions {
+    include_usage: bool,
 }
 
 #[derive(Debug, Deserialize)]
 struct StreamChunk {
+    #[serde(default)]
     choices: Vec<StreamChoice>,
+    #[serde(default)]
+    usage: Option<Usage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -158,7 +182,13 @@ impl LlmClient {
     ) -> impl Stream<Item = Result<ChatEvent>> + 'a {
         try_stream! {
             let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-            let body = ChatRequest { model: &self.model, messages, tools, stream: true };
+            let body = ChatRequest {
+                model: &self.model,
+                messages,
+                tools,
+                stream: true,
+                stream_options: Some(StreamOptions { include_usage: true }),
+            };
 
             let resp = self.http.post(&url).json(&body).send().await
                 .with_context(|| format!("POST {url}"))?;
@@ -173,6 +203,7 @@ impl LlmClient {
             let mut bytes = resp.bytes_stream();
             let mut buf = String::new();
             let mut accumulated: Vec<AccTool> = Vec::new();
+            let mut last_usage: Option<Usage> = None;
 
             while let Some(chunk) = bytes.next().await {
                 let chunk = chunk.context("read stream chunk")?;
@@ -189,6 +220,9 @@ impl LlmClient {
                             Ok(p) => p,
                             Err(_) => continue,
                         };
+                        if let Some(u) = parsed.usage {
+                            last_usage = Some(u);
+                        }
                         for choice in parsed.choices {
                             if let Some(text) = choice.delta.content {
                                 if !text.is_empty() {
@@ -208,7 +242,7 @@ impl LlmClient {
                 kind: a.kind,
                 function: ToolCallFunction { name: a.name, arguments: a.arguments },
             }).collect();
-            yield ChatEvent::Done { tool_calls };
+            yield ChatEvent::Done { tool_calls, usage: last_usage };
         }
     }
 }

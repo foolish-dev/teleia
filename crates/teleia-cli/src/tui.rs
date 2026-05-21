@@ -15,7 +15,7 @@ use ratatui::{
     Terminal,
 };
 use std::{io, time::Duration};
-use teleia_agent::{Agent, TurnEvent, MAX_TOOL_HOPS};
+use teleia_agent::{Agent, TokenCounts, TurnEvent, MAX_TOOL_HOPS};
 
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -99,6 +99,7 @@ struct State {
     should_quit: bool,
     hop: usize,   // 0..=MAX_TOOL_HOPS, 0 = idle
     frame: usize, // monotonic tick driving the spinner animation
+    tokens: TokenCounts,
     suggestion: Option<Suggestion>,
     menu: Option<Menu>,
     mode: Mode,
@@ -122,6 +123,7 @@ impl State {
             should_quit: false,
             hop: 0,
             frame: 0,
+            tokens: TokenCounts::default(),
             suggestion: None,
             menu: None,
             mode: Mode::Insert,
@@ -465,6 +467,7 @@ async fn submit_input<B: ratatui::backend::Backend>(
     run_turn(terminal, state, agent, trimmed.to_string()).await;
     state.working = false;
     state.hop = 0;
+    state.tokens = agent.tokens();
     state.status = format!(
         "session {} · ready",
         &agent.session_id()[..agent.session_id().len().min(12)]
@@ -777,6 +780,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
         "reset" => match agent.reset() {
             Ok(()) => {
                 state.history.clear();
+                state.tokens = TokenCounts::default();
                 state.push(Entry::Info(format!(
                     "started new session {}",
                     &agent.session_id()[..agent.session_id().len().min(12)]
@@ -802,6 +806,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
             match agent.load_alias(arg) {
                 Ok(id) => {
                     state.history.clear();
+                    state.tokens = TokenCounts::default();
                     state.push(Entry::Info(format!(
                         "loaded '{arg}' → session {}",
                         &id[..id.len().min(12)]
@@ -1021,9 +1026,29 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
         short_model(&state.model),
         Style::default().fg(TN_DIM).add_modifier(Modifier::ITALIC),
     ));
+    status_spans.push(Span::raw(" · "));
+    status_spans.push(Span::styled(
+        format!(
+            "↑{} ↓{}",
+            format_count(state.tokens.prompt),
+            format_count(state.tokens.completion)
+        ),
+        Style::default().fg(TN_DIM),
+    ));
     status_spans.push(Span::raw("   "));
     status_spans.push(Span::styled(HINTS, Style::default().fg(TN_DIM)));
     f.render_widget(Paragraph::new(Line::from(status_spans)), chunks[3]);
+}
+
+/// Compact token count: 0..999 as-is, 1k..999k as "1k"/"45k", 1M+ as "1.2M".
+fn format_count(n: u64) -> String {
+    if n < 1_000 {
+        n.to_string()
+    } else if n < 1_000_000 {
+        format!("{}k", n / 1_000)
+    } else {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    }
 }
 
 /// Compact "hf.co/FoolDev/Thanatos-27B:Q4_K_M" → "Thanatos-27B" for status-
@@ -1438,5 +1463,25 @@ mod tests {
     fn menu_none_for_empty_or_no_slash() {
         assert!(compute_menu("", &[]).is_none());
         assert!(compute_menu("hello", &[]).is_none());
+    }
+
+    #[test]
+    fn format_count_keeps_small_numbers_literal() {
+        assert_eq!(format_count(0), "0");
+        assert_eq!(format_count(42), "42");
+        assert_eq!(format_count(999), "999");
+    }
+
+    #[test]
+    fn format_count_uses_k_suffix_under_a_million() {
+        assert_eq!(format_count(1_000), "1k");
+        assert_eq!(format_count(12_345), "12k");
+        assert_eq!(format_count(999_999), "999k");
+    }
+
+    #[test]
+    fn format_count_uses_decimal_m_at_a_million_plus() {
+        assert_eq!(format_count(1_000_000), "1.0M");
+        assert_eq!(format_count(2_500_000), "2.5M");
     }
 }
