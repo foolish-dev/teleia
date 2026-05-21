@@ -1077,7 +1077,7 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
         state
             .history
             .iter()
-            .flat_map(|e| render_entry(e, frame))
+            .flat_map(|e| render_entry(e, frame, &state.hostname))
             .collect()
     };
     let visible = chunks[0].height.saturating_sub(2) as usize;
@@ -1429,13 +1429,13 @@ fn render_assistant_lines(text: &str) -> Vec<Line<'static>> {
     out
 }
 
-fn render_entry(entry: &Entry, frame: usize) -> Vec<Line<'static>> {
+fn render_entry(entry: &Entry, frame: usize, hostname: &str) -> Vec<Line<'static>> {
     let th = theme();
     let mut out = Vec::new();
     match entry {
         Entry::User(text) => {
             out.push(Line::from(Span::styled(
-                "you",
+                hostname.to_string(),
                 Style::default().fg(th.cyan).add_modifier(Modifier::BOLD),
             )));
             for line in text.lines() {
