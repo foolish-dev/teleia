@@ -41,7 +41,21 @@ telia
 telia --model hf.co/FoolDev/Janus-35B:Q4_K_M --base-url http://127.0.0.1:11434/v1
 ```
 
-Requires Ollama running locally. On startup `telia` walks a list of default models — currently [`hf.co/FoolDev/Thanatos-27B`](https://huggingface.co/FoolDev/Thanatos-27B) and [`hf.co/FoolDev/Janus-35B`](https://huggingface.co/FoolDev/Janus-35B), plus the active `--model` if it isn't already on that list — asks Ollama which of them are already cached, and streams `/api/pull` (with an animated in-place progress bar) for the ones that aren't. Once they're all cached, `/model` can switch between them without another download. Pass `--no-pull` to skip the pre-flight entirely (e.g. when `--base-url` points at a non-Ollama OpenAI-compatible backend).
+### Providers
+
+The model name picks the provider automatically:
+
+| pattern                | provider  | base URL (default)                  | API key env         |
+| ---------------------- | --------- | ----------------------------------- | ------------------- |
+| `claude-*`             | Anthropic | `https://api.anthropic.com/v1`      | `ANTHROPIC_API_KEY` |
+| `gpt-*`, `o1*`, `o3*`  | OpenAI    | `https://api.openai.com/v1`         | `OPENAI_API_KEY`    |
+| anything else          | Ollama    | `http://127.0.0.1:11434/v1`         | _none_              |
+
+`--base-url URL` overrides the detected endpoint; `--api-key KEY` overrides the env-var fallback. Cloud models such as `claude-opus-4-7`, `claude-sonnet-4-6`, and `claude-haiku-4-5-20251001` are pre-populated in the `/model` dropdown so they're switchable mid-session.
+
+### Ollama pre-flight
+
+When the resolved base URL looks like Ollama, `telia` walks a list of default Ollama models — currently [`hf.co/FoolDev/Thanatos-27B`](https://huggingface.co/FoolDev/Thanatos-27B) and [`hf.co/FoolDev/Janus-35B`](https://huggingface.co/FoolDev/Janus-35B), plus the active `--model` if it isn't already on that list — asks Ollama which of them are already cached, and streams `/api/pull` (with an animated in-place progress bar) for the ones that aren't. Once they're all cached, `/model` can switch between them without another download. Pass `--no-pull` to skip the pre-flight entirely. The pre-flight is automatically skipped for non-Ollama endpoints.
 
 For development from a workspace clone:
 

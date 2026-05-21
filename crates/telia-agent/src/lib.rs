@@ -70,6 +70,22 @@ impl Agent {
         self.available_models = self.llm.list_models().await;
     }
 
+    /// Merge additional model names into `available_models` (deduped).
+    /// Used to surface cloud models in the `/model` dropdown even when
+    /// they aren't installed locally.
+    pub fn extend_models<I, S>(&mut self, extras: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        for m in extras {
+            let s = m.into();
+            if !self.available_models.contains(&s) {
+                self.available_models.push(s);
+            }
+        }
+    }
+
     pub fn session_id(&self) -> &str {
         &self.session_id
     }

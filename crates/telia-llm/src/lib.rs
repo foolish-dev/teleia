@@ -169,16 +169,56 @@ struct ToolCallFunctionDelta {
 pub struct LlmClient {
     base_url: String,
     model: String,
+    api_key: Option<String>,
     http: reqwest::Client,
+}
+
+/// Detect the base URL and API-key env var for a model name. Used as a
+/// fallback when the caller doesn't supply `--base-url` / `--api-key`
+/// explicitly: `claude-*` → Anthropic's OpenAI-compatible endpoint,
+/// `gpt-*` / `o1*` / `o3*` → OpenAI, everything else → local Ollama.
+pub fn detect_endpoint(model: &str) -> (String, Option<String>) {
+    if model.starts_with("claude-") {
+        (
+            "https://api.anthropic.com/v1".to_string(),
+            std::env::var("ANTHROPIC_API_KEY").ok(),
+        )
+    } else if model.starts_with("gpt-") || model.starts_with("o1") || model.starts_with("o3") {
+        (
+            "https://api.openai.com/v1".to_string(),
+            std::env::var("OPENAI_API_KEY").ok(),
+        )
+    } else {
+        (DEFAULT_BASE_URL.to_string(), None)
+    }
+}
+
+/// True when the URL points at the default localhost Ollama port —
+/// the only case where the model-pull pre-flight makes sense.
+pub fn looks_like_ollama(base_url: &str) -> bool {
+    base_url.contains("11434") || base_url.contains("ollama")
 }
 
 impl LlmClient {
     pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Self {
+        Self::with_api_key(base_url, model, None)
+    }
+
+    pub fn with_api_key(
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+        api_key: Option<String>,
+    ) -> Self {
         Self {
             base_url: base_url.into(),
             model: model.into(),
+            api_key,
             http: reqwest::Client::new(),
         }
+    }
+
+    pub fn base_url(&self) -> &str {
+        &self.base_url
     }
 
     pub fn model(&self) -> &str {
@@ -293,13 +333,17 @@ impl LlmClient {
                 stream_options: Some(StreamOptions { include_usage: true }),
             };
 
-            let resp = self.http.post(&url).json(&body).send().await
+            let mut req = self.http.post(&url).json(&body);
+            if let Some(key) = &self.api_key {
+                req = req.bearer_auth(key);
+            }
+            let resp = req.send().await
                 .with_context(|| format!("POST {url}"))?;
 
             let status = resp.status();
             if !status.is_success() {
                 let body = resp.text().await.unwrap_or_default();
-                Err(anyhow!("ollama returned {status}: {body}"))?;
+                Err(anyhow!("backend returned {status}: {body}"))?;
                 return;
             }
 
@@ -452,5 +496,36 @@ mod tests {
         assert_eq!(acc[2].name, "bash");
         assert_eq!(acc[0].id, "");
         assert_eq!(acc[1].id, "");
+    }
+
+    #[test]
+    fn detect_endpoint_routes_claude_to_anthropic() {
+        let (url, _key) = detect_endpoint("claude-opus-4-7");
+        assert_eq!(url, "https://api.anthropic.com/v1");
+    }
+
+    #[test]
+    fn detect_endpoint_routes_gpt_to_openai() {
+        let (url, _) = detect_endpoint("gpt-5");
+        assert_eq!(url, "https://api.openai.com/v1");
+        let (url, _) = detect_endpoint("o3-mini");
+        assert_eq!(url, "https://api.openai.com/v1");
+    }
+
+    #[test]
+    fn detect_endpoint_falls_back_to_ollama() {
+        let (url, key) = detect_endpoint("hf.co/FoolDev/Thanatos-27B:Q4_K_M");
+        assert_eq!(url, DEFAULT_BASE_URL);
+        assert!(key.is_none());
+        let (url, _) = detect_endpoint("llama3:latest");
+        assert_eq!(url, DEFAULT_BASE_URL);
+    }
+
+    #[test]
+    fn looks_like_ollama_matches_default_and_explicit() {
+        assert!(looks_like_ollama("http://127.0.0.1:11434/v1"));
+        assert!(looks_like_ollama("http://ollama.example.com/v1"));
+        assert!(!looks_like_ollama("https://api.anthropic.com/v1"));
+        assert!(!looks_like_ollama("https://api.openai.com/v1"));
     }
 }

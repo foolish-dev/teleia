@@ -6,24 +6,47 @@ use clap::Parser;
 use futures_util::{pin_mut, StreamExt};
 use std::io::Write;
 use telia_agent::Agent;
-use telia_llm::{LlmClient, PullProgress, DEFAULT_BASE_URL};
+use telia_llm::{detect_endpoint, looks_like_ollama, LlmClient, PullProgress};
 use telia_store::Store;
 
-/// Models telia tries to keep cached on startup so `/model` can switch
-/// between them without a fresh download. The active `--model` is added
-/// to this set automatically if it isn't already in it.
-const DEFAULT_MODELS: &[&str] = &[
+/// Local Ollama models telia tries to keep cached on startup so `/model`
+/// can switch between them without a fresh download. The active `--model`
+/// is added to this set automatically if it isn't already in it. Only
+/// pulled when the resolved base URL looks like Ollama.
+const DEFAULT_OLLAMA_MODELS: &[&str] = &[
     "hf.co/FoolDev/Thanatos-27B:Q4_K_M",
     "hf.co/FoolDev/Janus-35B:Q4_K_M",
+];
+
+/// Cloud models surfaced in the `/model` dropdown even though they
+/// aren't backed by anything that can be `ollama pull`-ed. Selecting
+/// one of these effectively routes telia's chat requests through that
+/// provider; the API key comes from `--api-key` or the env-var fallback
+/// inside `detect_endpoint`.
+const KNOWN_CLOUD_MODELS: &[&str] = &[
+    "claude-opus-4-7",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5-20251001",
 ];
 
 #[derive(Parser, Debug)]
 #[command(name = "telia", version, about = "Minimal TUI coding agent")]
 struct Args {
+    /// Model to chat with. Detection by name: `claude-*` → Anthropic,
+    /// `gpt-*`/`o1*`/`o3*` → OpenAI, everything else → local Ollama.
+    /// The choice of base-url and API key follow this detection unless
+    /// overridden.
     #[arg(long, default_value = "hf.co/FoolDev/Thanatos-27B:Q4_K_M")]
     model: String,
-    #[arg(long, default_value = DEFAULT_BASE_URL)]
-    base_url: String,
+    /// Override the auto-detected base URL. By default `claude-*` models
+    /// route to https://api.anthropic.com/v1, `gpt-*` to OpenAI, and
+    /// everything else to local Ollama at http://127.0.0.1:11434/v1.
+    #[arg(long)]
+    base_url: Option<String>,
+    /// API key for cloud backends. Falls back to $ANTHROPIC_API_KEY /
+    /// $OPENAI_API_KEY based on the active model. Ignored for Ollama.
+    #[arg(long)]
+    api_key: Option<String>,
     /// Colour theme. Known: tokyo-night (default), catppuccin, dracula.
     #[arg(long, default_value = "tokyo-night")]
     theme: String,
@@ -48,26 +71,37 @@ async fn main() -> Result<()> {
             tui::theme_names().join(", ")
         );
     }
-    if !args.no_pull {
-        // Pull every default model plus the active --model (deduped) so
-        // /model can switch between them without a fresh download.
-        let mut want: Vec<String> = DEFAULT_MODELS.iter().map(|s| s.to_string()).collect();
+
+    // Resolve provider — explicit CLI overrides win, otherwise auto-detect
+    // from the model name (Anthropic / OpenAI / Ollama).
+    let (auto_url, auto_key) = detect_endpoint(&args.model);
+    let base_url = args.base_url.unwrap_or(auto_url);
+    let api_key = args.api_key.or(auto_key);
+
+    if !args.no_pull && looks_like_ollama(&base_url) {
+        // Pull every default Ollama model plus the active --model (deduped)
+        // so /model can switch between them without a fresh download.
+        let mut want: Vec<String> = DEFAULT_OLLAMA_MODELS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         if !want.iter().any(|m| m == &args.model) {
             want.push(args.model.clone());
         }
         for model in &want {
-            let pre = LlmClient::new(args.base_url.clone(), model.clone());
+            let pre = LlmClient::new(base_url.clone(), model.clone());
             ensure_model(&pre).await?;
         }
     }
 
-    let llm = LlmClient::new(args.base_url, args.model);
+    let llm = LlmClient::with_api_key(base_url, args.model, api_key);
     let store = Store::open()?;
     let mut agent = Agent::new(llm, store)?;
     // Best-effort: cache the installed-model list once so the /model
     // dropdown has something to show without hitting the network on
     // every keypress.
     agent.refresh_models().await;
+    agent.extend_models(KNOWN_CLOUD_MODELS.iter().copied());
 
     tui::run(agent).await
 }
