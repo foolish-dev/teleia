@@ -290,4 +290,26 @@ mod tests {
     async fn dispatch_rejects_unknown_tool() {
         assert!(dispatch("nonsense", "{}").await.is_err());
     }
+
+    #[tokio::test]
+    async fn bash_returns_stdout() {
+        let args = json!({ "command": "echo hello" }).to_string();
+        let result = dispatch("bash", &args).await.unwrap();
+        assert!(result.contains("hello"));
+    }
+
+    #[tokio::test]
+    async fn bash_reports_nonzero_exit() {
+        let args = json!({ "command": "exit 7" }).to_string();
+        let result = dispatch("bash", &args).await.unwrap();
+        assert!(result.contains("[exit 7]"));
+    }
+
+    #[tokio::test]
+    async fn bash_merges_stderr_into_stdout() {
+        let args = json!({ "command": "echo out; echo err >&2" }).to_string();
+        let result = dispatch("bash", &args).await.unwrap();
+        assert!(result.contains("out"));
+        assert!(result.contains("err"));
+    }
 }

@@ -249,3 +249,71 @@ fn accumulate(acc: &mut Vec<AccTool>, delta: ToolCallDelta) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn delta(
+        index: usize,
+        id: Option<&str>,
+        name: Option<&str>,
+        args: Option<&str>,
+    ) -> ToolCallDelta {
+        ToolCallDelta {
+            index,
+            id: id.map(str::to_string),
+            kind: None,
+            function: Some(ToolCallFunctionDelta {
+                name: name.map(str::to_string),
+                arguments: args.map(str::to_string),
+            }),
+        }
+    }
+
+    #[test]
+    fn accumulate_concatenates_argument_chunks_in_order() {
+        let mut acc = Vec::new();
+        accumulate(
+            &mut acc,
+            delta(0, Some("call_1"), Some("read"), Some(r#"{"path":"#)),
+        );
+        accumulate(&mut acc, delta(0, None, None, Some(r#""foo.txt"}"#)));
+        assert_eq!(acc.len(), 1);
+        assert_eq!(acc[0].id, "call_1");
+        assert_eq!(acc[0].name, "read");
+        assert_eq!(acc[0].arguments, r#"{"path":"foo.txt"}"#);
+    }
+
+    #[test]
+    fn accumulate_handles_multiple_tool_calls_by_index() {
+        let mut acc = Vec::new();
+        accumulate(&mut acc, delta(0, Some("a"), Some("read"), Some("{}")));
+        accumulate(&mut acc, delta(1, Some("b"), Some("write"), Some("{}")));
+        assert_eq!(acc.len(), 2);
+        assert_eq!(acc[0].name, "read");
+        assert_eq!(acc[1].name, "write");
+    }
+
+    #[test]
+    fn accumulate_ignores_empty_id_and_name_overwrites() {
+        let mut acc = Vec::new();
+        accumulate(&mut acc, delta(0, Some("real_id"), Some("read"), None));
+        // Subsequent empty strings shouldn't clobber prior values.
+        accumulate(&mut acc, delta(0, Some(""), Some(""), Some("{}")));
+        assert_eq!(acc[0].id, "real_id");
+        assert_eq!(acc[0].name, "read");
+        assert_eq!(acc[0].arguments, "{}");
+    }
+
+    #[test]
+    fn accumulate_pads_intermediate_indices() {
+        // Some providers stream tool_calls out of order or skip indices.
+        let mut acc = Vec::new();
+        accumulate(&mut acc, delta(2, Some("c"), Some("bash"), Some("{}")));
+        assert_eq!(acc.len(), 3);
+        assert_eq!(acc[2].name, "bash");
+        assert_eq!(acc[0].id, "");
+        assert_eq!(acc[1].id, "");
+    }
+}
