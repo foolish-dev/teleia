@@ -30,7 +30,12 @@ const KNOWN_CLOUD_MODELS: &[&str] = &[
 ];
 
 #[derive(Parser, Debug)]
-#[command(name = "telia", version, about = "Minimal TUI coding agent")]
+#[command(
+    name = "τέλεια",
+    bin_name = "τέλεια",
+    version,
+    about = "Minimal TUI coding agent"
+)]
 struct Args {
     /// Model to chat with. Detection by name: `claude-*` → Anthropic,
     /// `gpt-*`/`o1*`/`o3*` → OpenAI, everything else → local Ollama.

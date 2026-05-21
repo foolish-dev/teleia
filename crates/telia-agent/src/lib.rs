@@ -10,7 +10,7 @@ pub struct TokenCounts {
     pub completion: u64,
 }
 
-const SYSTEM_PROMPT: &str = "You are Telia, a terse coding assistant running in a terminal. \
+const SYSTEM_PROMPT: &str = "You are τέλεια, a terse coding assistant running in a terminal. \
 Use the provided tools (read, write, edit, bash) to do real work. \
 Default to brief replies. When you finish a turn, stop — do not narrate.";
 
