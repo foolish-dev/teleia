@@ -17,7 +17,14 @@ use ratatui::{
 use std::{io, time::Duration};
 use teleia_agent::{Agent, TurnEvent, MAX_TOOL_HOPS};
 
-const HINTS: &str = "enter send · ↑↓ scroll · /help cmds · ctrl-c quit";
+const HINTS: &str = "enter send · ↑↓ scroll · tab accept · /help · ctrl-c quit";
+
+/// Slash commands in their canonical form (aliases like `/q`, `/rm`,
+/// `/exit` are accepted by `handle_slash` but not surfaced by
+/// autocomplete to avoid suggesting ambiguous short prefixes).
+const SLASH_COMMANDS: &[&str] = &[
+    "clear", "delete", "exit", "help", "list", "load", "model", "quit", "reset", "save",
+];
 
 // Tokyo Night palette
 const TN_CYAN: Color = Color::Rgb(125, 207, 255); // #7dcfff
@@ -44,6 +51,15 @@ enum Entry {
     Info(String),
 }
 
+/// Ghost-text autocomplete suggestion shown after the cursor.
+/// `completion` is what gets appended when the user presses Tab;
+/// `placeholder` is shown for hint (e.g. " NAME") but never typed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Suggestion {
+    completion: String,
+    placeholder: String,
+}
+
 struct State {
     input: String,
     input_cursor: usize, // byte offset into input
@@ -54,6 +70,7 @@ struct State {
     working: bool,
     should_quit: bool,
     hop: usize, // 0..=MAX_TOOL_HOPS, 0 = idle
+    suggestion: Option<Suggestion>,
 }
 
 impl State {
@@ -71,6 +88,7 @@ impl State {
             working: false,
             should_quit: false,
             hop: 0,
+            suggestion: None,
         }
     }
 
@@ -203,6 +221,12 @@ async fn event_loop<B: ratatui::backend::Backend>(
             }
             KeyCode::Home => state.input_cursor = 0,
             KeyCode::End => state.input_cursor = state.input.len(),
+            KeyCode::Tab => {
+                if let Some(s) = state.suggestion.clone() {
+                    state.input.push_str(&s.completion);
+                    state.input_cursor = state.input.len();
+                }
+            }
             KeyCode::Char(c) => {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
                     match c {
@@ -258,6 +282,95 @@ async fn event_loop<B: ratatui::backend::Backend>(
             }
             _ => {}
         }
+
+        refresh_suggestion(state, agent);
+    }
+}
+
+/// Update state.suggestion based on the current input. Hits the store only
+/// for /load /delete /rm — otherwise pure prefix logic.
+fn refresh_suggestion(state: &mut State, agent: &Agent) {
+    let needs_aliases = matches!(
+        state
+            .input
+            .strip_prefix('/')
+            .and_then(|r| r.split_once(' '))
+            .map(|(c, _)| c),
+        Some("load") | Some("delete") | Some("rm")
+    );
+    let aliases: Vec<String> = if needs_aliases {
+        agent
+            .list_aliases()
+            .ok()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(n, _, _)| n)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    state.suggestion = compute_suggestion(&state.input, &aliases);
+}
+
+fn compute_suggestion(input: &str, aliases: &[String]) -> Option<Suggestion> {
+    let rest = input.strip_prefix('/')?;
+
+    // Already past the command name: try to complete the argument.
+    if let Some(space) = rest.find(' ') {
+        let cmd = &rest[..space];
+        let arg = rest[space + 1..].trim_start();
+        return arg_suggestion(cmd, arg, aliases);
+    }
+
+    if rest.is_empty() {
+        return None;
+    }
+
+    // Prefix matches a longer command.
+    if let Some(cmd) = SLASH_COMMANDS
+        .iter()
+        .find(|c| c.starts_with(rest) && **c != rest)
+    {
+        let completion = cmd[rest.len()..].to_string();
+        let placeholder = arg_placeholder(cmd).unwrap_or("").to_string();
+        return Some(Suggestion {
+            completion,
+            placeholder,
+        });
+    }
+
+    // Exact match of a command that takes an argument: show the placeholder
+    // so the user knows what's expected.
+    if SLASH_COMMANDS.contains(&rest) {
+        return arg_placeholder(rest).map(|p| Suggestion {
+            completion: String::new(),
+            placeholder: p.to_string(),
+        });
+    }
+
+    None
+}
+
+fn arg_suggestion(cmd: &str, arg: &str, aliases: &[String]) -> Option<Suggestion> {
+    match cmd {
+        "load" | "delete" | "rm" => {
+            let matching = aliases
+                .iter()
+                .find(|name| name.starts_with(arg) && name.as_str() != arg)?;
+            Some(Suggestion {
+                completion: matching[arg.len()..].to_string(),
+                placeholder: String::new(),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn arg_placeholder(cmd: &str) -> Option<&'static str> {
+    match cmd {
+        "save" | "load" | "delete" | "rm" => Some(" NAME"),
+        "model" => Some(" [NAME]"),
+        _ => None,
     }
 }
 
@@ -457,11 +570,29 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
     } else {
         Style::default().fg(TN_FG)
     };
-    let input_widget = Paragraph::new(Line::from(vec![
+    let mut spans = vec![
         Span::styled("> ", Style::default().fg(TN_CYAN)),
         Span::styled(visible_text, prompt_style),
-    ]))
-    .block(Block::default().borders(Borders::ALL));
+    ];
+    // Show ghost-text suggestion only when the cursor is at the end of input,
+    // and only insofar as it fits in the remaining width.
+    if state.input_cursor == state.input.len() {
+        if let Some(s) = &state.suggestion {
+            let used = cursor_chars - start_char;
+            let remaining = visible_width.saturating_sub(used);
+            let ghost: String = s
+                .completion
+                .chars()
+                .chain(s.placeholder.chars())
+                .take(remaining)
+                .collect();
+            if !ghost.is_empty() {
+                spans.push(Span::styled(ghost, Style::default().fg(TN_DIM)));
+            }
+        }
+    }
+    let input_widget =
+        Paragraph::new(Line::from(spans)).block(Block::default().borders(Borders::ALL));
     f.render_widget(input_widget, chunks[1]);
 
     // ratatui hides the cursor by default; positioning it each frame makes
@@ -733,5 +864,72 @@ mod tests {
     fn short_model_handles_slash_only_or_colon_only() {
         assert_eq!(short_model("a/b"), "b");
         assert_eq!(short_model("model:tag"), "model");
+    }
+
+    #[test]
+    fn suggest_completes_command_prefix() {
+        let s = compute_suggestion("/sa", &[]).unwrap();
+        assert_eq!(s.completion, "ve");
+        assert_eq!(s.placeholder, " NAME");
+    }
+
+    #[test]
+    fn suggest_finds_unambiguous_short_prefix() {
+        // "re" matches only "reset" — completes uniquely.
+        let s = compute_suggestion("/re", &[]).unwrap();
+        assert_eq!(s.completion, "set");
+        assert_eq!(s.placeholder, ""); // /reset takes no arg
+    }
+
+    #[test]
+    fn suggest_exact_command_shows_arg_placeholder() {
+        let s = compute_suggestion("/save", &[]).unwrap();
+        assert_eq!(s.completion, "");
+        assert_eq!(s.placeholder, " NAME");
+    }
+
+    #[test]
+    fn suggest_exact_no_arg_command_returns_none() {
+        assert!(compute_suggestion("/reset", &[]).is_none());
+        assert!(compute_suggestion("/clear", &[]).is_none());
+    }
+
+    #[test]
+    fn suggest_returns_none_for_empty_or_lone_slash() {
+        assert!(compute_suggestion("", &[]).is_none());
+        assert!(compute_suggestion("/", &[]).is_none());
+    }
+
+    #[test]
+    fn suggest_returns_none_for_unknown_command_prefix() {
+        assert!(compute_suggestion("/zzz", &[]).is_none());
+    }
+
+    #[test]
+    fn suggest_completes_alias_argument_with_prefix() {
+        let aliases = vec!["audit-pass-1".to_string(), "foo".to_string()];
+        let s = compute_suggestion("/load aud", &aliases).unwrap();
+        assert_eq!(s.completion, "it-pass-1");
+        assert_eq!(s.placeholder, "");
+    }
+
+    #[test]
+    fn suggest_first_alias_when_arg_empty() {
+        let aliases = vec!["audit-pass-1".to_string(), "foo".to_string()];
+        let s = compute_suggestion("/load ", &aliases).unwrap();
+        assert_eq!(s.completion, "audit-pass-1");
+    }
+
+    #[test]
+    fn suggest_none_when_alias_arg_already_matches_exactly() {
+        let aliases = vec!["foo".to_string()];
+        assert!(compute_suggestion("/load foo", &aliases).is_none());
+    }
+
+    #[test]
+    fn suggest_rm_alias_aliases_works_like_delete() {
+        let aliases = vec!["foo".to_string()];
+        let s = compute_suggestion("/rm f", &aliases).unwrap();
+        assert_eq!(s.completion, "oo");
     }
 }
