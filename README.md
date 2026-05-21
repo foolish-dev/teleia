@@ -52,7 +52,7 @@ cargo run --release
 ## Features
 
 - **Streaming** — tokens render live via SSE.
-- **Tools** — `read` / `write` / `edit` / `bash`, with a 16-hop loop cap.
+- **Tools** — `read` / `write` / `edit` / `bash`, with a 16-hop loop cap. While the agent is working the status bar shows an animated spinner and a `hops X/16` counter.
 - **Syntax highlighting** — `read` output highlights by file extension; assistant code fences (```` ```rust ````) highlight by language hint. Powered by `syntect`.
 - **Slash commands** — `/reset`, `/clear`, `/save NAME`, `/load NAME`, `/delete NAME`, `/list`, `/model [NAME]`, `/show`, `/help`, `/quit`. Tab accepts ghost-text autocomplete (commands + saved alias names).
 - **Vim keys** — `Esc` enters Normal mode; `i`/`a`/`I`/`A` go back to Insert; `h`/`l`/`0`/`$` move the cursor, `j`/`k` scroll history, `x` deletes a char. `:` opens an ex command line: `:q`, `:w NAME`, `:e NAME`, `:d NAME`, `:ls`, `:model …`, `:reset`, `:clear`, `:help` (slash commands also still work).

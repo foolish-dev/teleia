@@ -15,7 +15,9 @@ use ratatui::{
     Terminal,
 };
 use std::{io, time::Duration};
-use teleia_agent::{Agent, TurnEvent};
+use teleia_agent::{Agent, TurnEvent, MAX_TOOL_HOPS};
+
+const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 const HINTS: &str = "enter send · esc normal · :q quit · tab accept · /help";
 
@@ -78,6 +80,8 @@ struct State {
     scroll: u16, // offset from auto-scroll bottom; 0 = follow
     working: bool,
     should_quit: bool,
+    hop: usize,   // 0..=MAX_TOOL_HOPS, 0 = idle
+    frame: usize, // monotonic tick driving the spinner animation
     suggestion: Option<Suggestion>,
     mode: Mode,
     command_buf: String,
@@ -98,6 +102,8 @@ impl State {
             scroll: 0,
             working: false,
             should_quit: false,
+            hop: 0,
+            frame: 0,
             suggestion: None,
             mode: Mode::Insert,
             command_buf: String::new(),
@@ -113,6 +119,7 @@ impl State {
     fn apply(&mut self, evt: TurnEvent) {
         match evt {
             TurnEvent::AssistantStart => {
+                self.hop = (self.hop + 1).min(MAX_TOOL_HOPS);
                 self.push(Entry::Assistant {
                     text: String::new(),
                     complete: false,
@@ -161,7 +168,9 @@ impl State {
                     self.scroll = 0;
                 }
             }
-            TurnEvent::TurnEnd => {}
+            TurnEvent::TurnEnd => {
+                self.hop = 0;
+            }
         }
     }
 }
@@ -191,6 +200,7 @@ async fn event_loop<B: ratatui::backend::Backend>(
         if state.should_quit {
             return Ok(());
         }
+        state.frame = state.frame.wrapping_add(1);
         terminal.draw(|f| draw(f, state))?;
 
         if !event::poll(Duration::from_millis(50))? {
@@ -416,10 +426,10 @@ async fn submit_input<B: ratatui::backend::Backend>(
         return;
     }
     state.push(Entry::User(trimmed.to_string()));
-    state.status = "thinking…".into();
     state.working = true;
     run_turn(terminal, state, agent, trimmed.to_string()).await;
     state.working = false;
+    state.hop = 0;
     state.status = format!(
         "session {} · ready",
         &agent.session_id()[..agent.session_id().len().min(12)]
@@ -799,25 +809,37 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
         Mode::Normal => ("NOR", TN_GREEN),
         Mode::Command => ("CMD", TN_YELLOW),
     };
-    let status_line = Line::from(vec![
+    let mut status_spans = vec![
         Span::styled(
             mode_label,
             Style::default().fg(mode_color).add_modifier(Modifier::BOLD),
         ),
         Span::raw(" · "),
-        Span::styled(
+    ];
+    if state.working {
+        let frame = SPINNER[state.frame % SPINNER.len()];
+        status_spans.push(Span::styled(frame, Style::default().fg(TN_PURPLE)));
+        status_spans.push(Span::raw(" "));
+        status_spans.push(Span::styled(
+            format!("hops {}/{}", state.hop, MAX_TOOL_HOPS),
+            Style::default()
+                .fg(TN_PURPLE)
+                .add_modifier(Modifier::ITALIC),
+        ));
+    } else {
+        status_spans.push(Span::styled(
             &state.status,
             Style::default().fg(TN_DIM).add_modifier(Modifier::ITALIC),
-        ),
-        Span::raw(" · "),
-        Span::styled(
-            short_model(&state.model),
-            Style::default().fg(TN_DIM).add_modifier(Modifier::ITALIC),
-        ),
-        Span::raw("   "),
-        Span::styled(HINTS, Style::default().fg(TN_DIM)),
-    ]);
-    f.render_widget(Paragraph::new(status_line), chunks[2]);
+        ));
+    }
+    status_spans.push(Span::raw(" · "));
+    status_spans.push(Span::styled(
+        short_model(&state.model),
+        Style::default().fg(TN_DIM).add_modifier(Modifier::ITALIC),
+    ));
+    status_spans.push(Span::raw("   "));
+    status_spans.push(Span::styled(HINTS, Style::default().fg(TN_DIM)));
+    f.render_widget(Paragraph::new(Line::from(status_spans)), chunks[2]);
 }
 
 /// Compact "hf.co/FoolDev/Thanatos-27B:Q4_K_M" → "Thanatos-27B" for status-
