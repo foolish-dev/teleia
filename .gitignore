@@ -1,6 +1,9 @@
 # rust
 rust/target
 
+# install (rust-based installer)
+install/target
+
 # python
 python/__pycache__
 python/**/__pycache__
