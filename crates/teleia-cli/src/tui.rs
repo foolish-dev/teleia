@@ -120,6 +120,9 @@ struct State {
     /// Index into `input_history` when the user is browsing past inputs via
     /// Up/Down. `None` means "not currently recalling".
     recall_idx: Option<usize>,
+    /// Host this teleia process is running on — surfaced in the log block
+    /// title so remote sessions are visually distinct from local ones.
+    hostname: String,
 }
 
 impl State {
@@ -145,6 +148,7 @@ impl State {
             command_cursor: 0,
             input_history: Vec::new(),
             recall_idx: None,
+            hostname: hostname(),
         }
     }
 
@@ -994,10 +998,17 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(TN_DIM))
-                .title(Span::styled(
-                    " teleia ",
-                    Style::default().fg(TN_PURPLE).add_modifier(Modifier::BOLD),
-                )),
+                .title(Line::from(vec![
+                    Span::styled(
+                        " teleia ",
+                        Style::default().fg(TN_PURPLE).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled("@ ", Style::default().fg(TN_DIM)),
+                    Span::styled(
+                        format!("{} ", state.hostname),
+                        Style::default().fg(TN_CYAN).add_modifier(Modifier::ITALIC),
+                    ),
+                ])),
         )
         .wrap(Wrap { trim: false })
         .scroll((offset, 0));
@@ -1162,6 +1173,26 @@ fn format_count(n: u64) -> String {
 fn short_model(model: &str) -> &str {
     let tail = model.rsplit('/').next().unwrap_or(model);
     tail.split(':').next().unwrap_or(tail)
+}
+
+/// Read the machine's hostname. Tries `$HOSTNAME` first (set by most shells),
+/// falls back to `/etc/hostname`, and finally to "localhost". Returns a
+/// trimmed string with no trailing newline.
+fn hostname() -> String {
+    if let Some(h) = std::env::var_os("HOSTNAME") {
+        let s = h.to_string_lossy();
+        let trimmed = s.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    if let Ok(s) = std::fs::read_to_string("/etc/hostname") {
+        let trimmed = s.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    "localhost".to_string()
 }
 
 /// Empty-state welcome banner: an ASCII-art "TELEIA" logo that shimmers
