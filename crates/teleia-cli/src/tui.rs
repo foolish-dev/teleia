@@ -526,3 +526,49 @@ fn render_entry(entry: &Entry) -> Vec<Line<'static>> {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plain_prose_passes_through_unchanged() {
+        let lines = render_assistant_lines("hello\nworld");
+        assert_eq!(lines.len(), 2);
+    }
+
+    #[test]
+    fn fence_markers_are_stripped() {
+        // The ``` lines are consumed; only the code content survives.
+        let lines = render_assistant_lines("```rust\nfn x() {}\n```");
+        assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
+    fn prose_and_code_alternate() {
+        let lines = render_assistant_lines("before\n```rust\ncode\n```\nafter");
+        assert_eq!(lines.len(), 3);
+    }
+
+    #[test]
+    fn unclosed_fence_still_flushes() {
+        // Mid-stream: the assistant hasn't emitted the closing ``` yet, so
+        // we still render what we have rather than dropping the code on the
+        // floor.
+        let lines = render_assistant_lines("```rust\nfn x() {}\n");
+        assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
+    fn empty_text_renders_nothing() {
+        assert_eq!(render_assistant_lines("").len(), 0);
+    }
+
+    #[test]
+    fn unlabeled_fence_falls_back_to_plain() {
+        // ``` without a language token should still be highlighted (as
+        // plain text) and the fence markers removed.
+        let lines = render_assistant_lines("```\nsome code\n```");
+        assert_eq!(lines.len(), 1);
+    }
+}
