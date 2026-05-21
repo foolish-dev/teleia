@@ -17,7 +17,7 @@ use ratatui::{
 use std::{io, time::Duration};
 use teleia_agent::{Agent, TurnEvent, MAX_TOOL_HOPS};
 
-const HINTS: &str = "enter send · ↑↓ scroll · tab accept · /help · ctrl-c quit";
+const HINTS: &str = "enter send · esc normal · :q quit · tab accept · /help";
 
 /// Slash commands in their canonical form (aliases like `/q`, `/rm`,
 /// `/exit` are accepted by `handle_slash` but not surfaced by
@@ -32,6 +32,7 @@ const TN_PURPLE: Color = Color::Rgb(187, 154, 247); // #bb9af7
 const TN_YELLOW: Color = Color::Rgb(224, 175, 104); // #e0af68
 const TN_RED: Color = Color::Rgb(247, 118, 142); // #f7768e
 const TN_BLUE: Color = Color::Rgb(122, 162, 247); // #7aa2f7
+const TN_GREEN: Color = Color::Rgb(158, 206, 106); // #9ece6a
 const TN_DIM: Color = Color::Rgb(86, 95, 137); // #565f89
 const TN_FG: Color = Color::Rgb(192, 202, 245); // #c0caf5
 
@@ -60,6 +61,14 @@ struct Suggestion {
     placeholder: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Mode {
+    #[default]
+    Insert,
+    Normal,
+    Command,
+}
+
 struct State {
     input: String,
     input_cursor: usize, // byte offset into input
@@ -71,6 +80,9 @@ struct State {
     should_quit: bool,
     hop: usize, // 0..=MAX_TOOL_HOPS, 0 = idle
     suggestion: Option<Suggestion>,
+    mode: Mode,
+    command_buf: String,
+    command_cursor: usize,
 }
 
 impl State {
@@ -89,6 +101,9 @@ impl State {
             should_quit: false,
             hop: 0,
             suggestion: None,
+            mode: Mode::Insert,
+            command_buf: String::new(),
+            command_cursor: 0,
         }
     }
 
@@ -197,94 +212,261 @@ async fn event_loop<B: ratatui::backend::Backend>(
             return Ok(());
         }
 
-        match key.code {
-            KeyCode::Up | KeyCode::PageUp => {
-                state.scroll =
-                    state
-                        .scroll
-                        .saturating_add(if key.code == KeyCode::PageUp { 5 } else { 1 });
-            }
-            KeyCode::Down | KeyCode::PageDown => {
-                state.scroll = state
-                    .scroll
-                    .saturating_sub(if key.code == KeyCode::PageDown { 5 } else { 1 });
-            }
-            KeyCode::Left => {
-                if let Some((i, _)) = state.input[..state.input_cursor].char_indices().next_back() {
-                    state.input_cursor = i;
-                }
-            }
-            KeyCode::Right => {
-                if let Some(c) = state.input[state.input_cursor..].chars().next() {
-                    state.input_cursor += c.len_utf8();
-                }
-            }
-            KeyCode::Home => state.input_cursor = 0,
-            KeyCode::End => state.input_cursor = state.input.len(),
-            KeyCode::Tab => {
-                if let Some(s) = state.suggestion.clone() {
-                    state.input.push_str(&s.completion);
-                    state.input_cursor = state.input.len();
-                }
-            }
-            KeyCode::Char(c) => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    match c {
-                        'a' => state.input_cursor = 0,
-                        'e' => state.input_cursor = state.input.len(),
-                        'u' => {
-                            state.input.clear();
-                            state.input_cursor = 0;
-                        }
-                        'w' => delete_word_before_cursor(state),
-                        // Ctrl+C handled above; other Ctrl+X ignored so they
-                        // don't get typed as literal characters.
-                        _ => {}
+        match state.mode {
+            Mode::Insert => {
+                match key.code {
+                    KeyCode::Esc => {
+                        state.mode = Mode::Normal;
                     }
-                } else {
-                    state.input.insert(state.input_cursor, c);
-                    state.input_cursor += c.len_utf8();
+                    KeyCode::Up | KeyCode::PageUp => {
+                        state.scroll = state
+                            .scroll
+                            .saturating_add(if key.code == KeyCode::PageUp { 5 } else { 1 });
+                    }
+                    KeyCode::Down | KeyCode::PageDown => {
+                        state.scroll = state
+                            .scroll
+                            .saturating_sub(if key.code == KeyCode::PageDown { 5 } else { 1 });
+                    }
+                    KeyCode::Left => {
+                        if let Some((i, _)) =
+                            state.input[..state.input_cursor].char_indices().next_back()
+                        {
+                            state.input_cursor = i;
+                        }
+                    }
+                    KeyCode::Right => {
+                        if let Some(c) = state.input[state.input_cursor..].chars().next() {
+                            state.input_cursor += c.len_utf8();
+                        }
+                    }
+                    KeyCode::Home => state.input_cursor = 0,
+                    KeyCode::End => state.input_cursor = state.input.len(),
+                    KeyCode::Tab => {
+                        if let Some(s) = state.suggestion.clone() {
+                            state.input.push_str(&s.completion);
+                            state.input_cursor = state.input.len();
+                        }
+                    }
+                    KeyCode::Char(c) => {
+                        if key.modifiers.contains(KeyModifiers::CONTROL) {
+                            match c {
+                                'a' => state.input_cursor = 0,
+                                'e' => state.input_cursor = state.input.len(),
+                                'u' => {
+                                    state.input.clear();
+                                    state.input_cursor = 0;
+                                }
+                                'w' => delete_word_before_cursor(state),
+                                _ => {}
+                            }
+                        } else {
+                            state.input.insert(state.input_cursor, c);
+                            state.input_cursor += c.len_utf8();
+                        }
+                    }
+                    KeyCode::Backspace if state.input_cursor > 0 => {
+                        let prev = state.input[..state.input_cursor]
+                            .chars()
+                            .next_back()
+                            .expect("cursor > 0 implies at least one char before");
+                        let new_cursor = state.input_cursor - prev.len_utf8();
+                        state.input.remove(new_cursor);
+                        state.input_cursor = new_cursor;
+                    }
+                    KeyCode::Delete if state.input_cursor < state.input.len() => {
+                        state.input.remove(state.input_cursor);
+                    }
+                    KeyCode::Enter => {
+                        submit_input(terminal, state, agent).await;
+                    }
+                    _ => {}
                 }
             }
-            KeyCode::Backspace if state.input_cursor > 0 => {
-                let prev = state.input[..state.input_cursor]
-                    .chars()
-                    .next_back()
-                    .expect("cursor > 0 implies at least one char before");
-                let new_cursor = state.input_cursor - prev.len_utf8();
-                state.input.remove(new_cursor);
-                state.input_cursor = new_cursor;
-            }
-            KeyCode::Delete if state.input_cursor < state.input.len() => {
-                state.input.remove(state.input_cursor);
-            }
-            KeyCode::Enter => {
-                let raw = std::mem::take(&mut state.input);
-                state.input_cursor = 0;
-                let trimmed = raw.trim();
-                if trimmed.is_empty() {
-                    continue;
+
+            Mode::Normal => {
+                match key.code {
+                    // Mode transitions into Insert
+                    KeyCode::Char('i') => state.mode = Mode::Insert,
+                    KeyCode::Char('a') => {
+                        if let Some(c) = state.input[state.input_cursor..].chars().next() {
+                            state.input_cursor += c.len_utf8();
+                        }
+                        state.mode = Mode::Insert;
+                    }
+                    KeyCode::Char('I') => {
+                        state.input_cursor = 0;
+                        state.mode = Mode::Insert;
+                    }
+                    KeyCode::Char('A') => {
+                        state.input_cursor = state.input.len();
+                        state.mode = Mode::Insert;
+                    }
+                    // Cursor motion
+                    KeyCode::Char('h') | KeyCode::Left => {
+                        if let Some((i, _)) =
+                            state.input[..state.input_cursor].char_indices().next_back()
+                        {
+                            state.input_cursor = i;
+                        }
+                    }
+                    KeyCode::Char('l') | KeyCode::Right => {
+                        if let Some(c) = state.input[state.input_cursor..].chars().next() {
+                            state.input_cursor += c.len_utf8();
+                        }
+                    }
+                    KeyCode::Char('0') | KeyCode::Home => state.input_cursor = 0,
+                    KeyCode::Char('$') | KeyCode::End => state.input_cursor = state.input.len(),
+                    // History scroll
+                    KeyCode::Char('j') | KeyCode::Down | KeyCode::PageDown => {
+                        state.scroll = state
+                            .scroll
+                            .saturating_sub(if key.code == KeyCode::PageDown { 5 } else { 1 });
+                    }
+                    KeyCode::Char('k') | KeyCode::Up | KeyCode::PageUp => {
+                        state.scroll = state
+                            .scroll
+                            .saturating_add(if key.code == KeyCode::PageUp { 5 } else { 1 });
+                    }
+                    // Editing
+                    KeyCode::Char('x') if state.input_cursor < state.input.len() => {
+                        state.input.remove(state.input_cursor);
+                    }
+                    // Enter command mode
+                    KeyCode::Char(':') => {
+                        state.mode = Mode::Command;
+                        state.command_buf.clear();
+                        state.command_cursor = 0;
+                    }
+                    // Tab still accepts a suggestion (rare in Normal but harmless)
+                    KeyCode::Tab => {
+                        if let Some(s) = state.suggestion.clone() {
+                            state.input.push_str(&s.completion);
+                            state.input_cursor = state.input.len();
+                        }
+                    }
+                    // Submit also works from Normal
+                    KeyCode::Enter => {
+                        submit_input(terminal, state, agent).await;
+                    }
+                    KeyCode::Esc => {}
+                    _ => {}
                 }
-                if let Some(cmd) = trimmed.strip_prefix('/') {
-                    handle_slash(state, agent, cmd);
-                    continue;
-                }
-                state.push(Entry::User(trimmed.to_string()));
-                state.status = "thinking…".into();
-                state.working = true;
-                run_turn(terminal, state, agent, trimmed.to_string()).await;
-                state.working = false;
-                state.hop = 0;
-                state.status = format!(
-                    "session {} · ready",
-                    &agent.session_id()[..agent.session_id().len().min(12)]
-                );
             }
-            _ => {}
+
+            Mode::Command => match key.code {
+                KeyCode::Esc => {
+                    state.mode = Mode::Normal;
+                    state.command_buf.clear();
+                    state.command_cursor = 0;
+                }
+                KeyCode::Char(c) => {
+                    state.command_buf.insert(state.command_cursor, c);
+                    state.command_cursor += c.len_utf8();
+                }
+                KeyCode::Left => {
+                    if let Some((i, _)) = state.command_buf[..state.command_cursor]
+                        .char_indices()
+                        .next_back()
+                    {
+                        state.command_cursor = i;
+                    }
+                }
+                KeyCode::Right => {
+                    if let Some(c) = state.command_buf[state.command_cursor..].chars().next() {
+                        state.command_cursor += c.len_utf8();
+                    }
+                }
+                KeyCode::Home => state.command_cursor = 0,
+                KeyCode::End => state.command_cursor = state.command_buf.len(),
+                KeyCode::Backspace if state.command_cursor > 0 => {
+                    let prev = state.command_buf[..state.command_cursor]
+                        .chars()
+                        .next_back()
+                        .expect("cursor > 0 implies at least one char before");
+                    let new_cursor = state.command_cursor - prev.len_utf8();
+                    state.command_buf.remove(new_cursor);
+                    state.command_cursor = new_cursor;
+                }
+                KeyCode::Enter => {
+                    let cmd = std::mem::take(&mut state.command_buf);
+                    state.command_cursor = 0;
+                    state.mode = Mode::Normal;
+                    execute_ex(state, agent, &cmd);
+                }
+                _ => {}
+            },
         }
 
         refresh_suggestion(state, agent);
     }
+}
+
+/// Submit the contents of state.input — slash command or chat turn.
+/// Extracted so both Insert-Enter and Normal-Enter can call it.
+async fn submit_input<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+    state: &mut State,
+    agent: &mut Agent,
+) {
+    let raw = std::mem::take(&mut state.input);
+    state.input_cursor = 0;
+    state.mode = Mode::Insert;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if let Some(cmd) = trimmed.strip_prefix('/') {
+        handle_slash(state, agent, cmd);
+        return;
+    }
+    state.push(Entry::User(trimmed.to_string()));
+    state.status = "thinking…".into();
+    state.working = true;
+    run_turn(terminal, state, agent, trimmed.to_string()).await;
+    state.working = false;
+    state.hop = 0;
+    state.status = format!(
+        "session {} · ready",
+        &agent.session_id()[..agent.session_id().len().min(12)]
+    );
+}
+
+/// Translate a vim-style ex command (without the leading ":") into the
+/// equivalent slash command, then dispatch through `handle_slash`. Returns
+/// an error entry for unknown commands.
+fn execute_ex(state: &mut State, agent: &mut Agent, cmd: &str) {
+    let cmd = cmd.trim();
+    if cmd.is_empty() {
+        return;
+    }
+    match translate_ex(cmd) {
+        Ok(slash) => handle_slash(state, agent, &slash),
+        Err(msg) => state.push(Entry::Error(msg)),
+    }
+}
+
+/// Pure translation from ex-style ":<name> [arg]" to the matching slash
+/// command string ("save NAME", "quit", etc.). Returns Err with an
+/// already-formatted message for unknown names.
+fn translate_ex(cmd: &str) -> Result<String, String> {
+    let mut parts = cmd.splitn(2, char::is_whitespace);
+    let name = parts.next().unwrap_or("");
+    let arg = parts.next().unwrap_or("").trim();
+    let translated = match name {
+        "q" | "quit" => "quit".to_string(),
+        "w" | "write" => format!("save {arg}"),
+        "wq" => format!("save {arg}"), // close-enough analogue: save, no quit
+        "e" | "edit" | "l" | "load" => format!("load {arg}"),
+        "d" | "bd" | "delete" => format!("delete {arg}"),
+        "ls" | "list" => "list".to_string(),
+        "model" => format!("model {arg}"),
+        "help" | "h" => "help".to_string(),
+        "reset" => "reset".to_string(),
+        "clear" => "clear".to_string(),
+        other => return Err(format!("unknown ex command: :{other}")),
+    };
+    Ok(translated)
 }
 
 /// Update state.suggestion based on the current input. Hits the store only
@@ -552,31 +734,31 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
         .scroll((offset, 0));
     f.render_widget(log, chunks[0]);
 
-    // Horizontally scroll the input so the cursor is always visible.
-    // start_char is how many chars to skip from the left.
-    let inside = chunks[1];
-    let visible_width = inside.width.saturating_sub(4) as usize; // 2 borders + "> "
-    let cursor_chars = state.input[..state.input_cursor].chars().count();
-    let start_char = cursor_chars.saturating_sub(visible_width.saturating_sub(1));
-    let visible_text: String = state
-        .input
-        .chars()
-        .skip(start_char)
-        .take(visible_width)
-        .collect();
+    // Pick prompt + active buffer per mode.
+    let (prompt, prompt_color, buf, buf_cursor) = match state.mode {
+        Mode::Insert => ("> ", TN_CYAN, &state.input, state.input_cursor),
+        Mode::Normal => ("> ", TN_GREEN, &state.input, state.input_cursor),
+        Mode::Command => (": ", TN_YELLOW, &state.command_buf, state.command_cursor),
+    };
 
-    let prompt_style = if state.working {
+    // Horizontally scroll so the cursor is always visible.
+    let inside = chunks[1];
+    let visible_width = inside.width.saturating_sub(4) as usize; // 2 borders + prefix (2)
+    let cursor_chars = buf[..buf_cursor].chars().count();
+    let start_char = cursor_chars.saturating_sub(visible_width.saturating_sub(1));
+    let visible_text: String = buf.chars().skip(start_char).take(visible_width).collect();
+
+    let body_style = if state.working {
         Style::default().fg(TN_DIM)
     } else {
         Style::default().fg(TN_FG)
     };
     let mut spans = vec![
-        Span::styled("> ", Style::default().fg(TN_CYAN)),
-        Span::styled(visible_text, prompt_style),
+        Span::styled(prompt, Style::default().fg(prompt_color)),
+        Span::styled(visible_text, body_style),
     ];
-    // Show ghost-text suggestion only when the cursor is at the end of input,
-    // and only insofar as it fits in the remaining width.
-    if state.input_cursor == state.input.len() {
+    // Ghost-text suggestion only in Insert when the cursor is at the end.
+    if state.mode == Mode::Insert && state.input_cursor == state.input.len() {
         if let Some(s) = &state.suggestion {
             let used = cursor_chars - start_char;
             let remaining = visible_width.saturating_sub(used);
@@ -597,7 +779,7 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
 
     // ratatui hides the cursor by default; positioning it each frame makes
     // it visible at the edit point within the scrolled view.
-    let cursor_x = inside.x + 1 /* border */ + 2 /* "> " */ + (cursor_chars - start_char) as u16;
+    let cursor_x = inside.x + 1 /* border */ + 2 /* prefix */ + (cursor_chars - start_char) as u16;
     let cursor_y = inside.y + 1;
     f.set_cursor_position((cursor_x, cursor_y));
 
@@ -611,7 +793,17 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
         .ratio(ratio);
     f.render_widget(gauge, chunks[2]);
 
+    let (mode_label, mode_color) = match state.mode {
+        Mode::Insert => ("INS", TN_CYAN),
+        Mode::Normal => ("NOR", TN_GREEN),
+        Mode::Command => ("CMD", TN_YELLOW),
+    };
     let status_line = Line::from(vec![
+        Span::styled(
+            mode_label,
+            Style::default().fg(mode_color).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" · "),
         Span::styled(
             &state.status,
             Style::default().fg(TN_DIM).add_modifier(Modifier::ITALIC),
@@ -931,5 +1123,50 @@ mod tests {
         let aliases = vec!["foo".to_string()];
         let s = compute_suggestion("/rm f", &aliases).unwrap();
         assert_eq!(s.completion, "oo");
+    }
+
+    #[test]
+    fn ex_translates_quit_aliases() {
+        assert_eq!(translate_ex("q").unwrap(), "quit");
+        assert_eq!(translate_ex("quit").unwrap(), "quit");
+    }
+
+    #[test]
+    fn ex_translates_write_and_load() {
+        assert_eq!(translate_ex("w foo").unwrap(), "save foo");
+        assert_eq!(translate_ex("write foo").unwrap(), "save foo");
+        assert_eq!(translate_ex("wq foo").unwrap(), "save foo");
+        assert_eq!(translate_ex("e foo").unwrap(), "load foo");
+        assert_eq!(translate_ex("edit foo").unwrap(), "load foo");
+        assert_eq!(translate_ex("l foo").unwrap(), "load foo");
+    }
+
+    #[test]
+    fn ex_translates_delete_variants() {
+        assert_eq!(translate_ex("d foo").unwrap(), "delete foo");
+        assert_eq!(translate_ex("bd foo").unwrap(), "delete foo");
+        assert_eq!(translate_ex("delete foo").unwrap(), "delete foo");
+    }
+
+    #[test]
+    fn ex_translates_no_arg_commands() {
+        assert_eq!(translate_ex("ls").unwrap(), "list");
+        assert_eq!(translate_ex("list").unwrap(), "list");
+        assert_eq!(translate_ex("help").unwrap(), "help");
+        assert_eq!(translate_ex("h").unwrap(), "help");
+        assert_eq!(translate_ex("reset").unwrap(), "reset");
+        assert_eq!(translate_ex("clear").unwrap(), "clear");
+    }
+
+    #[test]
+    fn ex_translates_model() {
+        assert_eq!(translate_ex("model llama3").unwrap(), "model llama3");
+        assert_eq!(translate_ex("model").unwrap(), "model ");
+    }
+
+    #[test]
+    fn ex_rejects_unknown_command() {
+        let err = translate_ex("nonsense").unwrap_err();
+        assert!(err.contains("nonsense"));
     }
 }
