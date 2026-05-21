@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::{Path, PathBuf};
-use teleia_llm::Message;
+use telia_llm::Message;
 
 pub struct Store {
     conn: Connection,
@@ -129,7 +129,7 @@ fn data_path() -> Result<PathBuf> {
             PathBuf::from(home).join(".local").join("share")
         }
     };
-    Ok(base.join("teleia").join("teleia.sqlite"))
+    Ok(base.join("telia").join("telia.sqlite"))
 }
 
 fn unix_seconds() -> i64 {
@@ -143,12 +143,12 @@ fn unix_seconds() -> i64 {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use teleia_llm::Message;
+    use telia_llm::Message;
 
     fn tmp_db() -> PathBuf {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!("teleia-test-{}-{}.sqlite", std::process::id(), n))
+        std::env::temp_dir().join(format!("telia-test-{}-{}.sqlite", std::process::id(), n))
     }
 
     struct Cleanup(PathBuf);

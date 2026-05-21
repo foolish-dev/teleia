@@ -3,12 +3,12 @@ mod tui;
 
 use anyhow::Result;
 use clap::Parser;
-use teleia_agent::Agent;
-use teleia_llm::{LlmClient, DEFAULT_BASE_URL};
-use teleia_store::Store;
+use telia_agent::Agent;
+use telia_llm::{LlmClient, DEFAULT_BASE_URL};
+use telia_store::Store;
 
 #[derive(Parser, Debug)]
-#[command(name = "teleia", version, about = "Minimal TUI coding agent")]
+#[command(name = "telia", version, about = "Minimal TUI coding agent")]
 struct Args {
     #[arg(long, default_value = "hf.co/FoolDev/Thanatos-27B:Q4_K_M")]
     model: String,

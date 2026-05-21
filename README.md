@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="Teleia — the distilled coding agent" width="720">
+  <img src="assets/banner.svg" alt="τέλεια — the distilled coding agent" width="720">
 </p>
 
 <p align="center">
@@ -10,12 +10,12 @@
 Minimal TUI coding agent — local Ollama backend, four tools, persistent sessions. Single binary, no daemon, no cloud round-trip.
 
 <p align="center">
-  <img src="assets/screenshot.svg" alt="Teleia TUI session" width="780">
+  <img src="assets/screenshot.svg" alt="τέλεια TUI session" width="780">
 </p>
 
 ## Install
 
-One-liner — clones, builds, drops `teleia` into `~/.local/bin` (requires cargo + git):
+One-liner — clones, builds, drops `telia` into `~/.local/bin` (requires cargo + git):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/foolish-dev/Teleia/dev/install.sh | sh
@@ -30,15 +30,17 @@ curl -fsSL https://raw.githubusercontent.com/foolish-dev/Teleia/dev/install.sh |
 Or with cargo directly:
 
 ```sh
-cargo install --git https://github.com/foolish-dev/Teleia teleia-cli
+cargo install --git https://github.com/foolish-dev/Teleia telia-cli
 ```
+
+> The GitHub repository is still named `Teleia`; only the binary, crate names, and Latin-form branding use the short `telia` to mirror the Greek `τέλεια`.
 
 ## Run
 
 ```sh
-teleia
+telia
 # with options
-teleia --model hf.co/FoolDev/Janus-35B:Q4_K_M --base-url http://127.0.0.1:11434/v1
+telia --model hf.co/FoolDev/Janus-35B:Q4_K_M --base-url http://127.0.0.1:11434/v1
 ```
 
 Requires Ollama running locally with a tool-capable model pulled. Default model: `hf.co/FoolDev/Thanatos-27B:Q4_K_M`.
@@ -59,7 +61,7 @@ cargo run --release
 - **Input history** — readline-style. Up/Down (with empty input or already recalling) walks back through previous submissions; further edits exit recall mode. Consecutive duplicates are deduplicated.
 - **Vim keys** — `Esc` enters Normal mode; `i`/`a`/`I`/`A` go back to Insert; `h`/`l`/`0`/`$` move the cursor, `j`/`k` scroll history, `x` deletes a char. `:` opens an ex command line: `:q`, `:w NAME`, `:e NAME`, `:d NAME`, `:ls`, `:model …`, `:reset`, `:clear`, `:help` (slash commands also still work).
 - **Scrollback** — ↑ / ↓ (PageUp / PageDown).
-- **Sessions** — sqlite at `$XDG_DATA_HOME/teleia/teleia.sqlite`. Save/load by alias across runs.
+- **Sessions** — sqlite at `$XDG_DATA_HOME/telia/telia.sqlite`. Save/load by alias across runs.
 - **Token tracker** — status bar shows `↑prompt ↓completion` totals for the current session (cumulative across turns; resets on `/reset` or `/load`). Counts come from the `usage` field in Ollama's final stream chunk (request includes `stream_options.include_usage`).
 
 Not yet: MCP, LSP, plugins, subagents, multi-provider, web UI.
@@ -75,12 +77,12 @@ Not yet: MCP, LSP, plugins, subagents, multi-provider, web UI.
 
 ## Layout
 
-- `crates/teleia-cli` — `teleia` binary, TUI entry point
-- `crates/teleia-agent` — turn loop, 16-hop cap, event stream
-- `crates/teleia-llm` — Ollama streaming client, message + tool types
-- `crates/teleia-tools` — `read` / `write` / `edit` / `bash` dispatch
-- `crates/teleia-tools-bin` — same dispatch, exposed as a stdin/stdout CLI
-- `crates/teleia-store` — sqlite session persistence
+- `crates/telia-cli` — `telia` binary, TUI entry point
+- `crates/telia-agent` — turn loop, 16-hop cap, event stream
+- `crates/telia-llm` — Ollama streaming client, message + tool types
+- `crates/telia-tools` — `read` / `write` / `edit` / `bash` dispatch
+- `crates/telia-tools-bin` — same dispatch, exposed as a stdin/stdout CLI
+- `crates/telia-store` — sqlite session persistence
 
 ## License
 

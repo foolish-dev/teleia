@@ -1,12 +1,12 @@
 [package]
-name = "teleia-cli"
+name = "telia-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
 [[bin]]
-name = "teleia"
+name = "telia"
 path = "src/main.rs"
 
 [dependencies]
@@ -20,6 +20,6 @@ crossterm.workspace = true
 futures-util.workspace = true
 serde_json.workspace = true
 syntect.workspace = true
-teleia-llm.workspace = true
-teleia-agent.workspace = true
-teleia-store.workspace = true
+telia-llm.workspace = true
+telia-agent.workspace = true
+telia-store.workspace = true

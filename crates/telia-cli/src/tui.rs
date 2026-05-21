@@ -15,7 +15,7 @@ use ratatui::{
     Terminal,
 };
 use std::{io, time::Duration};
-use teleia_agent::{Agent, TokenCounts, TurnEvent};
+use telia_agent::{Agent, TokenCounts, TurnEvent};
 
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -192,7 +192,7 @@ struct State {
     /// Index into `input_history` when the user is browsing past inputs via
     /// Up/Down. `None` means "not currently recalling".
     recall_idx: Option<usize>,
-    /// Host this teleia process is running on — surfaced in the log block
+    /// Host this telia process is running on — surfaced in the log block
     /// title so remote sessions are visually distinct from local ones.
     hostname: String,
 }

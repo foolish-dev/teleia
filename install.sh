@@ -1,5 +1,7 @@
 #!/usr/bin/env sh
-# Teleia installer — clones the repo, builds with cargo, drops `teleia` into $PREFIX.
+# Telia (τέλεια) installer — clones the repo, builds with cargo, drops
+# `telia` into $PREFIX. The GitHub repository is still named "Teleia";
+# only the binary and crate names are short-form Telia.
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/foolish-dev/Teleia/dev/install.sh | sh
 # Overrides:
@@ -25,16 +27,16 @@ need git   "install git via your package manager"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT INT TERM
 
-echo "fetching Teleia ($BRANCH)..."
-git clone --depth 1 --branch "$BRANCH" "$REPO" "$TMP/Teleia"
+echo "fetching τέλεια ($BRANCH)..."
+git clone --depth 1 --branch "$BRANCH" "$REPO" "$TMP/telia"
 
 echo "building..."
-(cd "$TMP/Teleia" && cargo build --release --bin teleia)
+(cd "$TMP/telia" && cargo build --release --bin telia)
 
 mkdir -p "$PREFIX"
-install -m 0755 "$TMP/Teleia/target/release/teleia" "$PREFIX/teleia"
+install -m 0755 "$TMP/telia/target/release/telia" "$PREFIX/telia"
 
-echo "installed: $PREFIX/teleia"
+echo "installed: $PREFIX/telia"
 
 case ":$PATH:" in
     *":$PREFIX:"*) ;;

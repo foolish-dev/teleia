@@ -1,8 +1,8 @@
 use anyhow::Result;
 use async_stream::try_stream;
 use futures_util::{pin_mut, Stream, StreamExt};
-use teleia_llm::{ChatEvent, LlmClient, Message, ToolDef};
-use teleia_store::Store;
+use telia_llm::{ChatEvent, LlmClient, Message, ToolDef};
+use telia_store::Store;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TokenCounts {
@@ -10,7 +10,7 @@ pub struct TokenCounts {
     pub completion: u64,
 }
 
-const SYSTEM_PROMPT: &str = "You are Teleia, a terse coding assistant running in a terminal. \
+const SYSTEM_PROMPT: &str = "You are Telia, a terse coding assistant running in a terminal. \
 Use the provided tools (read, write, edit, bash) to do real work. \
 Default to brief replies. When you finish a turn, stop — do not narrate.";
 
@@ -42,7 +42,7 @@ impl Agent {
         let session_id = store.create_session(llm.model())?;
         let mut agent = Self {
             llm,
-            tools: teleia_tools::definitions(),
+            tools: telia_tools::definitions(),
             store,
             session_id,
             messages: Vec::new(),
@@ -161,7 +161,7 @@ impl Agent {
                         name: call.function.name.clone(),
                         arguments: call.function.arguments.clone(),
                     };
-                    let output = match teleia_tools::dispatch(
+                    let output = match telia_tools::dispatch(
                         &call.function.name,
                         &call.function.arguments,
                     )

@@ -1,12 +1,12 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/teleia-cli",
-    "crates/teleia-llm",
-    "crates/teleia-tools",
-    "crates/teleia-tools-bin",
-    "crates/teleia-store",
-    "crates/teleia-agent",
+    "crates/telia-cli",
+    "crates/telia-llm",
+    "crates/telia-tools",
+    "crates/telia-tools-bin",
+    "crates/telia-store",
+    "crates/telia-agent",
 ]
 
 [workspace.package]
@@ -34,10 +34,10 @@ ulid = "1"
 libc = "0.2"
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }
 
-teleia-llm = { path = "crates/teleia-llm" }
-teleia-tools = { path = "crates/teleia-tools" }
-teleia-store = { path = "crates/teleia-store" }
-teleia-agent = { path = "crates/teleia-agent" }
+telia-llm = { path = "crates/telia-llm" }
+telia-tools = { path = "crates/telia-tools" }
+telia-store = { path = "crates/telia-store" }
+telia-agent = { path = "crates/telia-agent" }
 
 [profile.release]
 lto = "thin"
