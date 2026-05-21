@@ -157,9 +157,11 @@ impl Agent {
                 }
             }
 
+            yield TurnEvent::AssistantStart;
             yield TurnEvent::AssistantDelta(format!(
                 "[stopped: hit tool-hop limit of {MAX_TOOL_HOPS}]"
             ));
+            yield TurnEvent::AssistantEnd;
             yield TurnEvent::TurnEnd;
         }
     }
