@@ -7,7 +7,7 @@
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 
-Minimal TUI coding agent — one MVP, four parallel implementations. Each talks to a local Ollama (OpenAI-chat-compatible) endpoint, runs four tools (`read` / `write` / `edit` / `bash`), and persists sessions to SQLite.
+Minimal TUI coding agent — one MVP, **five** parallel implementations. Each talks to a local Ollama (OpenAI-chat-compatible) endpoint, runs four tools (`read` / `write` / `edit` / `bash`), and persists sessions to SQLite.
 
 ## Implementations
 
@@ -17,9 +17,11 @@ Minimal TUI coding agent — one MVP, four parallel implementations. Each talks 
 | [`python/`](python/) | Python 3.11+ | curses (stdlib)            | urllib (stdlib)  | sqlite3 (stdlib)      |
 | [`go/`](go/)         | Go 1.22+     | bubbletea + lipgloss       | net/http         | modernc.org/sqlite    |
 | [`lua/`](lua/)       | Lua 5.4+     | ANSI + io.read (line mode) | shell-out `curl` | shell-out `sqlite3`   |
-| [`bun/`](bun/)       | Bun 1.3+ / TS | ink (React)               | global `fetch`   | `bun:sqlite`          |
+| [`bun/`](bun/)       | Bun 1.3+     | ink (React, TSX)           | global `fetch`   | `bun:sqlite`          |
 
-All four implementations share scope and behaviour: same system prompt, same four tools, same 16-hop tool-call cap, same default model (`hf.co/FoolDev/Thanatos-27B:Q4_K_M`). They write to the same on-disk sqlite at `$XDG_DATA_HOME/teleia/teleia.sqlite`.
+All five share scope and behaviour: same system prompt, same four tools, same 16-hop tool-call cap, same default model (`hf.co/FoolDev/Thanatos-27B:Q4_K_M`), same Tokyo Night palette. They write to the same on-disk sqlite at `$XDG_DATA_HOME/teleia/teleia.sqlite`, so a session saved with `/save NAME` in one impl can be loaded with `/load NAME` from any other.
+
+Each subdir has its own README with deeper notes on stack choices and tradeoffs.
 
 ## Quick start
 
@@ -40,7 +42,7 @@ cd lua && lua teleia.lua
 cd bun && bun install && bun run start
 ```
 
-Requires Ollama running at `127.0.0.1:11434` with a tool-capable model installed.
+Requires Ollama running at `127.0.0.1:11434` with a tool-capable model installed. Override the model on any impl with `--model NAME` (and the endpoint with `--base-url URL`).
 
 ## Features (v1)
 
@@ -55,8 +57,10 @@ Not yet: MCP, LSP, plugins, subagents, multi-provider, web UI.
 
 ## Why polyglot
 
-Same problem, four languages, side-by-side. Useful for comparing idiom, terseness,
-dependency posture, and TUI ergonomics across stacks.
+Same problem, five stacks, side-by-side. Useful for comparing idiom, terseness,
+dependency posture, and TUI ergonomics across languages. The shared sqlite makes
+the impls swappable mid-conversation — pick whichever is most ergonomic for the
+moment without losing context.
 
 ## License
 
