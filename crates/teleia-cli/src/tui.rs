@@ -19,7 +19,15 @@ use teleia_agent::{Agent, TokenCounts, TurnEvent, MAX_TOOL_HOPS};
 
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-const HINTS: &str = "enter send · esc normal · :q quit · tab accept · /help";
+/// Hint text shown at the right of the status bar; varies by mode so the
+/// keys advertised are actually useful in the current context.
+fn mode_hints(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Insert => "↵ send · esc normal · tab accept · /help",
+        Mode::Normal => "i insert · : command · G bottom · q quit",
+        Mode::Command => "↵ run · esc cancel",
+    }
+}
 
 /// Slash commands in their canonical form (aliases like `/q`, `/rm`,
 /// `/exit`, `/info` are accepted by `handle_slash` but not surfaced by
@@ -358,6 +366,8 @@ async fn event_loop<B: ratatui::backend::Backend>(
                     }
                     KeyCode::Char('0') | KeyCode::Home => state.input_cursor = 0,
                     KeyCode::Char('$') | KeyCode::End => state.input_cursor = state.input.len(),
+                    // Jump scrollback to the latest entries (vim's G).
+                    KeyCode::Char('G') => state.scroll = 0,
                     // History scroll
                     KeyCode::Char('j') | KeyCode::Down | KeyCode::PageDown => {
                         state.scroll = state
@@ -983,8 +993,11 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
             }
         }
     }
-    let input_widget =
-        Paragraph::new(Line::from(spans)).block(Block::default().borders(Borders::ALL));
+    let input_widget = Paragraph::new(Line::from(spans)).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(prompt_color)),
+    );
     f.render_widget(input_widget, chunks[2]);
 
     // ratatui hides the cursor by default; positioning it each frame makes
@@ -1036,7 +1049,10 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
         Style::default().fg(TN_DIM),
     ));
     status_spans.push(Span::raw("   "));
-    status_spans.push(Span::styled(HINTS, Style::default().fg(TN_DIM)));
+    status_spans.push(Span::styled(
+        mode_hints(state.mode),
+        Style::default().fg(TN_DIM),
+    ));
     f.render_widget(Paragraph::new(Line::from(status_spans)), chunks[3]);
 }
 
