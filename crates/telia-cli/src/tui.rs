@@ -201,6 +201,9 @@ struct State {
     /// Host this telia process is running on — surfaced in the log block
     /// title so remote sessions are visually distinct from local ones.
     hostname: String,
+    /// Login name of the user driving the session — used as the header on
+    /// their own transcript turns.
+    username: String,
 }
 
 impl State {
@@ -227,6 +230,7 @@ impl State {
             input_history: Vec::new(),
             recall_idx: None,
             hostname: hostname(),
+            username: username(),
         }
     }
 
@@ -1173,7 +1177,7 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
         state
             .history
             .iter()
-            .flat_map(|e| render_entry(e, frame, &state.hostname))
+            .flat_map(|e| render_entry(e, frame, &state.username))
             .collect()
     };
     let visible = chunks[0].height.saturating_sub(2) as usize;
@@ -1390,6 +1394,21 @@ fn hostname() -> String {
     "localhost".to_string()
 }
 
+/// Login name of the current user. Tries `$USER` first (set by login
+/// shells), falls back to `$LOGNAME`, then "user".
+fn username() -> String {
+    for var in ["USER", "LOGNAME"] {
+        if let Some(u) = std::env::var_os(var) {
+            let s = u.to_string_lossy();
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+    "user".to_string()
+}
+
 /// Empty-state welcome banner: an ASCII-art "TELEIA" logo that shimmers
 /// between th.purple and th.blue per character, with a blinking red Greek
 /// period below — same motif as the SVG banner in the README. Centred
@@ -1535,13 +1554,13 @@ fn render_assistant_lines(text: &str) -> Vec<Line<'static>> {
     out
 }
 
-fn render_entry(entry: &Entry, frame: usize, hostname: &str) -> Vec<Line<'static>> {
+fn render_entry(entry: &Entry, frame: usize, username: &str) -> Vec<Line<'static>> {
     let th = theme();
     let mut out = Vec::new();
     match entry {
         Entry::User(text) => {
             out.push(Line::from(Span::styled(
-                hostname.to_string(),
+                username.to_string(),
                 Style::default().fg(th.cyan).add_modifier(Modifier::BOLD),
             )));
             for line in text.lines() {
