@@ -106,6 +106,16 @@ impl Store {
         }
         Ok(out)
     }
+
+    pub fn delete_alias(&self, name: &str) -> Result<()> {
+        let changed = self
+            .conn
+            .execute("DELETE FROM aliases WHERE name = ?1", params![name])?;
+        if changed == 0 {
+            return Err(anyhow!("no alias named '{name}'"));
+        }
+        Ok(())
+    }
 }
 
 fn data_path() -> Result<PathBuf> {

@@ -319,6 +319,16 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
             state.history.clear();
             state.scroll = 0;
         }
+        "delete" | "rm" => {
+            if arg.is_empty() {
+                state.push(Entry::Error("usage: /delete NAME".into()));
+                return;
+            }
+            match agent.delete_alias(arg) {
+                Ok(()) => state.push(Entry::Info(format!("deleted alias '{arg}'"))),
+                Err(e) => state.push(Entry::Error(format!("delete: {e}"))),
+            }
+        }
         "model" => {
             if arg.is_empty() {
                 state.push(Entry::Info(format!("current model: {}", agent.model())));
@@ -332,7 +342,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
         }
         "help" | "?" => {
             state.push(Entry::Info(
-                "commands: /reset · /clear · /save NAME · /load NAME · /list · /model [NAME] · /help · /quit"
+                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /help · /quit"
                     .into(),
             ));
         }

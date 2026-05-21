@@ -79,6 +79,10 @@ impl Agent {
         self.store.list_aliases()
     }
 
+    pub fn delete_alias(&self, name: &str) -> Result<()> {
+        self.store.delete_alias(name)
+    }
+
     pub fn model(&self) -> &str {
         self.llm.model()
     }

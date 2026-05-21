@@ -7,7 +7,7 @@ use teleia_llm::{LlmClient, DEFAULT_BASE_URL};
 use teleia_store::Store;
 
 #[derive(Parser, Debug)]
-#[command(name = "teleia", about = "Minimal TUI coding agent (Rust)")]
+#[command(name = "teleia", version, about = "Minimal TUI coding agent")]
 struct Args {
     #[arg(long, default_value = "hf.co/FoolDev/Thanatos-27B:Q4_K_M")]
     model: String,
