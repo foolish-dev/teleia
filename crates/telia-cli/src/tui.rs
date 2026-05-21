@@ -33,8 +33,8 @@ fn mode_hints(mode: Mode) -> &'static str {
 /// `/exit`, `/info` are accepted by `handle_slash` but not surfaced by
 /// autocomplete to avoid suggesting ambiguous short prefixes).
 const SLASH_COMMANDS: &[&str] = &[
-    "clear", "delete", "exit", "help", "list", "load", "model", "quit", "reset", "save", "show",
-    "theme",
+    "clear", "delete", "exit", "help", "list", "load", "model", "notify", "quit", "reset", "save",
+    "show", "theme",
 ];
 
 #[derive(Debug, Clone, Copy)]
@@ -207,6 +207,9 @@ struct State {
     /// Login name of the user driving the session — used as the header on
     /// their own transcript turns.
     username: String,
+    /// Whether to fire a desktop notification after each chat turn ends.
+    /// Toggled at runtime via `/notify`; defaults to on.
+    notify: bool,
 }
 
 impl State {
@@ -234,6 +237,7 @@ impl State {
             recall_idx: None,
             hostname: hostname(),
             username: username(),
+            notify: true,
         }
     }
 
@@ -607,6 +611,49 @@ async fn submit_input<B: ratatui::backend::Backend>(
         "session {} · ready",
         &agent.session_id()[..agent.session_id().len().min(12)]
     );
+
+    if state.notify {
+        let preview: String = state
+            .history
+            .iter()
+            .filter_map(|e| match e {
+                Entry::Assistant { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .next_back()
+            .unwrap_or("")
+            .chars()
+            .take(120)
+            .collect();
+        let body = if preview.is_empty() {
+            "turn complete".to_string()
+        } else {
+            preview
+        };
+        notify_user("τέλεια", &body);
+    }
+}
+
+/// Best-effort desktop notification. Uses `notify-send` on Linux; silently
+/// noops everywhere else (a future macOS/osascript branch can slot in
+/// here). All errors are swallowed — a missing notification daemon
+/// shouldn't break the turn that just completed.
+fn notify_user(title: &str, body: &str) {
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("notify-send")
+            .arg("-a")
+            .arg("τέλεια")
+            .arg(title)
+            .arg(body)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (title, body);
+    }
 }
 
 /// Translate a vim-style ex command (without the leading ":") into the
@@ -643,6 +690,7 @@ fn translate_ex(cmd: &str) -> Result<String, String> {
         "clear" => "clear".to_string(),
         "show" | "info" => "show".to_string(),
         "theme" | "colorscheme" | "colo" => format!("theme {arg}"),
+        "notify" | "notifications" => format!("notify {arg}"),
         other => return Err(format!("unknown ex command: :{other}")),
     };
     Ok(translated)
@@ -732,6 +780,7 @@ fn arg_placeholder(cmd: &str) -> Option<&'static str> {
         "save" | "load" | "delete" | "rm" => Some(" NAME"),
         "model" => Some(" [NAME]"),
         "theme" => Some(" [NAME]"),
+        "notify" => Some(" [on|off]"),
         _ => None,
     }
 }
@@ -821,6 +870,7 @@ const EX_COMMANDS: &[&str] = &[
     "list",
     "load",
     "model",
+    "notify",
     "quit",
     "reset",
     "show",
@@ -832,6 +882,7 @@ fn ex_arg_placeholder(cmd: &str) -> Option<&'static str> {
     match cmd {
         "write" | "load" | "edit" | "delete" => Some(" NAME"),
         "model" | "theme" | "colorscheme" => Some(" [NAME]"),
+        "notify" => Some(" [on|off]"),
         _ => None,
     }
 }
@@ -1161,12 +1212,31 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
             }
             state.push(Entry::Info(text));
         }
+        "notify" => {
+            let new = match arg.to_ascii_lowercase().as_str() {
+                "on" | "true" | "yes" | "1" => true,
+                "off" | "false" | "no" | "0" => false,
+                "" => !state.notify,
+                _ => {
+                    state.push(Entry::Error(format!(
+                        "usage: /notify [on|off]  (current: {})",
+                        if state.notify { "on" } else { "off" }
+                    )));
+                    return;
+                }
+            };
+            state.notify = new;
+            state.push(Entry::Info(format!(
+                "desktop notifications {}",
+                if new { "on" } else { "off" }
+            )));
+        }
         "quit" | "exit" | "q" => {
             state.should_quit = true;
         }
         "help" | "?" => {
             state.push(Entry::Info(
-                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /theme [NAME] · /show · /help · /quit"
+                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /theme [NAME] · /notify [on|off] · /show · /help · /quit"
                     .into(),
             ));
         }
