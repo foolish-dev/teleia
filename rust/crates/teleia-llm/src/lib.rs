@@ -23,6 +23,7 @@ pub enum Message {
     },
     Tool {
         tool_call_id: String,
+        #[serde(default)]
         content: String,
     },
 }

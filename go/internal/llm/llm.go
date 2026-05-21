@@ -17,7 +17,7 @@ const DefaultBaseURL = "http://127.0.0.1:11434/v1"
 
 type Message struct {
 	Role       string     `json:"role"`
-	Content    string     `json:"content,omitempty"`
+	Content    string     `json:"content"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
