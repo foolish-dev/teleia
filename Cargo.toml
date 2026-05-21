@@ -14,7 +14,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 authors = ["foolish-dev"]
-repository = "https://github.com/foolish-dev/Teleia"
+repository = "https://github.com/foolish-dev/telia"
 
 [workspace.dependencies]
 anyhow = "1"

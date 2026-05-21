@@ -1,9 +1,8 @@
 #!/usr/bin/env sh
 # Telia (τέλεια) installer — clones the repo, builds with cargo, drops
-# `telia` into $PREFIX. The GitHub repository is still named "Teleia";
-# only the binary and crate names are short-form Telia.
+# `telia` into $PREFIX.
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/foolish-dev/Teleia/dev/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/foolish-dev/telia/dev/install.sh | sh
 # Overrides:
 #   PREFIX=/usr/local/bin   # default: $HOME/.local/bin
 #   BRANCH=main             # default: dev
@@ -12,7 +11,7 @@ set -eu
 
 PREFIX="${PREFIX:-$HOME/.local/bin}"
 BRANCH="${BRANCH:-dev}"
-REPO="https://github.com/foolish-dev/Teleia.git"
+REPO="https://github.com/foolish-dev/telia.git"
 
 need() {
     command -v "$1" >/dev/null 2>&1 || {

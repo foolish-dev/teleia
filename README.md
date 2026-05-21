@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/foolish-dev/Teleia/actions/workflows/ci.yml"><img alt="ci" src="https://github.com/foolish-dev/Teleia/actions/workflows/ci.yml/badge.svg?branch=dev"></a>
+  <a href="https://github.com/foolish-dev/telia/actions/workflows/ci.yml"><img alt="ci" src="https://github.com/foolish-dev/telia/actions/workflows/ci.yml/badge.svg?branch=dev"></a>
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 
@@ -18,22 +18,20 @@ Minimal TUI coding agent — local Ollama backend, four tools, persistent sessio
 One-liner — clones, builds, drops `telia` into `~/.local/bin` (requires cargo + git):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/foolish-dev/Teleia/dev/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/foolish-dev/telia/dev/install.sh | sh
 ```
 
 Override with `PREFIX=/usr/local/bin` (or any target) by piping into a `sh` that already has it set:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/foolish-dev/Teleia/dev/install.sh | PREFIX=/usr/local/bin sh
+curl -fsSL https://raw.githubusercontent.com/foolish-dev/telia/dev/install.sh | PREFIX=/usr/local/bin sh
 ```
 
 Or with cargo directly:
 
 ```sh
-cargo install --git https://github.com/foolish-dev/Teleia telia-cli
+cargo install --git https://github.com/foolish-dev/telia telia-cli
 ```
-
-> The GitHub repository is still named `Teleia`; only the binary, crate names, and Latin-form branding use the short `telia` to mirror the Greek `τέλεια`.
 
 ## Run
 
