@@ -115,7 +115,7 @@ function M.dispatch(name, arguments)
     return "edited " .. args.path
   elseif name == "bash" then
     local tmp = os.tmpname()
-    local rc = os.execute(string.format(
+    local _ok, what, code = os.execute(string.format(
       "timeout 30 bash -lc %s > %s 2>&1",
       "'" .. args.command:gsub("'", "'\\''") .. "'",
       tmp
@@ -124,8 +124,10 @@ function M.dispatch(name, arguments)
     local out = f:read("*a")
     f:close()
     os.remove(tmp)
-    if rc == 124 or rc == true and false then
+    if code == 124 then
       out = out .. "\n[bash timed out after 30s]"
+    elseif what == "exit" and code and code ~= 0 then
+      out = out .. string.format("\n[exit %d]", code)
     end
     return out
   end
