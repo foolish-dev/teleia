@@ -1011,6 +1011,13 @@ async fn run_turn<B: ratatui::backend::Backend>(
     let stream = agent.turn(input);
     pin_mut!(stream);
     loop {
+        // Tick the global frame counter so the status-bar spinner,
+        // running-dot ellipsis, and any other frame-driven animations
+        // keep moving while a turn is in flight. The outer event loop
+        // is parked awaiting this function, so without bumping here
+        // every animation would freeze for the duration of the turn.
+        state.frame = state.frame.wrapping_add(1);
+
         if let Err(e) = terminal.draw(|f| draw(f, state)) {
             state.push(Entry::Error(format!("draw: {e:#}")));
             return;
