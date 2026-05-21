@@ -21,7 +21,11 @@ One-liner — clones, builds, drops `teleia` into `~/.local/bin` (requires cargo
 curl -fsSL https://raw.githubusercontent.com/foolish-dev/Teleia/dev/install.sh | sh
 ```
 
-Override the location with `PREFIX=/usr/local/bin sh -c "$(curl -fsSL …)"`.
+Override with `PREFIX=/usr/local/bin` (or any target) by piping into a `sh` that already has it set:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/foolish-dev/Teleia/dev/install.sh | PREFIX=/usr/local/bin sh
+```
 
 Or with cargo directly:
 
@@ -34,7 +38,7 @@ cargo install --git https://github.com/foolish-dev/Teleia teleia-cli
 ```sh
 teleia
 # with options
-teleia --model hf.co/FoolDev/Janus-35B:Q4_K_M --base-url http://127.0.0.1:11434
+teleia --model hf.co/FoolDev/Janus-35B:Q4_K_M --base-url http://127.0.0.1:11434/v1
 ```
 
 Requires Ollama running locally with a tool-capable model pulled. Default model: `hf.co/FoolDev/Thanatos-27B:Q4_K_M`.
