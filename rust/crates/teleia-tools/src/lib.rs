@@ -2,7 +2,10 @@ use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
+use std::process::Stdio;
+use std::time::Duration;
 use teleia_llm::ToolDef;
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
 pub fn definitions() -> Vec<ToolDef> {
@@ -141,12 +144,12 @@ struct BashArgs {
 
 async fn bash_tool(args: Value) -> Result<String> {
     let BashArgs { command } = serde_json::from_value(args)?;
-    let mut cmd = Command::new("timeout");
-    cmd.arg("30").arg("bash").arg("-lc").arg(&command);
+    let mut cmd = Command::new("bash");
+    cmd.arg("-lc").arg(&command).stdout(Stdio::piped());
     // SAFETY: pre_exec runs in the forked child before exec. dup2(1, 2)
-    // redirects the child's stderr fd onto stdout's pipe, so writes from
-    // both streams land in one buffer in emit order — matching go's
-    // CombinedOutput and lua's outer `> tmp 2>&1` redirect.
+    // routes the child's stderr fd onto stdout's pipe, so writes from
+    // both streams land in one buffer in emit order — matches go's
+    // CombinedOutput at the OS level.
     unsafe {
         cmd.pre_exec(|| {
             if libc::dup2(1, 2) == -1 {
@@ -156,16 +159,34 @@ async fn bash_tool(args: Value) -> Result<String> {
             }
         });
     }
-    let output = cmd
-        .output()
-        .await
-        .with_context(|| format!("spawn timeout/bash for: {command}"))?;
-    let mut out = String::from_utf8_lossy(&output.stdout).into_owned();
-    let exit_code = output.status.code().unwrap_or(-1);
-    if exit_code == 124 {
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("spawn bash for: {command}"))?;
+    let mut stdout = child.stdout.take().expect("stdout piped");
+    // Drain in a separate task so we keep accumulating output regardless of
+    // whether the child exits naturally or we kill it on timeout.
+    let drain = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        let _ = stdout.read_to_end(&mut buf).await;
+        buf
+    });
+
+    let mut timed_out = false;
+    let exit_status = tokio::select! {
+        status = child.wait() => status?,
+        _ = tokio::time::sleep(Duration::from_secs(30)) => {
+            timed_out = true;
+            let _ = child.start_kill();
+            child.wait().await?
+        }
+    };
+
+    let buf = drain.await.unwrap_or_default();
+    let mut out = String::from_utf8_lossy(&buf).into_owned();
+    if timed_out {
         out.push_str("\n[bash timed out after 30s]");
-    } else if !output.status.success() {
-        out.push_str(&format!("\n[exit {exit_code}]"));
+    } else if !exit_status.success() {
+        out.push_str(&format!("\n[exit {}]", exit_status.code().unwrap_or(-1)));
     }
     Ok(out)
 }
