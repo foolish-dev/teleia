@@ -153,6 +153,12 @@ enum MenuKind {
     /// Alias name list — selecting an item replaces the arg portion of
     /// the input (everything after the first space).
     Alias,
+    /// Theme name list — same arg-replacement semantics as Alias, just
+    /// with its own title in the dropdown.
+    Theme,
+    /// Ex command list (Command mode) — selecting replaces command_buf
+    /// with the chosen ex command + trailing space if it takes an arg.
+    Ex,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -731,6 +737,21 @@ fn compute_menu(input: &str, aliases: &[String]) -> Option<Menu> {
                 kind: MenuKind::Alias,
             });
         }
+        if cmd == "theme" {
+            let items: Vec<String> = theme_names()
+                .into_iter()
+                .filter(|n| n.starts_with(arg))
+                .map(String::from)
+                .collect();
+            if items.is_empty() {
+                return None;
+            }
+            return Some(Menu {
+                items,
+                selected: 0,
+                kind: MenuKind::Theme,
+            });
+        }
         return None;
     }
 
@@ -749,36 +770,86 @@ fn compute_menu(input: &str, aliases: &[String]) -> Option<Menu> {
     })
 }
 
+/// Ex commands surfaced by the Command-mode dropdown. Canonical names
+/// only; short aliases like `q`/`w` stay valid input but aren't listed
+/// (they'd clutter the menu with ambiguous prefixes).
+const EX_COMMANDS: &[&str] = &[
+    "clear",
+    "colorscheme",
+    "delete",
+    "edit",
+    "help",
+    "info",
+    "list",
+    "load",
+    "model",
+    "quit",
+    "reset",
+    "show",
+    "theme",
+    "write",
+];
+
+fn ex_arg_placeholder(cmd: &str) -> Option<&'static str> {
+    match cmd {
+        "write" | "load" | "edit" | "delete" => Some(" NAME"),
+        "model" | "theme" | "colorscheme" => Some(" [NAME]"),
+        _ => None,
+    }
+}
+
+/// Command-mode dropdown: filters EX_COMMANDS by the command_buf prefix
+/// up to the first space.
+fn compute_ex_menu(command_buf: &str) -> Option<Menu> {
+    if command_buf.contains(' ') {
+        return None;
+    }
+    let items: Vec<String> = EX_COMMANDS
+        .iter()
+        .filter(|c| c.starts_with(command_buf))
+        .map(|s| s.to_string())
+        .collect();
+    if items.is_empty() {
+        return None;
+    }
+    Some(Menu {
+        items,
+        selected: 0,
+        kind: MenuKind::Ex,
+    })
+}
+
 /// Refresh state.menu based on current input, preserving the highlighted
 /// selection when the new menu has the same kind and the index is still
 /// in range. Only hits the store for the load/delete/rm arg case.
 fn refresh_menu(state: &mut State, agent: &Agent) {
-    if state.mode != Mode::Insert {
-        state.menu = None;
-        return;
-    }
-
-    let needs_aliases = matches!(
-        state
-            .input
-            .strip_prefix('/')
-            .and_then(|r| r.split_once(' '))
-            .map(|(c, _)| c),
-        Some("load") | Some("delete") | Some("rm")
-    );
-    let aliases: Vec<String> = if needs_aliases {
-        agent
-            .list_aliases()
-            .ok()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(n, _, _)| n)
-            .collect()
-    } else {
-        Vec::new()
+    let next = match state.mode {
+        Mode::Insert => {
+            let needs_aliases = matches!(
+                state
+                    .input
+                    .strip_prefix('/')
+                    .and_then(|r| r.split_once(' '))
+                    .map(|(c, _)| c),
+                Some("load") | Some("delete") | Some("rm")
+            );
+            let aliases: Vec<String> = if needs_aliases {
+                agent
+                    .list_aliases()
+                    .ok()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(n, _, _)| n)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            compute_menu(&state.input, &aliases)
+        }
+        Mode::Command => compute_ex_menu(&state.command_buf),
+        Mode::Normal => None,
     };
 
-    let next = compute_menu(&state.input, &aliases);
     state.menu = match (state.menu.take(), next) {
         (Some(prev), Some(mut new)) if prev.kind == new.kind => {
             new.selected = prev.selected.min(new.items.len().saturating_sub(1));
@@ -809,12 +880,21 @@ fn accept_menu(state: &mut State) -> bool {
             state.input = format!("/{item}{trailing}");
             state.input_cursor = state.input.len();
         }
-        MenuKind::Alias => {
+        MenuKind::Alias | MenuKind::Theme => {
             if let Some(space) = state.input.find(' ') {
                 let cmd_prefix = state.input[..=space].to_string();
                 state.input = format!("{cmd_prefix}{item}");
                 state.input_cursor = state.input.len();
             }
+        }
+        MenuKind::Ex => {
+            let trailing = if ex_arg_placeholder(&item).is_some() {
+                " "
+            } else {
+                ""
+            };
+            state.command_buf = format!("{item}{trailing}");
+            state.command_cursor = state.command_buf.len();
         }
     }
     true
@@ -1111,6 +1191,8 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
         let title = match menu.kind {
             MenuKind::Command => " commands ",
             MenuKind::Alias => " aliases ",
+            MenuKind::Theme => " themes ",
+            MenuKind::Ex => " ex ",
         };
         let items: Vec<ListItem> = menu
             .items
@@ -1931,5 +2013,42 @@ mod tests {
             translate_ex("colorscheme tokyo-night").unwrap(),
             "theme tokyo-night"
         );
+    }
+
+    #[test]
+    fn menu_theme_filters_by_prefix() {
+        let m = compute_menu("/theme dra", &[]).unwrap();
+        assert_eq!(m.kind, MenuKind::Theme);
+        assert_eq!(m.items, vec!["dracula"]);
+    }
+
+    #[test]
+    fn menu_theme_lists_all_when_arg_empty() {
+        let m = compute_menu("/theme ", &[]).unwrap();
+        assert_eq!(m.kind, MenuKind::Theme);
+        // Three themes today: tokyo-night, catppuccin, dracula
+        assert_eq!(m.items.len(), 3);
+    }
+
+    #[test]
+    fn ex_menu_filters_by_prefix() {
+        let m = compute_ex_menu("th").unwrap();
+        assert_eq!(m.kind, MenuKind::Ex);
+        assert_eq!(m.items, vec!["theme"]);
+    }
+
+    #[test]
+    fn ex_menu_lone_buf_returns_all() {
+        let m = compute_ex_menu("").unwrap();
+        assert_eq!(m.kind, MenuKind::Ex);
+        assert_eq!(m.items.len(), EX_COMMANDS.len());
+    }
+
+    #[test]
+    fn ex_menu_none_after_space() {
+        // Once the command name is followed by anything, the menu hides
+        // so it doesn't fight with arg entry.
+        assert!(compute_ex_menu("theme dra").is_none());
+        assert!(compute_ex_menu("q ").is_none());
     }
 }
