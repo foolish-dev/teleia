@@ -1092,7 +1092,7 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
                 .border_style(Style::default().fg(th.dim))
                 .title(Line::from(vec![
                     Span::styled(
-                        " teleia ",
+                        " τέλεια ",
                         Style::default().fg(th.purple).add_modifier(Modifier::BOLD),
                     ),
                     Span::styled("@ ", Style::default().fg(th.dim)),
@@ -1293,13 +1293,16 @@ fn hostname() -> String {
 /// horizontally to the available `width`.
 fn welcome_banner(width: u16, frame: usize) -> Vec<Line<'static>> {
     let th = theme();
+    // ΤΕΛΕΙΑ. Same ANSI-Shadow figlet shape as before; the only structural
+    // difference from a Latin "TELEIA" is the third letter: capital lambda
+    // (Λ) rendered as an A without its crossbar.
     const LOGO: &[&str] = &[
-        "████████╗███████╗██╗     ███████╗██╗ █████╗ ",
-        "╚══██╔══╝██╔════╝██║     ██╔════╝██║██╔══██╗",
-        "   ██║   █████╗  ██║     █████╗  ██║███████║",
-        "   ██║   ██╔══╝  ██║     ██╔══╝  ██║██╔══██║",
-        "   ██║   ███████╗███████╗███████╗██║██║  ██║",
-        "   ╚═╝   ╚══════╝╚══════╝╚══════╝╚═╝╚═╝  ╚═╝",
+        "████████╗███████╗ █████╗ ███████╗██╗ █████╗ ",
+        "╚══██╔══╝██╔════╝██╔══██╗██╔════╝██║██╔══██╗",
+        "   ██║   █████╗  ██║  ██║█████╗  ██║███████║",
+        "   ██║   ██╔══╝  ██║  ██║██╔══╝  ██║██╔══██║",
+        "   ██║   ███████╗██║  ██║███████╗██║██║  ██║",
+        "   ╚═╝   ╚══════╝╚═╝  ╚═╝╚══════╝╚═╝╚═╝  ╚═╝",
     ];
     let logo_width = LOGO[0].chars().count();
     let logo_pad = (width as usize).saturating_sub(logo_width) / 2;
@@ -1375,7 +1378,7 @@ fn welcome_banner(width: u16, frame: usize) -> Vec<Line<'static>> {
         Style::default().fg(th.cyan).add_modifier(Modifier::ITALIC),
     ));
     out.push(center(
-        "τελεία · full stop",
+        "τέλεια · full stop",
         Style::default().fg(th.dim).add_modifier(Modifier::ITALIC),
     ));
     out.push(Line::from(""));
@@ -1447,11 +1450,11 @@ fn render_entry(entry: &Entry, frame: usize, hostname: &str) -> Vec<Line<'static
             // Blink "▌" while streaming. Frame ticks every ~50ms; /10 gives
             // ~2 Hz.
             let header = if *complete {
-                "teleia"
+                "τέλεια"
             } else if (frame / 10).is_multiple_of(2) {
-                "teleia ▌"
+                "τέλεια ▌"
             } else {
-                "teleia  "
+                "τέλεια  "
             };
             out.push(Line::from(Span::styled(
                 header,
