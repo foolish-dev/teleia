@@ -6,16 +6,20 @@ local agent_mod = require("teleia.agent")
 
 local M = {}
 
+-- Tokyo Night via 24-bit ANSI (CSI 38;2;R;G;Bm). Falls back to nothing on
+-- pre-truecolor terminals (escape sequences are ignored or printed literally;
+-- modern terminals on Linux/macOS support truecolor).
+local function fg(r, g, b) return string.format("\27[38;2;%d;%d;%dm", r, g, b) end
 local C = {
   reset = "\27[0m",
-  dim = "\27[2m",
-  user = "\27[1;36m",
-  assistant = "\27[1;35m",
-  tool = "\27[33m",
-  err = "\27[31m",
-  info = "\27[34m",
-  status = "\27[90m",
-  prompt = "\27[36m",
+  user = "\27[1m" .. fg(125, 207, 255),  -- #7dcfff bold
+  assistant = "\27[1m" .. fg(187, 154, 247), -- #bb9af7 bold
+  tool = fg(224, 175, 104),               -- #e0af68
+  err = fg(247, 118, 142),                -- #f7768e
+  info = fg(122, 162, 247),               -- #7aa2f7
+  status = fg(86, 95, 137),               -- #565f89
+  dim = fg(86, 95, 137),                  -- #565f89
+  prompt = fg(125, 207, 255),             -- #7dcfff
 }
 
 local function short_id(s)

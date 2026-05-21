@@ -5,6 +5,16 @@ import type { Agent } from "./agent"
 
 const HINTS = "enter send · ↑↓ scroll · /help cmds · ctrl-c quit"
 
+// Tokyo Night palette
+const TN = {
+  cyan: "#7dcfff",
+  purple: "#bb9af7",
+  yellow: "#e0af68",
+  red: "#f7768e",
+  blue: "#7aa2f7",
+  dim: "#565f89",
+} as const
+
 type Entry =
   | { kind: "user"; text: string }
   | { kind: "assistant"; text: string; complete: boolean }
@@ -67,7 +77,7 @@ function EntryView({ e }: { e: Entry }) {
   if (e.kind === "user") {
     return (
       <Box flexDirection="column" marginBottom={1}>
-        <Text bold color="cyan">you</Text>
+        <Text bold color={TN.cyan}>you</Text>
         <Text>{e.text}</Text>
       </Box>
     )
@@ -75,7 +85,7 @@ function EntryView({ e }: { e: Entry }) {
   if (e.kind === "assistant") {
     return (
       <Box flexDirection="column" marginBottom={1}>
-        <Text bold color="magenta">{e.complete ? "teleia" : "teleia ▌"}</Text>
+        <Text bold color={TN.purple}>{e.complete ? "teleia" : "teleia ▌"}</Text>
         <Text>{e.text}</Text>
       </Box>
     )
@@ -85,20 +95,20 @@ function EntryView({ e }: { e: Entry }) {
     const marker = e.complete ? "⚙" : "⚙ …"
     return (
       <Box flexDirection="column" marginBottom={1}>
-        <Text color="yellow">{`${marker} ${e.name}(${e.arguments})`}</Text>
+        <Text color={TN.yellow}>{`${marker} ${e.name}(${e.arguments})`}</Text>
         {lines.map((l, i) => (
-          <Text key={i} color="gray">{`  ${l}`}</Text>
+          <Text key={i} color={TN.dim}>{`  ${l}`}</Text>
         ))}
       </Box>
     )
   }
   if (e.kind === "error") {
     return (
-      <Box marginBottom={1}><Text color="red">{`error: ${e.text}`}</Text></Box>
+      <Box marginBottom={1}><Text color={TN.red}>{`error: ${e.text}`}</Text></Box>
     )
   }
   return (
-    <Box marginBottom={1}><Text color="blue">{`· ${e.text}`}</Text></Box>
+    <Box marginBottom={1}><Text color={TN.blue}>{`· ${e.text}`}</Text></Box>
   )
 }
 
@@ -208,10 +218,10 @@ function App({ agent }: { agent: Agent }) {
         <EntryView key={i} e={e} />
       ))}
       <Box borderStyle="round" paddingX={1}>
-        <Text color="cyan">{"> "}</Text>
+        <Text color={TN.cyan}>{"> "}</Text>
         <Text dimColor={working}>{input}</Text>
       </Box>
-      <Text color="gray" dimColor>
+      <Text color={TN.dim} dimColor>
         {`${status}   ${HINTS}`}
       </Text>
     </Box>

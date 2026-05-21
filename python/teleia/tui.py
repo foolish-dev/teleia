@@ -26,9 +26,27 @@ C_PROMPT = 6
 C_INFO = 7
 
 
+# Tokyo Night palette (24-bit; redefined into the standard color slots
+# when the terminal supports it, otherwise we fall back to base ANSI).
+_TN = {
+    curses.COLOR_CYAN: (125, 207, 255),     # #7dcfff
+    curses.COLOR_MAGENTA: (187, 154, 247),  # #bb9af7
+    curses.COLOR_YELLOW: (224, 175, 104),   # #e0af68
+    curses.COLOR_RED: (247, 118, 142),      # #f7768e
+    curses.COLOR_BLUE: (122, 162, 247),     # #7aa2f7
+    8: (86, 95, 137),                       # #565f89 — dim
+}
+
+
 def _init_colors() -> None:
     curses.start_color()
     curses.use_default_colors()
+    if curses.COLORS >= 256 and curses.can_change_color():
+        for slot, (r, g, b) in _TN.items():
+            try:
+                curses.init_color(slot, r * 1000 // 255, g * 1000 // 255, b * 1000 // 255)
+            except curses.error:
+                pass
     curses.init_pair(C_USER, curses.COLOR_CYAN, -1)
     curses.init_pair(C_ASSISTANT, curses.COLOR_MAGENTA, -1)
     curses.init_pair(C_TOOL, curses.COLOR_YELLOW, -1)

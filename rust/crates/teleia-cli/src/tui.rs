@@ -20,6 +20,15 @@ use teleia_agent::{Agent, TurnEvent};
 
 const HINTS: &str = "enter send · ↑↓ scroll · /help cmds · ctrl-c quit";
 
+// Tokyo Night palette
+const TN_CYAN: Color = Color::Rgb(125, 207, 255); // #7dcfff
+const TN_PURPLE: Color = Color::Rgb(187, 154, 247); // #bb9af7
+const TN_YELLOW: Color = Color::Rgb(224, 175, 104); // #e0af68
+const TN_RED: Color = Color::Rgb(247, 118, 142); // #f7768e
+const TN_BLUE: Color = Color::Rgb(122, 162, 247); // #7aa2f7
+const TN_DIM: Color = Color::Rgb(86, 95, 137); // #565f89
+const TN_FG: Color = Color::Rgb(192, 202, 245); // #c0caf5
+
 enum Entry {
     User(String),
     Assistant {
@@ -313,12 +322,12 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
     f.render_widget(log, chunks[0]);
 
     let prompt_style = if state.working {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(TN_DIM)
     } else {
-        Style::default().fg(Color::White)
+        Style::default().fg(TN_FG)
     };
     let input_widget = Paragraph::new(Line::from(vec![
-        Span::styled("> ", Style::default().fg(Color::Cyan)),
+        Span::styled("> ", Style::default().fg(TN_CYAN)),
         Span::styled(&state.input, prompt_style),
     ]))
     .block(Block::default().borders(Borders::ALL));
@@ -327,12 +336,10 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
     let status_line = Line::from(vec![
         Span::styled(
             &state.status,
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::ITALIC),
+            Style::default().fg(TN_DIM).add_modifier(Modifier::ITALIC),
         ),
         Span::raw("   "),
-        Span::styled(HINTS, Style::default().fg(Color::DarkGray)),
+        Span::styled(HINTS, Style::default().fg(TN_DIM)),
     ]);
     f.render_widget(Paragraph::new(status_line), chunks[2]);
 }
@@ -343,9 +350,7 @@ fn render_entry(entry: &Entry) -> Vec<Line<'static>> {
         Entry::User(text) => {
             out.push(Line::from(Span::styled(
                 "you",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(TN_CYAN).add_modifier(Modifier::BOLD),
             )));
             for line in text.lines() {
                 out.push(Line::from(line.to_string()));
@@ -355,9 +360,7 @@ fn render_entry(entry: &Entry) -> Vec<Line<'static>> {
         Entry::Assistant { text, complete } => {
             out.push(Line::from(Span::styled(
                 if *complete { "teleia" } else { "teleia ▌" },
-                Style::default()
-                    .fg(Color::Magenta)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(TN_PURPLE).add_modifier(Modifier::BOLD),
             )));
             for line in text.lines() {
                 out.push(Line::from(line.to_string()));
@@ -373,12 +376,12 @@ fn render_entry(entry: &Entry) -> Vec<Line<'static>> {
             let marker = if *complete { "⚙" } else { "⚙ …" };
             out.push(Line::from(Span::styled(
                 format!("{marker} {name}({args})"),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(TN_YELLOW),
             )));
             for line in output.lines().take(20) {
                 out.push(Line::from(Span::styled(
                     format!("  {line}"),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(TN_DIM),
                 )));
             }
             out.push(Line::from(""));
@@ -386,14 +389,14 @@ fn render_entry(entry: &Entry) -> Vec<Line<'static>> {
         Entry::Error(text) => {
             out.push(Line::from(Span::styled(
                 format!("error: {text}"),
-                Style::default().fg(Color::Red),
+                Style::default().fg(TN_RED),
             )));
             out.push(Line::from(""));
         }
         Entry::Info(text) => {
             out.push(Line::from(Span::styled(
                 format!("· {text}"),
-                Style::default().fg(Color::Blue),
+                Style::default().fg(TN_BLUE),
             )));
             out.push(Line::from(""));
         }
