@@ -20,34 +20,34 @@
     <circle cx="104" cy="57" r="6" fill="#9ece6a"/>
     <text x="550" y="62" text-anchor="middle"
           font-family="Iosevka, 'JetBrains Mono', monospace"
-          font-size="12" fill="#565f89">teleia · session 01J9X4P · ready</text>
+          font-size="12" fill="#565f89">teleia · session 01K3R7H · ready</text>
   </g>
 
   <!-- transcript -->
   <g font-family="Iosevka, 'JetBrains Mono', 'IBM Plex Mono', monospace" font-size="14">
     <!-- user 1 -->
     <text x="68" y="110" fill="#7dcfff" font-weight="700">you</text>
-    <text x="68" y="132" fill="#c0caf5">audit lua/teleia/agent.lua for dead code</text>
+    <text x="68" y="132" fill="#c0caf5">audit crates/teleia-agent for dead code</text>
 
     <!-- assistant 1 -->
     <text x="68" y="172" fill="#bb9af7" font-weight="700">teleia</text>
-    <text x="68" y="194" fill="#c0caf5">checking the file now</text>
+    <text x="68" y="194" fill="#c0caf5">reading the agent module now</text>
 
     <!-- tool call 1 -->
-    <text x="68" y="226" fill="#e0af68">⚙ read({"path":"lua/teleia/agent.lua"})</text>
-    <text x="90" y="246" fill="#565f89">local llm_mod = require("teleia.llm")</text>
-    <text x="90" y="262" fill="#565f89">local tools_mod = require("teleia.tools")</text>
-    <text x="90" y="278" fill="#565f89">…155 lines…</text>
+    <text x="68" y="226" fill="#e0af68">⚙ read({"path":"crates/teleia-agent/src/lib.rs"})</text>
+    <text x="90" y="246" fill="#565f89">use teleia_llm::{LlmClient, Message, Role};</text>
+    <text x="90" y="262" fill="#565f89">use teleia_tools::{definitions, dispatch};</text>
+    <text x="90" y="278" fill="#565f89">…204 lines…</text>
 
     <!-- assistant 2 -->
     <text x="68" y="316" fill="#bb9af7" font-weight="700">teleia ▌</text>
-    <text x="68" y="338" fill="#c0caf5">found one issue: tool_queue branch (line 88-99)</text>
-    <text x="68" y="356" fill="#c0caf5">is never populated. dispatch happens later in the</text>
-    <text x="68" y="374" fill="#c0caf5">same iterator (line 132). dead code.</text>
+    <text x="68" y="338" fill="#c0caf5">one issue: tool_queue (lines 88-99) is never</text>
+    <text x="68" y="356" fill="#c0caf5">pushed to. dispatch happens inline at line 132,</text>
+    <text x="68" y="374" fill="#c0caf5">so the queue and its drain loop are dead.</text>
 
     <!-- tool call 2 -->
-    <text x="68" y="406" fill="#e0af68">⚙ edit({"path":"lua/teleia/agent.lua",…})</text>
-    <text x="90" y="426" fill="#565f89">edited lua/teleia/agent.lua</text>
+    <text x="68" y="406" fill="#e0af68">⚙ edit({"path":"crates/teleia-agent/src/lib.rs",…})</text>
+    <text x="90" y="426" fill="#565f89">edited crates/teleia-agent/src/lib.rs</text>
 
     <!-- info line -->
     <text x="68" y="464" fill="#7aa2f7">· saved current session as 'audit-pass-1'</text>
@@ -65,6 +65,6 @@
 
   <!-- status -->
   <text x="56" y="608" font-family="Iosevka, monospace" font-size="12" fill="#565f89" font-style="italic">
-    session 01J9X4P · ready   enter send · ↑↓ scroll · /help cmds · ctrl-c quit
+    session 01K3R7H · ready   enter send · ↑↓ scroll · /help cmds · ctrl-c quit
   </text>
 </svg>
