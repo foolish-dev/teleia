@@ -13,7 +13,7 @@
   <a href="https://huggingface.co/FoolDev/Janus-35B"><img alt="FoolDev/Janus-35B on Hugging Face" src="https://img.shields.io/badge/%F0%9F%A4%97-FoolDev%2FJanus--35B-7aa2f7?logo=huggingface&logoColor=1a1b26&labelColor=24283b"></a>
 </p>
 
-**A minimal TUI coding agent.** One binary, no daemon. Talks to a local Ollama or any of fifteen cloud chat-completions endpoints. Runs seven built-in tools, hosts MCP servers, persists sessions to SQLite, and resumes where you left off.
+**A minimal TUI coding agent.** One binary, no daemon. Talks to a local Ollama or any of twenty-one cloud chat-completions endpoints. Runs seventeen built-in tools, hosts MCP servers, persists sessions to SQLite, and resumes where you left off.
 
 <p align="center">
   <img src="assets/screenshot.svg" alt="τέλεια TUI session" width="780">
@@ -63,17 +63,27 @@ Three stances control tool execution, cycle with `Shift+Tab` or set explicitly:
 
 ## Tools
 
-Built-in, capped at a 16-hop loop per turn:
+Built-in, capped at a 16-hop loop per turn. Read-only tools run in PLAN mode; mutating ones (`write` / `edit` / `bash` / `mkdir` / `mv` / `cp`) prompt for approval in BUILD mode and are blocked in PLAN.
 
-| tool   | does                                                                       |
-| ------ | -------------------------------------------------------------------------- |
-| `read` | read a file; output is syntax-highlighted (`syntect`, 50+ languages)       |
-| `write`| overwrite a file                                                           |
-| `edit` | unique-substring replace inside a file                                     |
-| `bash` | run a shell command (combined stdout/stderr, 30s timeout)                  |
-| `list` | directory listing, dirs suffixed with `/`                                  |
-| `glob` | shell-style glob, 200-match cap                                            |
-| `grep` | rust regex over a file or recursively walked dir (skips `target/`, `.git/`, …) |
+| tool    | does                                                                                |
+| ------- | ----------------------------------------------------------------------------------- |
+| `read`  | read a file; output is syntax-highlighted (`syntect`, 50+ languages)                |
+| `write` | overwrite a file                                                                    |
+| `edit`  | unique-substring replace inside a file                                              |
+| `bash`  | run a shell command (combined stdout/stderr, 30s timeout)                           |
+| `list`  | directory listing, dirs suffixed with `/`                                           |
+| `glob`  | shell-style glob, 200-match cap                                                     |
+| `grep`  | rust regex over a file or recursively walked dir (skips `target/`, `.git/`, …)      |
+| `head`  | first N lines of a file (default 40, capped at 2000) — cheaper than `read`          |
+| `tail`  | last N lines of a file (default 40, capped at 2000) — for logs                      |
+| `tree`  | recursive directory tree, depth-limited (default 3, max 8)                          |
+| `stat`  | file metadata: type, size, mode, mtime                                              |
+| `diff`  | unified diff between two files via `/usr/bin/diff -u`                               |
+| `which` | find an executable on `$PATH`                                                       |
+| `fetch` | HTTP GET → response body as text (10s timeout, 1 MiB cap)                           |
+| `mkdir` | create a directory, idempotent                                                      |
+| `mv`    | rename / move; refuses to clobber                                                   |
+| `cp`    | copy a file; refuses to clobber                                                     |
 
 Plus any tools exposed by MCP servers you configure — see [Configuration](#configuration).
 
@@ -98,9 +108,14 @@ The model name picks the provider. Use `provider:NAME` to disambiguate names tha
 | `cerebras:NAME`                    | Cerebras     | `CEREBRAS_API_KEY`      |
 | `hyperbolic:NAME`                  | Hyperbolic   | `HYPERBOLIC_API_KEY`    |
 | `nvidia:NAME`                      | NVIDIA NIM   | `NVIDIA_API_KEY`        |
+| `jamba-*`                          | AI21 Labs    | `AI21_API_KEY`          |
+| `anyscale:NAME`                    | Anyscale     | `ANYSCALE_API_KEY`      |
+| `lepton:NAME`                      | Lepton AI    | `LEPTON_API_KEY`        |
+| `deepinfra:NAME`                   | DeepInfra    | `DEEPINFRA_API_KEY`     |
+| `sambanova:NAME`                   | SambaNova    | `SAMBANOVA_API_KEY`     |
 | anything else                      | local Ollama | _none_                  |
 
-The `/model` dropdown pre-populates with ~130 named models across all fifteen providers (Tab to accept, type to filter; any name is accepted). `/keys` lists every provider and marks which env vars are set.
+The `/model` dropdown pre-populates with ~210 named models across all twenty-one providers (Tab to accept, type to filter; any name is accepted). `/keys` lists every provider and marks which env vars are set.
 
 **Key handling.** `--api-key KEY` overrides the env-var fallback. If no key is found for a cloud provider, telia prompts at startup with hidden input (`rpassword`); the same prompt fires inside the TUI when `/model NAME` switches to a provider without a key. Keys live in process memory only — persist via env var or a `[llms.NAME]` config entry.
 

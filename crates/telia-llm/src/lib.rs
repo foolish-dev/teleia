@@ -293,6 +293,36 @@ pub const PROVIDERS: &[Provider] = &[
         env_var: "NVIDIA_API_KEY",
         prefixes: &[],
     },
+    Provider {
+        name: "AI21",
+        base_url: "https://api.ai21.com/studio/v1",
+        env_var: "AI21_API_KEY",
+        prefixes: &["jamba-"],
+    },
+    Provider {
+        name: "Anyscale",
+        base_url: "https://api.endpoints.anyscale.com/v1",
+        env_var: "ANYSCALE_API_KEY",
+        prefixes: &[],
+    },
+    Provider {
+        name: "Lepton",
+        base_url: "https://api.lepton.ai/v1",
+        env_var: "LEPTON_API_KEY",
+        prefixes: &[],
+    },
+    Provider {
+        name: "DeepInfra",
+        base_url: "https://api.deepinfra.com/v1/openai",
+        env_var: "DEEPINFRA_API_KEY",
+        prefixes: &[],
+    },
+    Provider {
+        name: "SambaNova",
+        base_url: "https://api.sambanova.ai/v1",
+        env_var: "SAMBANOVA_API_KEY",
+        prefixes: &[],
+    },
 ];
 
 /// Resolve a model name to its provider. Checks the explicit

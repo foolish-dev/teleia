@@ -45,7 +45,9 @@ const KNOWN_CLOUD_MODELS: &[&str] = &[
     "claude-3-5-sonnet-20241022",
     "claude-3-5-sonnet-20240620",
     "claude-3-5-haiku-20241022",
+    "claude-3-5-haiku-latest",
     "claude-3-opus-20240229",
+    "claude-3-opus-latest",
     "claude-3-sonnet-20240229",
     "claude-3-haiku-20240307",
 
@@ -67,6 +69,12 @@ const KNOWN_CLOUD_MODELS: &[&str] = &[
     "o1-pro",
     "o1-preview",
     "chatgpt-4o-latest",
+    "gpt-4-turbo",
+    "gpt-4-turbo-preview",
+    "gpt-4",
+    "gpt-4-32k",
+    "gpt-3.5-turbo",
+    "gpt-3.5-turbo-16k",
 
     // ---------- Google ----------
     "gemini-2.5-pro",
@@ -78,6 +86,8 @@ const KNOWN_CLOUD_MODELS: &[&str] = &[
     "gemini-1.5-flash",
     "gemini-1.5-flash-8b",
     "gemini-exp-1206",
+    "gemini-pro",
+    "gemini-pro-vision",
 
     // ---------- xAI ----------
     "grok-4",
@@ -101,6 +111,11 @@ const KNOWN_CLOUD_MODELS: &[&str] = &[
     "codestral-latest",
     "pixtral-large-latest",
     "open-mistral-nemo",
+    "mistral-saba-2502",
+    "ministral-3b-2410",
+    "ministral-8b-2410",
+    "open-mixtral-8x7b",
+    "open-mixtral-8x22b",
 
     // ---------- Groq (explicit prefix — names collide with local Ollama) ----------
     "groq:llama-3.3-70b-versatile",
@@ -113,6 +128,12 @@ const KNOWN_CLOUD_MODELS: &[&str] = &[
     "groq:qwen-2.5-32b",
     "groq:mixtral-8x7b-32768",
     "groq:gemma2-9b-it",
+    "groq:llama3-70b-8192",
+    "groq:llama3-8b-8192",
+    "groq:llama-3.2-1b-preview",
+    "groq:llama-3.2-3b-preview",
+    "groq:llama-3.2-11b-vision-preview",
+    "groq:llama-3.2-90b-vision-preview",
 
     // ---------- OpenRouter (popular routes; the full catalog is in the thousands) ----------
     "openrouter:anthropic/claude-opus-4-7",
@@ -136,6 +157,19 @@ const KNOWN_CLOUD_MODELS: &[&str] = &[
     "openrouter:mistralai/mistral-large-2411",
     "openrouter:mistralai/codestral-2501",
     "openrouter:nvidia/llama-3.1-nemotron-70b-instruct",
+    "openrouter:cohere/command-r-plus",
+    "openrouter:perplexity/sonar-pro",
+    "openrouter:nousresearch/hermes-3-llama-3.1-405b",
+    "openrouter:microsoft/wizardlm-2-8x22b",
+    "openrouter:google/gemma-2-27b-it",
+    "openrouter:01-ai/yi-large",
+    "openrouter:databricks/dbrx-instruct",
+    "openrouter:anthropic/claude-3-5-sonnet",
+    "openrouter:anthropic/claude-3-opus",
+    "openrouter:openai/gpt-4o",
+    "openrouter:openai/o1",
+    "openrouter:meta-llama/llama-3.1-405b-instruct",
+    "openrouter:meta-llama/llama-3.1-70b-instruct",
 
     // ---------- Cohere ----------
     "command-a-03-2025",
@@ -161,6 +195,12 @@ const KNOWN_CLOUD_MODELS: &[&str] = &[
     "together:deepseek-ai/DeepSeek-V3",
     "together:deepseek-ai/DeepSeek-R1",
     "together:mistralai/Mixtral-8x22B-Instruct-v0.1",
+    "together:mistralai/Mistral-7B-Instruct-v0.3",
+    "together:google/gemma-2-27b-it",
+    "together:google/gemma-2-9b-it",
+    "together:Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "together:NousResearch/Hermes-3-Llama-3.1-405B",
+    "together:databricks/dbrx-instruct",
 
     // ---------- Fireworks AI ----------
     "fireworks:accounts/fireworks/models/llama-v3p3-70b-instruct",
@@ -170,12 +210,19 @@ const KNOWN_CLOUD_MODELS: &[&str] = &[
     "fireworks:accounts/fireworks/models/qwen2p5-72b-instruct",
     "fireworks:accounts/fireworks/models/deepseek-v3",
     "fireworks:accounts/fireworks/models/deepseek-r1",
+    "fireworks:accounts/fireworks/models/llama-v3p1-8b-instruct",
+    "fireworks:accounts/fireworks/models/mixtral-8x22b-instruct",
+    "fireworks:accounts/fireworks/models/firefunction-v2",
+    "fireworks:accounts/fireworks/models/mythomax-l2-13b",
 
-    // ---------- Cerebras (extremely fast inference, small model menu) ----------
+    // ---------- Cerebras (extremely fast inference) ----------
     "cerebras:llama-3.3-70b",
     "cerebras:llama3.1-8b",
     "cerebras:llama-4-scout-17b-16e-instruct",
+    "cerebras:llama-4-maverick-17b-128e-instruct",
     "cerebras:qwen-3-32b",
+    "cerebras:qwen-3-235b-a22b-instruct-2507",
+    "cerebras:deepseek-r1-distill-llama-70b",
 
     // ---------- Hyperbolic ----------
     "hyperbolic:meta-llama/Meta-Llama-3.1-405B-Instruct",
@@ -183,6 +230,9 @@ const KNOWN_CLOUD_MODELS: &[&str] = &[
     "hyperbolic:Qwen/Qwen2.5-Coder-32B-Instruct",
     "hyperbolic:deepseek-ai/DeepSeek-V3",
     "hyperbolic:deepseek-ai/DeepSeek-R1",
+    "hyperbolic:Qwen/Qwen2.5-72B-Instruct",
+    "hyperbolic:meta-llama/Meta-Llama-3.1-70B-Instruct",
+    "hyperbolic:NousResearch/Hermes-3-Llama-3.1-70B",
 
     // ---------- NVIDIA NIM ----------
     "nvidia:meta/llama-3.3-70b-instruct",
@@ -191,6 +241,47 @@ const KNOWN_CLOUD_MODELS: &[&str] = &[
     "nvidia:nvidia/llama-3.1-nemotron-70b-instruct",
     "nvidia:deepseek-ai/deepseek-r1",
     "nvidia:qwen/qwen2.5-coder-32b-instruct",
+    "nvidia:mistralai/mistral-large-2-instruct",
+    "nvidia:google/gemma-2-27b-it",
+    "nvidia:microsoft/phi-3-medium-4k-instruct",
+    "nvidia:nv-mistralai/mistral-nemo-12b-instruct",
+
+    // ---------- AI21 Labs (Jamba family) ----------
+    "jamba-1.5-large",
+    "jamba-1.5-mini",
+    "jamba-large-1.6",
+    "jamba-mini-1.6",
+
+    // ---------- Anyscale Endpoints ----------
+    "anyscale:meta-llama/Meta-Llama-3-70B-Instruct",
+    "anyscale:meta-llama/Meta-Llama-3-8B-Instruct",
+    "anyscale:mistralai/Mixtral-8x22B-Instruct-v0.1",
+    "anyscale:codellama/CodeLlama-70b-Instruct-hf",
+
+    // ---------- Lepton AI ----------
+    "lepton:llama3-1-405b",
+    "lepton:llama3-1-70b",
+    "lepton:llama3-1-8b",
+    "lepton:mixtral-8x7b",
+    "lepton:qwen2-72b",
+
+    // ---------- DeepInfra ----------
+    "deepinfra:meta-llama/Meta-Llama-3.1-405B-Instruct",
+    "deepinfra:meta-llama/Meta-Llama-3.1-70B-Instruct",
+    "deepinfra:Qwen/Qwen2.5-72B-Instruct",
+    "deepinfra:mistralai/Mixtral-8x22B-Instruct-v0.1",
+    "deepinfra:deepseek-ai/DeepSeek-V3",
+    "deepinfra:nvidia/Nemotron-4-340B-Instruct",
+
+    // ---------- SambaNova Cloud (fast Llama inference) ----------
+    "sambanova:Meta-Llama-3.3-70B-Instruct",
+    "sambanova:Meta-Llama-3.1-405B-Instruct",
+    "sambanova:Meta-Llama-3.1-70B-Instruct",
+    "sambanova:Meta-Llama-3.1-8B-Instruct",
+    "sambanova:Llama-3.2-11B-Vision-Instruct",
+    "sambanova:Llama-3.2-90B-Vision-Instruct",
+    "sambanova:Qwen2.5-72B-Instruct",
+    "sambanova:Qwen2.5-Coder-32B-Instruct",
 ];
 
 #[derive(Parser, Debug)]
@@ -236,8 +327,9 @@ struct Args {
     /// $MISTRAL_API_KEY, $COHERE_API_KEY, $PERPLEXITY_API_KEY,
     /// $GROQ_API_KEY, $OPENROUTER_API_KEY, $TOGETHER_API_KEY,
     /// $FIREWORKS_API_KEY, $CEREBRAS_API_KEY, $HYPERBOLIC_API_KEY,
-    /// $NVIDIA_API_KEY. Run /keys inside telia to see which are set.
-    /// Ignored for Ollama.
+    /// $NVIDIA_API_KEY, $AI21_API_KEY, $ANYSCALE_API_KEY,
+    /// $LEPTON_API_KEY, $DEEPINFRA_API_KEY, $SAMBANOVA_API_KEY. Run
+    /// /keys inside telia to see which are set. Ignored for Ollama.
     #[arg(long)]
     api_key: Option<String>,
     /// Colour theme. Known: tokyo-night (default), catppuccin, dracula.
