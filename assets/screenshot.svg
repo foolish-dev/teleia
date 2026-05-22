@@ -8,8 +8,9 @@
       <stop offset="0" stop-color="#0e0f17"/>
       <stop offset="1" stop-color="#13141d"/>
     </linearGradient>
-    <linearGradient id="markGrad" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#7aa2f7"/>
+    <linearGradient id="markGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7dcfff"/>
+      <stop offset="0.5" stop-color="#7aa2f7"/>
       <stop offset="1" stop-color="#bb9af7"/>
     </linearGradient>
   </defs>
@@ -27,26 +28,28 @@
     <circle cx="84"  cy="57" r="6" fill="#e0af68"/>
     <circle cx="104" cy="57" r="6" fill="#9ece6a"/>
 
-    <!-- mini Arch mountain + full-stop block in the title bar -->
-    <g transform="translate(530 47)">
-      <path d="M 11 0 L 0 18 L 6 18 L 11 11 L 16 18 L 22 18 Z"
-            fill="url(#markGrad)"/>
-      <rect x="24" y="14" width="5" height="5" rx="1" fill="#f7768e">
+    <!-- λ + full-stop cursor block as brand mark in the title bar -->
+    <g transform="translate(525 47)">
+      <text x="0" y="20"
+            font-family="Iosevka, 'JetBrains Mono', monospace"
+            font-size="24" font-weight="700" fill="url(#markGrad)">λ</text>
+      <rect x="20" y="14" width="5" height="5" rx="1" fill="#f7768e">
         <animate attributeName="opacity"
                  values="1;1;0.2;0.2;1"
                  keyTimes="0;0.5;0.5;1;1"
                  dur="1.06s" repeatCount="indefinite"/>
       </rect>
     </g>
-    <text x="566" y="62" font-family="Iosevka, 'JetBrains Mono', monospace"
+    <text x="562" y="62" font-family="Iosevka, 'JetBrains Mono', monospace"
           font-size="12" fill="#565f89">τέλεια @ arch · session 01K3R7H · resumed · 3 tools, 1 turn</text>
   </g>
 
-  <!-- chat log block title -->
+  <!-- chat log title with λ -->
   <g font-family="Iosevka, 'JetBrains Mono', monospace" font-size="12">
-    <text x="58" y="96" fill="#bb9af7" font-weight="700">τέλεια</text>
-    <text x="115" y="96" fill="#565f89">@</text>
-    <text x="130" y="96" fill="#7dcfff" font-style="italic">arch</text>
+    <text x="58" y="96" fill="#7dcfff" font-weight="700">λ</text>
+    <text x="70" y="96" fill="#bb9af7" font-weight="700">τέλεια</text>
+    <text x="127" y="96" fill="#565f89">@</text>
+    <text x="142" y="96" fill="#7dcfff" font-style="italic">arch</text>
   </g>
 
   <!-- transcript -->
@@ -59,7 +62,7 @@
     <text x="68" y="190" fill="#bb9af7" font-weight="700">τέλεια</text>
     <text x="68" y="212" fill="#c0caf5">walking the tree with grep:</text>
 
-    <!-- tool call 1 — grep -->
+    <!-- tool call 1 — grep with scope-aware highlight -->
     <text x="68" y="244" fill="#e0af68">⚙ grep({"pattern":"TODO|FIXME","path":"crates"})</text>
     <text x="90" y="262" font-size="13">
       <tspan fill="#7dcfff">crates/telia-llm/src/lib.rs</tspan>
@@ -77,18 +80,18 @@
       <tspan fill="#c0caf5">// TODO: cancellation</tspan>
     </text>
 
-    <!-- tool call 2 — read on one of the hits -->
+    <!-- tool call 2 — read with syntax highlight (Rust function) -->
     <text x="68" y="326" fill="#e0af68">⚙ read({"path":"crates/telia-cli/src/mcp.rs"})</text>
     <text x="90" y="344" font-size="13">
-      <tspan fill="#bb9af7">async fn</tspan>
+      <tspan fill="#bb9af7" font-weight="700">async fn</tspan>
       <tspan fill="#c0caf5"> </tspan>
-      <tspan fill="#7aa2f7">call_tool</tspan>
+      <tspan fill="#7aa2f7" font-weight="700">call_tool</tspan>
       <tspan fill="#c0caf5">(&amp;</tspan>
-      <tspan fill="#bb9af7">mut</tspan>
+      <tspan fill="#bb9af7" font-weight="700">mut</tspan>
       <tspan fill="#c0caf5"> self, name: &amp;</tspan>
-      <tspan fill="#7aa2f7">str</tspan>
+      <tspan fill="#7dcfff">str</tspan>
       <tspan fill="#c0caf5">, args: &amp;</tspan>
-      <tspan fill="#7aa2f7">str</tspan>
+      <tspan fill="#7dcfff">str</tspan>
       <tspan fill="#c0caf5">) {</tspan>
     </text>
     <text x="108" y="360" font-size="13" fill="#565f89">…312 lines…</text>
@@ -103,7 +106,13 @@
     <text x="68" y="490" fill="#7aa2f7">· copied 124 chars to clipboard</text>
   </g>
 
-  <!-- permission prompt (BUILD-mode UX) -->
+  <!-- scrollbar (right edge of chat block) -->
+  <g>
+    <line x1="1018" y1="84" x2="1018" y2="503" stroke="#565f89" stroke-width="1" opacity="0.5"/>
+    <rect x="1017" y="380" width="3" height="80" fill="#bb9af7" rx="1"/>
+  </g>
+
+  <!-- permission prompt -->
   <g>
     <rect x="56" y="510" width="988" height="60" rx="4" fill="none" stroke="#e0af68" stroke-width="1.2"/>
     <text x="72" y="528" font-family="Iosevka, monospace" font-size="11" fill="#e0af68" font-weight="700">permission</text>
@@ -146,6 +155,6 @@
   <!-- footer hint -->
   <text x="550" y="708" text-anchor="middle"
         font-family="Iosevka, monospace" font-size="11" fill="#414868" font-style="italic">
-    Shift+Tab cycles PLAN · BUILD · AUTO · telia --resume picks up where you left off
+    Shift+Tab cycles PLAN · BUILD · AUTO · telia --resume picks up where you left off · powered by λ τέλεια
   </text>
 </svg>

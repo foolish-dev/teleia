@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" role="img" aria-label="τέλεια — a minimal TUI coding agent">
   <title>τέλεια</title>
   <defs>
-    <linearGradient id="t" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#7aa2f7"/>
-      <stop offset="0.55" stop-color="#9d8cf7"/>
+    <linearGradient id="t" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7dcfff"/>
+      <stop offset="0.5" stop-color="#7aa2f7"/>
       <stop offset="1" stop-color="#bb9af7"/>
       <animateTransform attributeName="gradientTransform" type="rotate"
                         from="0 0.5 0.5" to="360 0.5 0.5"
@@ -34,11 +34,13 @@
   <!-- dotted prompt rule under the wordmark line -->
   <line x1="324" y1="172" x2="1100" y2="172" stroke="#414868" stroke-width="1" stroke-dasharray="2 6" opacity="0.5"/>
 
-  <!-- Arch mountain mark + full-stop cursor block -->
-  <g transform="translate(96 70)">
-    <path d="M 80 0 L 0 150 L 45 150 L 80 90 L 115 150 L 160 150 Z"
-          fill="url(#t)"/>
-    <g transform="translate(168 132)">
+  <!-- λ mark + full-stop cursor block -->
+  <g transform="translate(140 150)">
+    <text x="0" y="0"
+          font-family="Iosevka, 'JetBrains Mono', 'IBM Plex Mono', Menlo, monospace"
+          font-size="200" font-weight="700"
+          text-anchor="middle" fill="url(#t)">λ</text>
+    <g transform="translate(64 -14)">
       <circle cx="9" cy="9" r="22" fill="url(#stopGlow)">
         <animate attributeName="opacity"
                  values="0.9;0.9;0.1;0.1;0.9"
@@ -72,12 +74,13 @@
 
     <text x="328" y="208" font-size="26" fill="#7dcfff" opacity="0.92">a minimal TUI coding agent</text>
 
+    <!-- BUILD chip + capability mini-row -->
     <g transform="translate(328 232)">
       <rect x="0" y="0" width="60" height="20" rx="3" fill="#9ece6a"/>
       <text x="30" y="14" text-anchor="middle" font-size="12" font-weight="700" fill="#1a1b26">BUILD</text>
-      <text x="74" y="14" font-size="13" fill="#565f89">15 providers · 130 models · 7 tools · MCP</text>
+      <text x="74" y="14" font-size="13" fill="#565f89">21 providers · 210 models · 22 tools · MCP · LSP</text>
     </g>
 
-    <text x="328" y="276" font-size="16" fill="#565f89" font-style="italic">telia · full stop</text>
+    <text x="328" y="276" font-size="16" fill="#565f89" font-style="italic">powered by λ τέλεια</text>
   </g>
 </svg>

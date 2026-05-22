@@ -1952,19 +1952,18 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
     };
     let input_height = (input_content_rows as u16) + 2; // + borders
 
-    // Breathing room around the prompt. Tall terminals get a blank row
-    // above + below the input box; cramped ones (<24 rows) drop the gaps
-    // so the chat log keeps as much screen as possible. Auto, not knobs.
-    let gap = if f.area().height >= 24 { 1 } else { 0 };
-
+    // No spacer rows around the prompt — the chat block's own border
+    // already separates it from the input box. Indices unchanged so
+    // existing chunks[3] (input) + chunks[5] (status) references
+    // stay valid; spacers collapse to zero-height.
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(3),               // 0 chat log
             Constraint::Length(menu_height),  // 1 menu
-            Constraint::Length(gap),          // 2 spacer above input
+            Constraint::Length(0),            // 2 (was spacer above input)
             Constraint::Length(input_height), // 3 input box
-            Constraint::Length(gap),          // 4 spacer below input
+            Constraint::Length(0),            // 4 (was spacer below input)
             Constraint::Length(1),            // 5 status bar
         ])
         .split(f.area());
@@ -1982,7 +1981,9 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
     // enough to spare, 1-row top padding when tall enough. Auto-shrinks
     // to zero on cramped screens so the transcript keeps the space.
     let h_pad = if f.area().width >= 60 { 1 } else { 0 };
-    let t_pad = if f.area().height >= 24 { 1 } else { 0 };
+    // Drop the top padding inside the chat block so transcripts use the
+    // full height — borders alone separate it from neighbours.
+    let t_pad: u16 = 0;
     // The visible content area = block height − borders (2) − top padding.
     // Without subtracting the padding, the auto-scroll math is off by one
     // and new streamed deltas can land behind the padding strip, looking
@@ -3028,7 +3029,6 @@ fn welcome_banner(width: u16, frame: usize) -> Vec<Line<'static>> {
 
     let mut out = Vec::new();
     out.push(Line::from(""));
-    out.push(Line::from(""));
 
     // Per-row gradient: a slow vertical sweep purple→blue→cyan
     // (top→bottom) plus a horizontal phase nudge that slides one cell
@@ -3070,8 +3070,6 @@ fn welcome_banner(width: u16, frame: usize) -> Vec<Line<'static>> {
         out.push(Line::from(""));
     }
 
-    out.push(Line::from(""));
-
     // Distro name beneath the art.
     let distro_name = distro_display_name(distro);
     let name_pad = (width as usize).saturating_sub(distro_name.chars().count()) / 2;
@@ -3082,8 +3080,6 @@ fn welcome_banner(width: u16, frame: usize) -> Vec<Line<'static>> {
             Style::default().fg(th.purple).add_modifier(Modifier::BOLD),
         ),
     ]));
-
-    out.push(Line::from(""));
 
     // Pixel-art λ — the telia brand mark, painted in the Tokyo Night
     // gradient (cyan → blue → purple top-down). Sits between the
@@ -3126,7 +3122,6 @@ fn welcome_banner(width: u16, frame: usize) -> Vec<Line<'static>> {
         "powered by λ τέλεια",
         Style::default().fg(th.dim).add_modifier(Modifier::ITALIC),
     ));
-    out.push(Line::from(""));
     out.push(Line::from(""));
     out.push(center(
         "Type to start · /help for commands · esc for normal mode",
@@ -3180,7 +3175,10 @@ fn render_assistant_lines(text: &str) -> Vec<Line<'static>> {
             code_buf.push_str(line);
             code_buf.push('\n');
         } else {
-            out.push(Line::from(line.to_string()));
+            out.push(Line::from(Span::styled(
+                line.to_string(),
+                Style::default().fg(theme().fg),
+            )));
         }
     }
 
@@ -3248,7 +3246,10 @@ fn render_entry(entry: &Entry, frame: usize, username: &str) -> Vec<Line<'static
                 Style::default().fg(th.cyan).add_modifier(Modifier::BOLD),
             )));
             for line in text.lines() {
-                out.push(Line::from(line.to_string()));
+                out.push(Line::from(Span::styled(
+                    line.to_string(),
+                    Style::default().fg(th.fg),
+                )));
             }
         }
         Entry::Assistant { text, complete } => {

@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="τέλεια">
-  <title>τέλεια</title>
+  <title>τέλεια — λ</title>
   <defs>
-    <linearGradient id="t" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#7aa2f7"/>
-      <stop offset="0.55" stop-color="#9d8cf7"/>
+    <linearGradient id="t" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7dcfff"/>
+      <stop offset="0.5" stop-color="#7aa2f7"/>
       <stop offset="1" stop-color="#bb9af7"/>
       <animateTransform attributeName="gradientTransform" type="rotate"
                         from="0 0.5 0.5" to="360 0.5 0.5"
@@ -27,21 +27,23 @@
   <rect x="10" y="10" width="236" height="236" rx="36" fill="none"
         stroke="#414868" stroke-width="1" opacity="0.55"/>
 
-  <!-- Arch mountain — chevron with inner notch -->
-  <path d="M 128 50 L 50 200 L 95 200 L 128 140 L 161 200 L 206 200 Z"
-        fill="url(#t)"/>
+  <!-- Greek lowercase λ rendered as a typographic glyph in the
+       gradient. Iosevka / JetBrains Mono / etc. all render this well;
+       fallbacks cover everywhere else. -->
+  <text x="118" y="188"
+        font-family="Iosevka, 'JetBrains Mono', 'IBM Plex Mono', Menlo, monospace"
+        font-size="200" font-weight="700"
+        text-anchor="middle" fill="url(#t)">λ</text>
 
-  <!-- full stop · terminal-cursor block sitting on the baseline of
-       the mountain. Red signature kept, but a square block + soft
-       halo reads as "end-of-prompt cursor" rather than a dot. -->
+  <!-- full stop · terminal-cursor block, soft red halo -->
   <g>
-    <circle cx="216" cy="200" r="22" fill="url(#stopGlow)">
+    <circle cx="206" cy="200" r="22" fill="url(#stopGlow)">
       <animate attributeName="opacity"
                values="0.9;0.9;0.1;0.1;0.9"
                keyTimes="0;0.5;0.5;1;1"
                dur="1.06s" repeatCount="indefinite"/>
     </circle>
-    <rect x="206" y="190" width="20" height="20" rx="3" fill="#f7768e">
+    <rect x="196" y="190" width="20" height="20" rx="3" fill="#f7768e">
       <animate attributeName="opacity"
                values="1;1;0.2;0.2;1"
                keyTimes="0;0.5;0.5;1;1"
