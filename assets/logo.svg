@@ -3,24 +3,36 @@
   <defs>
     <linearGradient id="t" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#7aa2f7"/>
+      <stop offset="0.55" stop-color="#9d8cf7"/>
       <stop offset="1" stop-color="#bb9af7"/>
       <animateTransform attributeName="gradientTransform" type="rotate"
                         from="0 0.5 0.5" to="360 0.5 0.5"
-                        dur="18s" repeatCount="indefinite"/>
+                        dur="22s" repeatCount="indefinite"/>
     </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.45" r="0.7">
+      <stop offset="0" stop-color="#7dcfff" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#7dcfff" stop-opacity="0"/>
+    </radialGradient>
   </defs>
-  <rect width="256" height="256" rx="40" fill="#1a1b26"/>
-  <!-- inner accent ring -->
-  <rect x="14" y="14" width="228" height="228" rx="32" fill="none" stroke="#414868" stroke-width="1" opacity="0.6"/>
-  <!-- T mark -->
+
+  <!-- card -->
+  <rect width="256" height="256" rx="44" fill="#1a1b26"/>
+  <rect width="256" height="256" rx="44" fill="url(#glow)"/>
+
+  <!-- thin accent border -->
+  <rect x="10" y="10" width="236" height="236" rx="36" fill="none"
+        stroke="#414868" stroke-width="1" opacity="0.55"/>
+
+  <!-- Τ — Greek capital tau, drawn with rounded plate caps -->
   <g fill="url(#t)">
-    <rect x="52" y="60" width="152" height="28" rx="6"/>
-    <rect x="114" y="60" width="28" height="132" rx="6"/>
+    <rect x="48" y="60" width="160" height="30" rx="7"/>
+    <rect x="113" y="60" width="30" height="138" rx="7"/>
   </g>
-  <!-- greek period dot, slightly larger for icon prominence -->
-  <circle cx="184" cy="188" r="16" fill="#f7768e">
+
+  <!-- Greek period · the "full stop" telia is named after -->
+  <circle cx="184" cy="192" r="14" fill="#f7768e">
     <animate attributeName="opacity"
-             values="1;1;0;0;1"
+             values="1;1;0.2;0.2;1"
              keyTimes="0;0.5;0.5;1;1"
              dur="1.06s" repeatCount="indefinite"/>
   </circle>

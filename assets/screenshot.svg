@@ -2,12 +2,16 @@
   <title>τέλεια TUI</title>
   <defs>
     <filter id="shadow" x="-5%" y="-5%" width="110%" height="115%">
-      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#000" flood-opacity="0.4"/>
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#000" flood-opacity="0.45"/>
     </filter>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0e0f17"/>
+      <stop offset="1" stop-color="#13141d"/>
+    </linearGradient>
   </defs>
 
   <!-- page bg -->
-  <rect width="1100" height="720" fill="#0f1018"/>
+  <rect width="1100" height="720" fill="url(#bg)"/>
 
   <!-- terminal frame -->
   <g filter="url(#shadow)">
@@ -20,10 +24,10 @@
     <circle cx="104" cy="57" r="6" fill="#9ece6a"/>
     <text x="550" y="62" text-anchor="middle"
           font-family="Iosevka, 'JetBrains Mono', monospace"
-          font-size="12" fill="#565f89">τέλεια @ arch · session 01K3R7H · 2 tools, 1 turn</text>
+          font-size="12" fill="#565f89">τέλεια @ arch · session 01K3R7H · resumed · 3 tools, 1 turn</text>
   </g>
 
-  <!-- log block title with hostname -->
+  <!-- chat log block title -->
   <g font-family="Iosevka, 'JetBrains Mono', monospace" font-size="12">
     <text x="58" y="96" fill="#bb9af7" font-weight="700">τέλεια</text>
     <text x="115" y="96" fill="#565f89">@</text>
@@ -32,97 +36,103 @@
 
   <!-- transcript -->
   <g font-family="Iosevka, 'JetBrains Mono', 'IBM Plex Mono', monospace" font-size="14">
-    <!-- user 1 (header = username) -->
+    <!-- user 1 -->
     <text x="68" y="130" fill="#7dcfff" font-weight="700">fool</text>
-    <text x="68" y="152" fill="#c0caf5">audit crates/telia-agent for dead code</text>
+    <text x="68" y="152" fill="#c0caf5">find every TODO in the workspace and group them by crate</text>
 
     <!-- assistant 1 -->
-    <text x="68" y="192" fill="#bb9af7" font-weight="700">τέλεια</text>
-    <text x="68" y="214" fill="#c0caf5">reading the agent module now</text>
+    <text x="68" y="190" fill="#bb9af7" font-weight="700">τέλεια</text>
+    <text x="68" y="212" fill="#c0caf5">walking the tree with grep:</text>
 
-    <!-- tool call 1 — read with syntect-style highlight -->
-    <text x="68" y="246" fill="#e0af68">⚙ read({"path":"crates/telia-agent/src/lib.rs"})</text>
-    <text x="90" y="266" font-size="13">
-      <tspan fill="#bb9af7">use</tspan>
-      <tspan fill="#c0caf5"> </tspan>
-      <tspan fill="#7dcfff">telia_llm</tspan>
-      <tspan fill="#c0caf5">::{</tspan>
-      <tspan fill="#7aa2f7">ChatEvent</tspan>
-      <tspan fill="#c0caf5">, </tspan>
-      <tspan fill="#7aa2f7">LlmClient</tspan>
-      <tspan fill="#c0caf5">, </tspan>
-      <tspan fill="#7aa2f7">Message</tspan>
-      <tspan fill="#c0caf5">};</tspan>
+    <!-- tool call 1 — grep -->
+    <text x="68" y="244" fill="#e0af68">⚙ grep({"pattern":"TODO|FIXME","path":"crates"})</text>
+    <text x="90" y="262" font-size="13">
+      <tspan fill="#7dcfff">crates/telia-llm/src/lib.rs</tspan>
+      <tspan fill="#565f89">:142:</tspan>
+      <tspan fill="#c0caf5">// TODO: surface refusal reason</tspan>
     </text>
-    <text x="90" y="282" font-size="13">
-      <tspan fill="#bb9af7">pub</tspan>
-      <tspan fill="#c0caf5"> </tspan>
-      <tspan fill="#bb9af7">struct</tspan>
-      <tspan fill="#c0caf5"> </tspan>
-      <tspan fill="#7aa2f7">Agent</tspan>
-      <tspan fill="#c0caf5"> {</tspan>
+    <text x="90" y="278" font-size="13">
+      <tspan fill="#7dcfff">crates/telia-cli/src/tui.rs</tspan>
+      <tspan fill="#565f89">:881:</tspan>
+      <tspan fill="#c0caf5">// FIXME: handle CJK width</tspan>
     </text>
-    <text x="108" y="298" font-size="13">
-      <tspan fill="#c0caf5">llm: </tspan>
-      <tspan fill="#7aa2f7">LlmClient</tspan>
-      <tspan fill="#c0caf5">, tokens: </tspan>
-      <tspan fill="#7aa2f7">TokenCounts</tspan>
-      <tspan fill="#c0caf5">,</tspan>
+    <text x="90" y="294" font-size="13">
+      <tspan fill="#7dcfff">crates/telia-cli/src/mcp.rs</tspan>
+      <tspan fill="#565f89">:178:</tspan>
+      <tspan fill="#c0caf5">// TODO: cancellation</tspan>
     </text>
-    <text x="90" y="316" fill="#565f89" font-size="13">…204 lines…</text>
 
-    <!-- assistant 2 (streaming, with blink cursor) -->
-    <text x="68" y="354" fill="#bb9af7" font-weight="700">τέλεια ▌</text>
-    <text x="68" y="376" fill="#c0caf5">one issue: tool_queue (lines 88-99) is never</text>
-    <text x="68" y="394" fill="#c0caf5">pushed to. dispatch happens inline at line 132,</text>
-    <text x="68" y="412" fill="#c0caf5">so the queue and its drain loop are dead.</text>
+    <!-- tool call 2 — read on one of the hits -->
+    <text x="68" y="326" fill="#e0af68">⚙ read({"path":"crates/telia-cli/src/mcp.rs"})</text>
+    <text x="90" y="344" font-size="13">
+      <tspan fill="#bb9af7">async fn</tspan>
+      <tspan fill="#c0caf5"> </tspan>
+      <tspan fill="#7aa2f7">call_tool</tspan>
+      <tspan fill="#c0caf5">(&amp;</tspan>
+      <tspan fill="#bb9af7">mut</tspan>
+      <tspan fill="#c0caf5"> self, name: &amp;</tspan>
+      <tspan fill="#7aa2f7">str</tspan>
+      <tspan fill="#c0caf5">, args: &amp;</tspan>
+      <tspan fill="#7aa2f7">str</tspan>
+      <tspan fill="#c0caf5">) {</tspan>
+    </text>
+    <text x="108" y="360" font-size="13" fill="#565f89">…312 lines…</text>
 
-    <!-- tool call 2 — edit with running spinner -->
-    <text x="68" y="444" fill="#e0af68">⚙ ⠹ edit({"path":"crates/telia-agent/src/lib.rs",…})</text>
-    <text x="90" y="464" fill="#565f89" font-size="13">edited crates/telia-agent/src/lib.rs</text>
+    <!-- assistant 2 (streaming) -->
+    <text x="68" y="396" fill="#bb9af7" font-weight="700">τέλεια ▌</text>
+    <text x="68" y="418" fill="#c0caf5">three TODOs total, one per crate:</text>
+    <text x="68" y="436" fill="#c0caf5">  · telia-llm  · refusal surfacing</text>
+    <text x="68" y="454" fill="#c0caf5">  · telia-cli  · CJK width + MCP cancellation</text>
 
     <!-- info line -->
-    <text x="68" y="500" fill="#7aa2f7">· saved current session as 'audit-pass-1'</text>
+    <text x="68" y="490" fill="#7aa2f7">· copied 124 chars to clipboard</text>
   </g>
 
-  <!-- drop-down menu mock (the kind that pops when typing "/m") -->
+  <!-- permission prompt (the kind that pops in BUILD mode) -->
   <g>
-    <rect x="56" y="528" width="280" height="62" rx="4" fill="none" stroke="#565f89" stroke-width="1"/>
-    <text x="72" y="544" font-family="Iosevka, monospace" font-size="11" fill="#7aa2f7" font-weight="700">commands</text>
-    <text x="72" y="564" font-family="Iosevka, monospace" font-size="13">
-      <tspan fill="#c0caf5" font-weight="700">❯ model</tspan>
+    <rect x="56" y="510" width="988" height="60" rx="4" fill="none" stroke="#e0af68" stroke-width="1.2"/>
+    <text x="72" y="528" font-family="Iosevka, monospace" font-size="11" fill="#e0af68" font-weight="700">permission</text>
+    <text x="72" y="546" font-family="Iosevka, monospace" font-size="13">
+      <tspan fill="#565f89">approve </tspan>
+      <tspan fill="#bb9af7" font-weight="700">edit</tspan>
+      <tspan fill="#565f89">(</tspan>
+      <tspan fill="#c0caf5">crates/telia-llm/src/lib.rs, "// TODO:…", "// done:…"</tspan>
+      <tspan fill="#565f89">) ?</tspan>
     </text>
-    <text x="72" y="580" font-family="Iosevka, monospace" font-size="13" fill="#565f89">  notify</text>
-  </g>
-
-  <!-- input box with mode-coloured border (Insert = cyan) -->
-  <g>
-    <rect x="344" y="528" width="700" height="44" rx="8" fill="none" stroke="#7dcfff" stroke-width="1.2"/>
-    <text x="360" y="556" font-family="Iosevka, monospace" font-size="14" fill="#7dcfff">&gt;</text>
-    <text x="380" y="556" font-family="Iosevka, monospace" font-size="14" fill="#c0caf5">/m</text>
-    <text x="406" y="556" font-family="Iosevka, monospace" font-size="14" fill="#565f89">odel [NAME]</text>
-    <rect x="402" y="544" width="2" height="16" fill="#c0caf5">
-      <animate attributeName="opacity" values="1;1;0;0;1" keyTimes="0;0.5;0.5;1;1" dur="1.06s" repeatCount="indefinite"/>
-    </rect>
+    <text x="72" y="562" font-family="Iosevka, monospace" font-size="13">
+      <tspan fill="#9ece6a" font-weight="700">y</tspan>
+      <tspan fill="#565f89">es · </tspan>
+      <tspan fill="#f7768e" font-weight="700">n</tspan>
+      <tspan fill="#565f89">o · </tspan>
+      <tspan fill="#e0af68" font-weight="700">a</tspan>
+      <tspan fill="#565f89">uto (allow all for this session)</tspan>
+    </text>
   </g>
 
   <!-- status bar -->
   <g font-family="Iosevka, monospace" font-size="12">
     <!-- mode chip -->
-    <rect x="56" y="596" width="28" height="16" fill="#7dcfff"/>
-    <text x="70" y="608" text-anchor="middle" font-weight="700" fill="#1a1b26">INS</text>
-    <text x="92" y="608" fill="#565f89">·</text>
-    <text x="100" y="608" fill="#565f89" font-style="italic">⠋ thinking·.. </text>
+    <rect x="56" y="596" width="32" height="16" fill="#7dcfff"/>
+    <text x="72" y="608" text-anchor="middle" font-weight="700" fill="#1a1b26">INS</text>
+    <text x="94" y="608" fill="#565f89">·</text>
+    <text x="104" y="608" fill="#bb9af7">⠋</text>
+    <text x="116" y="608" fill="#bb9af7" font-style="italic">thinking</text>
+    <text x="178" y="608" fill="#bb9af7" font-weight="700">.</text>
+    <text x="184" y="608" fill="#565f89">..</text>
     <text x="200" y="608" fill="#565f89">·</text>
-    <text x="210" y="608" fill="#7aa2f7" font-style="italic">Thanatos-27B</text>
-    <text x="310" y="608" fill="#565f89">·</text>
-    <text x="320" y="608" fill="#e0af68">↑1.2k ↓450</text>
-    <text x="430" y="608" fill="#565f89">   ↵ send · esc normal · tab accept · /help</text>
+    <text x="210" y="608" fill="#7aa2f7" font-style="italic">claude-opus-4-7</text>
+    <text x="338" y="608" fill="#565f89">·</text>
+    <text x="348" y="608" fill="#e0af68">↑12.4k ↓3.1k</text>
+    <text x="442" y="608" fill="#565f89">·</text>
+    <!-- BUILD permission chip -->
+    <rect x="454" y="599" width="46" height="14" fill="#9ece6a"/>
+    <text x="477" y="610" text-anchor="middle" font-weight="700" font-size="11" fill="#1a1b26">BUILD</text>
+    <text x="520" y="608" fill="#565f89">y/n/a · esc cancel</text>
   </g>
 
   <!-- hint footer outside the terminal -->
   <text x="550" y="708" text-anchor="middle"
         font-family="Iosevka, monospace" font-size="11" fill="#414868" font-style="italic">
-    Tokyo Night theme · /theme catppuccin · /theme dracula
+    Shift+Tab cycles PLAN · BUILD · AUTO · telia --resume picks up where you left off
   </text>
 </svg>
