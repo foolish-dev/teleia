@@ -1,3 +1,4 @@
+mod config;
 mod highlight;
 mod tui;
 
@@ -100,9 +101,27 @@ async fn main() -> Result<()> {
         );
     }
 
-    // Resolve provider — explicit CLI overrides win, otherwise auto-detect
-    // from the model name (Anthropic / OpenAI / Ollama).
-    let (auto_url, auto_key) = detect_endpoint(&args.model);
+    // Optional user config — register custom LLM endpoints + LSP servers.
+    let cfg = config::load();
+    if !cfg.lsps.is_empty() {
+        eprintln!(
+            "note: {} LSP entr{} loaded from config (LSP runtime not yet wired)",
+            cfg.lsps.len(),
+            if cfg.lsps.len() == 1 { "y" } else { "ies" }
+        );
+    }
+
+    // Resolve provider:
+    //   1. Explicit --base-url / --api-key win.
+    //   2. Otherwise, if the model matches a configured [llms.NAME] entry,
+    //      take base_url + api_key from there.
+    //   3. Otherwise fall back to detect_endpoint's prefix detection
+    //      (claude-* → Anthropic, gpt-* → OpenAI, else Ollama).
+    let (auto_url, auto_key) = if let Some(entry) = cfg.llms.get(&args.model) {
+        (entry.base_url.clone(), entry.resolve_key())
+    } else {
+        detect_endpoint(&args.model)
+    };
     let base_url = args.base_url.unwrap_or(auto_url);
     let api_key = args.api_key.or(auto_key);
 
@@ -131,6 +150,8 @@ async fn main() -> Result<()> {
     // every keypress.
     agent.refresh_models().await;
     agent.extend_models(KNOWN_CLOUD_MODELS.iter().copied());
+    // Custom LLM names from config become first-class /model targets too.
+    agent.extend_models(cfg.llms.keys().cloned());
 
     tui::run(agent).await
 }

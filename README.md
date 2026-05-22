@@ -94,6 +94,39 @@ Defaults:
 
 Sessions live in `$XDG_DATA_HOME/telia/telia.sqlite` (falls back to `~/.local/share/telia/telia.sqlite` when `XDG_DATA_HOME` is unset). Set `XDG_DATA_HOME` to move it.
 
+### Config file
+
+Optional TOML at `$XDG_CONFIG_HOME/telia/config.toml` (falls back to `~/.config/telia/config.toml`). Used to register custom LLMs and LSP servers without touching the source:
+
+```toml
+# Add a custom LLM. Passing `--model groq-llama` (or `/model groq-llama`)
+# routes the chat request through this endpoint and pulls the key from
+# `api_key_env` (preferred) or `api_key` (inline string). The name shows
+# up in the /model dropdown alongside Ollama-cached + the default cloud
+# entries.
+[llms.groq-llama]
+base_url    = "https://api.groq.com/openai/v1"
+api_key_env = "GROQ_API_KEY"
+
+[llms.openrouter-sonnet]
+base_url    = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+
+# Register an LSP server. Parsed today, ready to be wired into the
+# tool-dispatch loop when LSP support lands — same placeholder
+# treatment as `[mcpServers]` below.
+[lsps.rust]
+command       = "rust-analyzer"
+args          = []
+root_patterns = ["Cargo.toml"]
+
+[lsps.python]
+command       = "pylsp"
+root_patterns = ["pyproject.toml", "setup.py"]
+```
+
+Resolution order for `--model NAME` (and `/model NAME` mid-session): explicit `--base-url` / `--api-key` win; otherwise a matching `[llms.NAME]` entry; otherwise the prefix rule (`claude-*` → Anthropic, `gpt-*`/`o1*`/`o3*` → OpenAI, else Ollama). Parse errors print a warning on stderr at startup and fall back to empty config.
+
 ### MCP
 
 Not yet supported. The roadmap is to read an Anthropic-style MCP config — likely the same shape Claude Desktop uses:
