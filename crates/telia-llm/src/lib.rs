@@ -247,6 +247,52 @@ pub const PROVIDERS: &[Provider] = &[
         // `openrouter:` prefix only.
         prefixes: &[],
     },
+    Provider {
+        name: "Cohere",
+        // OpenAI-compatible endpoint; the native `/v1/chat` uses a
+        // different request shape so we point at /compatibility/v1.
+        base_url: "https://api.cohere.ai/compatibility/v1",
+        env_var: "COHERE_API_KEY",
+        prefixes: &["command-"],
+    },
+    Provider {
+        name: "Perplexity",
+        base_url: "https://api.perplexity.ai",
+        env_var: "PERPLEXITY_API_KEY",
+        prefixes: &["sonar"],
+    },
+    Provider {
+        name: "Together",
+        base_url: "https://api.together.xyz/v1",
+        env_var: "TOGETHER_API_KEY",
+        // Together hosts open models whose names collide with Ollama;
+        // explicit `together:` prefix only.
+        prefixes: &[],
+    },
+    Provider {
+        name: "Fireworks",
+        base_url: "https://api.fireworks.ai/inference/v1",
+        env_var: "FIREWORKS_API_KEY",
+        prefixes: &[],
+    },
+    Provider {
+        name: "Cerebras",
+        base_url: "https://api.cerebras.ai/v1",
+        env_var: "CEREBRAS_API_KEY",
+        prefixes: &[],
+    },
+    Provider {
+        name: "Hyperbolic",
+        base_url: "https://api.hyperbolic.xyz/v1",
+        env_var: "HYPERBOLIC_API_KEY",
+        prefixes: &[],
+    },
+    Provider {
+        name: "Nvidia",
+        base_url: "https://integrate.api.nvidia.com/v1",
+        env_var: "NVIDIA_API_KEY",
+        prefixes: &[],
+    },
 ];
 
 /// Resolve a model name to its provider. Checks the explicit

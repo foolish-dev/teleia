@@ -34,9 +34,82 @@ impl Store {
                 name TEXT PRIMARY KEY,
                 session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
                 created_at INTEGER NOT NULL
-            );",
+            );
+            CREATE TABLE IF NOT EXISTS prefs (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS input_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                line TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_input_history_time
+                ON input_history(created_at DESC);",
         )?;
         Ok(Self { conn })
+    }
+
+    /// Persist a key→value preference (theme, permission_mode, notify…).
+    /// Idempotent — same key overwrites.
+    pub fn set_pref(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO prefs (key, value) VALUES (?1, ?2)",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_pref(&self, key: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT value FROM prefs WHERE key = ?1",
+                params![key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?)
+    }
+
+    /// Append one submitted input line to the persistent readline
+    /// history. Skipped when the line is empty or duplicates the most
+    /// recent entry (shell-style dedup).
+    pub fn push_input_history(&self, line: &str) -> Result<()> {
+        if line.is_empty() {
+            return Ok(());
+        }
+        let last: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT line FROM input_history ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if last.as_deref() == Some(line) {
+            return Ok(());
+        }
+        self.conn.execute(
+            "INSERT INTO input_history (line, created_at) VALUES (?1, ?2)",
+            params![line, unix_seconds()],
+        )?;
+        Ok(())
+    }
+
+    /// Recent input history (most recent last), capped at `limit` so an
+    /// ancient runaway log doesn't blow startup memory.
+    pub fn input_history(&self, limit: usize) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT line FROM (
+                SELECT line, id FROM input_history ORDER BY id DESC LIMIT ?1
+            ) ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |row| row.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 
     pub fn create_session(&self, model: &str) -> Result<String> {

@@ -49,6 +49,7 @@ fn set_mode(state: &mut State, agent: &mut Agent, mode: PermissionMode) {
     }
     agent.set_permission_mode(mode);
     state.permission_mode = mode;
+    agent.set_pref("permission_mode", mode.label_canonical());
     let blurb = match mode {
         PermissionMode::Plan => {
             "plan mode — read/list/glob/grep run; write/edit/bash are blocked. Use Shift+Tab or /build to execute."
@@ -467,6 +468,11 @@ pub async fn run(mut agent: Agent) -> Result<()> {
 
     let mut state = State::new(agent.session_id(), agent.model());
     state.permission_mode = agent.permission_mode();
+    // Restore readline history + notify preference from prior runs.
+    state.input_history = agent.input_history(500);
+    if let Some(v) = agent.get_pref("notify") {
+        state.notify = v == "on";
+    }
     let result = event_loop(&mut terminal, &mut state, &mut agent).await;
 
     disable_raw_mode()?;
@@ -788,6 +794,7 @@ async fn submit_input<B: ratatui::backend::Backend>(
     // Record into readline-style history (dedupe consecutive repeats).
     if state.input_history.last().map(String::as_str) != Some(trimmed) {
         state.input_history.push(trimmed.to_string());
+        agent.push_input_history(trimmed);
     }
     if let Some(cmd) = trimmed.strip_prefix('/') {
         handle_slash(state, agent, cmd);
@@ -1569,6 +1576,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                     names
                 )));
             } else if let Some(canonical) = set_theme(arg) {
+                agent.set_pref("theme", canonical);
                 state.push(Entry::Info(format!("switched theme to {canonical}")));
             } else {
                 state.push(Entry::Error(format!(
@@ -1608,6 +1616,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                 }
             };
             state.notify = new;
+            agent.set_pref("notify", if new { "on" } else { "off" });
             state.push(Entry::Info(format!(
                 "desktop notifications {}",
                 if new { "on" } else { "off" }

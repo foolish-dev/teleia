@@ -26,6 +26,21 @@ pub struct Config {
     pub llms: BTreeMap<String, LlmEntry>,
     #[serde(default)]
     pub lsps: BTreeMap<String, LspEntry>,
+    #[serde(default)]
+    pub mcps: BTreeMap<String, McpEntry>,
+}
+
+/// MCP (Model Context Protocol) server. telia spawns the command on
+/// startup, exchanges an `initialize` handshake, lists the server's
+/// tools, and merges them into the agent's tool catalogue. `env`
+/// values override the parent process for the spawned child only.
+#[derive(Debug, Clone, Deserialize)]
+pub struct McpEntry {
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

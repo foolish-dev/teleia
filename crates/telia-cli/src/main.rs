@@ -1,5 +1,6 @@
 mod config;
 mod highlight;
+mod mcp;
 mod tui;
 
 use anyhow::Result;
@@ -42,8 +43,11 @@ const KNOWN_CLOUD_MODELS: &[&str] = &[
     "claude-haiku-4-5",
     "claude-3-7-sonnet-latest",
     "claude-3-5-sonnet-20241022",
+    "claude-3-5-sonnet-20240620",
     "claude-3-5-haiku-20241022",
     "claude-3-opus-20240229",
+    "claude-3-sonnet-20240229",
+    "claude-3-haiku-20240307",
 
     // ---------- OpenAI ----------
     "gpt-5",
@@ -61,6 +65,8 @@ const KNOWN_CLOUD_MODELS: &[&str] = &[
     "o1",
     "o1-mini",
     "o1-pro",
+    "o1-preview",
+    "chatgpt-4o-latest",
 
     // ---------- Google ----------
     "gemini-2.5-pro",
@@ -70,6 +76,8 @@ const KNOWN_CLOUD_MODELS: &[&str] = &[
     "gemini-2.0-flash-lite",
     "gemini-1.5-pro",
     "gemini-1.5-flash",
+    "gemini-1.5-flash-8b",
+    "gemini-exp-1206",
 
     // ---------- xAI ----------
     "grok-4",
@@ -128,6 +136,61 @@ const KNOWN_CLOUD_MODELS: &[&str] = &[
     "openrouter:mistralai/mistral-large-2411",
     "openrouter:mistralai/codestral-2501",
     "openrouter:nvidia/llama-3.1-nemotron-70b-instruct",
+
+    // ---------- Cohere ----------
+    "command-a-03-2025",
+    "command-r-plus",
+    "command-r",
+    "command-r-08-2024",
+    "command-r7b-12-2024",
+
+    // ---------- Perplexity (web-search-augmented) ----------
+    "sonar",
+    "sonar-pro",
+    "sonar-reasoning",
+    "sonar-reasoning-pro",
+    "sonar-deep-research",
+
+    // ---------- Together AI (explicit prefix; hosts open models) ----------
+    "together:meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    "together:meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
+    "together:meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
+    "together:meta-llama/Llama-4-Scout-17B-16E-Instruct",
+    "together:Qwen/Qwen2.5-Coder-32B-Instruct",
+    "together:Qwen/Qwen2.5-72B-Instruct-Turbo",
+    "together:deepseek-ai/DeepSeek-V3",
+    "together:deepseek-ai/DeepSeek-R1",
+    "together:mistralai/Mixtral-8x22B-Instruct-v0.1",
+
+    // ---------- Fireworks AI ----------
+    "fireworks:accounts/fireworks/models/llama-v3p3-70b-instruct",
+    "fireworks:accounts/fireworks/models/llama4-maverick-instruct-basic",
+    "fireworks:accounts/fireworks/models/llama4-scout-instruct-basic",
+    "fireworks:accounts/fireworks/models/qwen2p5-coder-32b-instruct",
+    "fireworks:accounts/fireworks/models/qwen2p5-72b-instruct",
+    "fireworks:accounts/fireworks/models/deepseek-v3",
+    "fireworks:accounts/fireworks/models/deepseek-r1",
+
+    // ---------- Cerebras (extremely fast inference, small model menu) ----------
+    "cerebras:llama-3.3-70b",
+    "cerebras:llama3.1-8b",
+    "cerebras:llama-4-scout-17b-16e-instruct",
+    "cerebras:qwen-3-32b",
+
+    // ---------- Hyperbolic ----------
+    "hyperbolic:meta-llama/Meta-Llama-3.1-405B-Instruct",
+    "hyperbolic:meta-llama/Llama-3.3-70B-Instruct",
+    "hyperbolic:Qwen/Qwen2.5-Coder-32B-Instruct",
+    "hyperbolic:deepseek-ai/DeepSeek-V3",
+    "hyperbolic:deepseek-ai/DeepSeek-R1",
+
+    // ---------- NVIDIA NIM ----------
+    "nvidia:meta/llama-3.3-70b-instruct",
+    "nvidia:meta/llama-4-maverick-17b-128e-instruct",
+    "nvidia:meta/llama-4-scout-17b-16e-instruct",
+    "nvidia:nvidia/llama-3.1-nemotron-70b-instruct",
+    "nvidia:deepseek-ai/deepseek-r1",
+    "nvidia:qwen/qwen2.5-coder-32b-instruct",
 ];
 
 #[derive(Parser, Debug)]
@@ -170,8 +233,11 @@ struct Args {
     /// API key for cloud backends. Falls back to the env var for the
     /// detected provider — $ANTHROPIC_API_KEY, $OPENAI_API_KEY,
     /// $GEMINI_API_KEY, $XAI_API_KEY, $DEEPSEEK_API_KEY,
-    /// $MISTRAL_API_KEY, $GROQ_API_KEY, $OPENROUTER_API_KEY. Run /keys
-    /// inside telia to see which are set. Ignored for Ollama.
+    /// $MISTRAL_API_KEY, $COHERE_API_KEY, $PERPLEXITY_API_KEY,
+    /// $GROQ_API_KEY, $OPENROUTER_API_KEY, $TOGETHER_API_KEY,
+    /// $FIREWORKS_API_KEY, $CEREBRAS_API_KEY, $HYPERBOLIC_API_KEY,
+    /// $NVIDIA_API_KEY. Run /keys inside telia to see which are set.
+    /// Ignored for Ollama.
     #[arg(long)]
     api_key: Option<String>,
     /// Colour theme. Known: tokyo-night (default), catppuccin, dracula.
@@ -200,6 +266,12 @@ struct Args {
     /// mid-session with `/build` (or Shift+Tab).
     #[arg(long, conflicts_with = "auto")]
     plan: bool,
+    /// Resume the most recent session instead of starting a fresh one.
+    /// Every session is auto-bookmarked as `last` at startup; `/reset`
+    /// rotates the bookmark to `prev` before opening a new session, so
+    /// the previous-but-one is also recoverable via `/load prev`.
+    #[arg(long, alias = "continue", short = 'r')]
+    resume: bool,
 }
 
 #[tokio::main]
@@ -218,7 +290,7 @@ async fn main() -> Result<()> {
         );
     }
 
-    // Optional user config — register custom LLM endpoints + LSP servers.
+    // Optional user config — register custom LLM endpoints + MCP / LSP servers.
     let cfg = config::load();
     if !cfg.lsps.is_empty() {
         eprintln!(
@@ -273,7 +345,34 @@ async fn main() -> Result<()> {
 
     let llm = LlmClient::with_api_key(base_url, args.model, api_key);
     let store = Store::open()?;
-    let mut agent = Agent::new(llm, store)?;
+    let mut agent = if args.resume {
+        let resumed = Agent::resume(llm, store)?;
+        let n = resumed.session_id().len().min(12);
+        eprintln!(
+            "· resumed session {} ({} messages)",
+            &resumed.session_id()[..n],
+            resumed.message_count()
+        );
+        resumed
+    } else {
+        Agent::new(llm, store)?
+    };
+    // Restore sticky preferences from prior runs before applying CLI
+    // overrides. First-launch users see the existing defaults because
+    // get_pref returns None.
+    if let Some(mode) = agent.get_pref("permission_mode") {
+        match mode.as_str() {
+            "Plan" => agent.set_permission_mode(telia_agent::PermissionMode::Plan),
+            "Build" => agent.set_permission_mode(telia_agent::PermissionMode::Build),
+            "Auto" => agent.set_permission_mode(telia_agent::PermissionMode::Auto),
+            _ => {}
+        }
+    }
+    if args.theme == "tokyo-night" {
+        if let Some(theme) = agent.get_pref("theme") {
+            let _ = tui::set_theme(&theme);
+        }
+    }
     if args.auto {
         agent.set_permission_mode(telia_agent::PermissionMode::Auto);
         eprintln!("· auto mode ON (--auto). Tool calls will dispatch without prompting.");
@@ -288,6 +387,23 @@ async fn main() -> Result<()> {
     agent.extend_models(KNOWN_CLOUD_MODELS.iter().copied());
     // Custom LLM names from config become first-class /model targets too.
     agent.extend_models(cfg.llms.keys().cloned());
+
+    // Boot MCP servers (if any). Each surfaces its tool catalogue,
+    // which is merged into the agent's tool list. Spawn failures are
+    // already reported on stderr by the registry; we keep booting.
+    if !cfg.mcps.is_empty() {
+        let registry = mcp::McpRegistry::spawn_all(cfg.mcps.iter()).await;
+        let tools = registry.tool_count();
+        let servers = registry.server_count();
+        if servers > 0 {
+            eprintln!(
+                "· {servers} MCP server{} connected ({tools} tool{})",
+                if servers == 1 { "" } else { "s" },
+                if tools == 1 { "" } else { "s" }
+            );
+            agent.set_tool_router(Box::new(registry));
+        }
+    }
 
     tui::run(agent).await
 }

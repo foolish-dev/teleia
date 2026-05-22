@@ -65,11 +65,18 @@ The model name picks the provider automatically. For names whose prefixes collid
 | `grok-*`                                         | xAI          | `https://api.x.ai/v1`                                        | `XAI_API_KEY`          |
 | `deepseek-*`                                     | DeepSeek     | `https://api.deepseek.com/v1`                                | `DEEPSEEK_API_KEY`     |
 | `mistral-*`, `codestral-*`                       | Mistral      | `https://api.mistral.ai/v1`                                  | `MISTRAL_API_KEY`      |
+| `command-*`                                      | Cohere       | `https://api.cohere.ai/compatibility/v1`                     | `COHERE_API_KEY`       |
+| `sonar*`                                         | Perplexity   | `https://api.perplexity.ai`                                  | `PERPLEXITY_API_KEY`   |
 | `groq:NAME`                                      | Groq         | `https://api.groq.com/openai/v1`                             | `GROQ_API_KEY`         |
 | `openrouter:NAME`                                | OpenRouter   | `https://openrouter.ai/api/v1`                               | `OPENROUTER_API_KEY`   |
+| `together:NAME`                                  | Together     | `https://api.together.xyz/v1`                                | `TOGETHER_API_KEY`     |
+| `fireworks:NAME`                                 | Fireworks    | `https://api.fireworks.ai/inference/v1`                      | `FIREWORKS_API_KEY`    |
+| `cerebras:NAME`                                  | Cerebras     | `https://api.cerebras.ai/v1`                                 | `CEREBRAS_API_KEY`     |
+| `hyperbolic:NAME`                                | Hyperbolic   | `https://api.hyperbolic.xyz/v1`                              | `HYPERBOLIC_API_KEY`   |
+| `nvidia:NAME`                                    | NVIDIA NIM   | `https://integrate.api.nvidia.com/v1`                        | `NVIDIA_API_KEY`       |
 | anything else                                    | Ollama       | `http://127.0.0.1:11434/v1`                                  | _none_                 |
 
-`--base-url URL` overrides the detected endpoint; `--api-key KEY` overrides the env-var fallback. If you launch telia pointed at a cloud provider whose env var isn't set, you'll be prompted at startup — `Y` then a hidden-input field reads the key for this session only (no disk write; persist via env var or `[llms.NAME]` in the config file). The same hidden-input prompt fires inside the TUI whenever `/model NAME` switches to a provider without a key — type the key (echoed as `•`), `Enter` to set, `Esc` to skip. `/keys` lists every provider and marks which env vars are set. The `/model` drop-down pre-populates with ~75 named models across all eight cloud providers — the full Claude 3 / 4 family, GPT-5 / GPT-4.1 / GPT-4o / o-series, Gemini 1.5 / 2.0 / 2.5, Grok 2 / 3 / 4, DeepSeek chat + reasoner, the Mistral/Ministral/Codestral/Pixtral catalog, Groq-hosted Llama 3 / Llama 4 / Qwen / Mixtral / Gemma / DeepSeek distills, and the most-used OpenRouter routes — alongside whatever Ollama has cached locally. Type to filter, Tab to accept; any name (including bare strings the catalog doesn't list yet) is accepted.
+`--base-url URL` overrides the detected endpoint; `--api-key KEY` overrides the env-var fallback. If you launch telia pointed at a cloud provider whose env var isn't set, you'll be prompted at startup — `Y` then a hidden-input field reads the key for this session only (no disk write; persist via env var or `[llms.NAME]` in the config file). The same hidden-input prompt fires inside the TUI whenever `/model NAME` switches to a provider without a key — type the key (echoed as `•`), `Enter` to set, `Esc` to skip. `/keys` lists every provider and marks which env vars are set. The `/model` drop-down pre-populates with ~125 named models across fifteen providers — the full Claude 3 / 4 family (including 2024 + 2025 dated snapshots), GPT-5 / GPT-4.1 / GPT-4o / o-series (o1 / o3 / o4), Gemini 1.5 / 2.0 / 2.5 + experimental, Grok 2 / 3 / 4, DeepSeek chat + reasoner, the Mistral / Ministral / Codestral / Pixtral catalog, Cohere Command-A / Command-R, Perplexity Sonar (web-search-augmented), Groq-hosted Llama / Qwen / Mixtral / Gemma / DeepSeek distills, Together / Fireworks / Cerebras / Hyperbolic / NVIDIA NIM open-model hosts, and popular OpenRouter routes — alongside whatever Ollama has cached locally. Type to filter, Tab to accept; any name (including bare strings the catalog doesn't list yet) is accepted.
 
 ### Ollama pre-flight
 
@@ -85,7 +92,7 @@ A `y` (default) streams `/api/pull` with an animated in-place progress bar. `n` 
 
 ### Model
 
-Set the active model with `--model NAME`. The provider auto-detects from the name prefix (see the table above); `/model NAME` switches mid-session — the drop-down lists every Ollama-cached model plus the pre-populated cloud entries (`claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5-20251001`). `/model` with no arg prints the current model.
+Set the active model with `--model NAME`. The provider auto-detects from the name prefix (see the table above); `/model NAME` switches mid-session — the drop-down lists every Ollama-cached model plus the ~75 pre-populated cloud entries spanning all eight providers. `/model` with no arg prints the current model.
 
 Defaults:
 
@@ -93,10 +100,13 @@ Defaults:
 | ------------ | ------------------------------- | --------------------------------------- |
 | `--model`    | _none_                          | `hf.co/FoolDev/Thanatos-27B:Q4_K_M`     |
 | `--base-url` | _none_ (auto from model prefix) | `http://127.0.0.1:11434/v1` (Ollama)    |
-| `--api-key`  | `$ANTHROPIC_API_KEY` for `claude-*`; `$OPENAI_API_KEY` for `gpt-*`/`o1*`/`o3*` | _none_ (Ollama needs none) |
+| `--api-key`  | provider env var (see [Providers](#providers) table) — interactive prompt if neither is set | _none_ (Ollama needs none) |
 | `--theme`    | _none_                          | `tokyo-night`                           |
 | `--no-pull`  | _none_                          | `false` (run the Ollama pre-flight)     |
 | `--pull-yes` | _none_                          | `false` (prompt before each pull)       |
+| `--auto`     | _none_                          | `false` (BUILD mode — prompt per call)  |
+| `--plan`     | _none_                          | `false` (BUILD mode — see [Permission modes](#features)) |
+| `--resume`   | _none_                          | `false` (load `last` auto-bookmark instead of new session) |
 
 Sessions live in `$XDG_DATA_HOME/telia/telia.sqlite` (falls back to `~/.local/share/telia/telia.sqlite` when `XDG_DATA_HOME` is unset). Set `XDG_DATA_HOME` to move it.
 
@@ -135,25 +145,24 @@ Resolution order for `--model NAME` (and `/model NAME` mid-session): explicit `-
 
 ### MCP
 
-Not yet supported. The roadmap is to read an Anthropic-style MCP config — likely the same shape Claude Desktop uses:
+Add `[mcps.NAME]` entries to the same `config.toml` and telia spawns each server at startup, handshakes over newline-delimited JSON-RPC, lists their tools, and merges them into the agent's dispatch loop alongside the built-in seven (`read` / `write` / `edit` / `bash` / `list` / `glob` / `grep`). The model sees every tool — local or MCP-provided — in one catalogue.
 
-```jsonc
-// $XDG_CONFIG_HOME/telia/mcp.json (proposed)
-{
-  "mcpServers": {
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
-    },
-    "github": {
-      "command": "docker",
-      "args": ["run", "-i", "--rm", "ghcr.io/github/github-mcp-server"]
-    }
-  }
-}
+```toml
+# stdio MCP server. `command` + `args` are passed verbatim; `env`
+# values override the parent process for this child only.
+[mcps.filesystem]
+command = "npx"
+args    = ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+
+[mcps.github]
+command = "docker"
+args    = ["run", "-i", "--rm", "ghcr.io/github/github-mcp-server"]
+
+[mcps.github.env]
+GITHUB_PERSONAL_ACCESS_TOKEN = "ghp_…"
 ```
 
-— and merge any tools each server exposes into the same dispatch loop the built-in seven (`read` / `write` / `edit` / `bash` / `list` / `glob` / `grep`) already run through. Until then, treat MCP as a TODO: tracked on the "Not yet" line below.
+Implementation is minimal — `initialize` + `notifications/initialized` + `tools/list` + `tools/call`. No resources, prompts, sampling, or cancellation yet. Spawn failures print a warning on stderr and telia keeps booting with whatever servers did come up. Servers receive `SIGKILL` on process exit (`kill_on_drop`).
 
 ## Features
 
@@ -172,12 +181,13 @@ Not yet supported. The roadmap is to read an Anthropic-style MCP config — like
 - **Drag-select** — left-click and drag in the chat area to highlight text; releasing copies it to the system clipboard via [`arboard`](https://crates.io/crates/arboard) (Wayland + X11 + macOS + Windows). Text-style selection wraps across rows; the status bar reports `copied N chars to clipboard`. `Esc` clears the highlight. Works during streaming.
 - **Tools** — `read` / `write` / `edit` / `bash` / `list` / `glob` / `grep`, capped at a 16-hop loop. `read` output is syntax-highlighted by file extension (`syntect`, 50+ languages); assistant code fences (```` ```rust ````) highlight by language hint. `grep` walks directories with Rust regex, skipping `target/`/`node_modules/`/`dist/`/`build/` and hidden dirs.
 - **Themes** — `tokyo-night` (default), `catppuccin`, `dracula`. Pick at startup with `--theme NAME` or switch live with `/theme NAME`.
-- **Sessions** — sqlite at `$XDG_DATA_HOME/telia/telia.sqlite`. Save/load by alias across runs.
+- **Sessions** — sqlite at `$XDG_DATA_HOME/telia/telia.sqlite`. Save/load by alias across runs; every launch is also auto-bookmarked as `last`, and `/reset` rotates the previous one to `prev`, so the two most recent sessions are recoverable without ever typing `/save`. Resume the most recent with `telia --resume` (alias `--continue`, short `-r`).
+- **Auto-saved preferences** — your most recent theme, notification toggle, and permission mode are persisted to the same sqlite and restored on next launch (unless overridden by a CLI flag). Readline input history (`Up`/`Down`) also survives across runs — up to the last 500 submissions are loaded back into the recall buffer at startup, deduped against the previous entry shell-style.
 - **Token tracker** — status bar shows `↑prompt ↓completion` totals for the current session (cumulative, resets on `/reset` / `/load`). Counts come from Ollama's `usage` block on the final stream chunk.
 - **Desktop notifications** — `notify-send` fires when a chat turn ends, with the first ~120 chars of the assistant's reply. Toggle with `/notify on|off`.
 - **Hostname / username** — title bar shows `τέλεια @ HOST`, user-message header is the login name. Distinguishes remote sessions and saved transcripts.
 
-Not yet: MCP, LSP, plugins, subagents, web UI.
+Not yet: LSP runtime (config is parsed, but no tools yet), plugins, subagents, web UI.
 
 ## Stack
 

@@ -1,8 +1,18 @@
 use anyhow::Result;
 use async_stream::try_stream;
-use futures_util::{pin_mut, Stream, StreamExt};
+use futures_util::{future::BoxFuture, pin_mut, Stream, StreamExt};
 use telia_llm::{ChatEvent, LlmClient, Message, ToolDef};
 use telia_store::Store;
+
+/// External tool source — implemented by the CLI's MCP registry (and
+/// eventually LSP). The agent advertises `definitions()` alongside its
+/// built-ins, and routes any matching tool call back through
+/// `dispatch()` instead of the static `telia_tools::dispatch`.
+pub trait ToolRouter: Send {
+    fn definitions(&self) -> Vec<ToolDef>;
+    fn handles(&self, name: &str) -> bool;
+    fn dispatch<'a>(&'a mut self, name: &'a str, args: &'a str) -> BoxFuture<'a, Result<String>>;
+}
 
 mod kaparthy;
 
@@ -94,6 +104,15 @@ impl PermissionMode {
             PermissionMode::Auto => "AUTO",
         }
     }
+    /// Variant name as written in source — round-trips through the
+    /// pref store via `Store::set_pref("permission_mode", …)`.
+    pub fn label_canonical(self) -> &'static str {
+        match self {
+            PermissionMode::Plan => "Plan",
+            PermissionMode::Build => "Build",
+            PermissionMode::Auto => "Auto",
+        }
+    }
 }
 
 /// Tools that just *look* at the filesystem and don't change anything.
@@ -115,11 +134,18 @@ pub struct Agent {
     /// the TUI's `/plan` / `/build` / `/auto` commands, by Shift+Tab,
     /// by the CLI's `--auto` flag, or by an `AllowAll` response.
     permission_mode: PermissionMode,
+    /// Optional external tool source (MCP servers, eventually LSP).
+    /// When set, its `definitions()` merge into the catalogue sent to
+    /// the LLM, and `dispatch()` runs for matching tool names.
+    router: Option<Box<dyn ToolRouter>>,
 }
 
 impl Agent {
     pub fn new(llm: LlmClient, store: Store) -> Result<Self> {
         let session_id = store.create_session(llm.model())?;
+        // Auto-bookmark every new session as `last` so the next launch
+        // can `--resume` without the user needing to type `/save`.
+        let _ = store.save_alias("last", &session_id);
         let mut agent = Self {
             llm,
             tools: telia_tools::definitions(),
@@ -130,11 +156,57 @@ impl Agent {
             tokens: TokenCounts::default(),
             available_models: Vec::new(),
             permission_mode: PermissionMode::default(),
+            router: None,
         };
         agent.push(Message::System {
             content: system_prompt(),
         })?;
         Ok(agent)
+    }
+
+    /// Resume the most recent session if one exists; otherwise start a
+    /// fresh one. The bookmarking happens automatically in [`Agent::new`]
+    /// and [`Agent::reset`], so any prior run is recoverable by name
+    /// (`last`) regardless of whether the user typed `/save`.
+    pub fn resume(llm: LlmClient, store: Store) -> Result<Self> {
+        let prev = store.resolve_alias("last").ok();
+        match prev {
+            Some(id) => {
+                let messages = store.load(&id)?;
+                let seq = messages.len();
+                Ok(Self {
+                    llm,
+                    tools: telia_tools::definitions(),
+                    store,
+                    session_id: id,
+                    messages,
+                    seq,
+                    tokens: TokenCounts::default(),
+                    available_models: Vec::new(),
+                    permission_mode: PermissionMode::default(),
+                    router: None,
+                })
+            }
+            None => Self::new(llm, store),
+        }
+    }
+
+    /// Plug an external tool source into the agent. Its definitions
+    /// are appended to the built-in tool list immediately; subsequent
+    /// dispatches check the router before falling back to
+    /// `telia_tools`.
+    pub fn set_tool_router(&mut self, router: Box<dyn ToolRouter>) {
+        for def in router.definitions() {
+            // Avoid duplicates if the user registers the same MCP twice.
+            if !self
+                .tools
+                .iter()
+                .any(|t| t.function.name == def.function.name)
+            {
+                self.tools.push(def);
+            }
+        }
+        self.router = Some(router);
     }
 
     pub fn permission_mode(&self) -> PermissionMode {
@@ -190,8 +262,35 @@ impl Agent {
         &self.session_id
     }
 
+    pub fn message_count(&self) -> usize {
+        self.messages.len()
+    }
+
+    // ---- preference + history pass-through ----
+    // Centralised so the TUI doesn't need to own its own Store handle.
+
+    pub fn get_pref(&self, key: &str) -> Option<String> {
+        self.store.get_pref(key).ok().flatten()
+    }
+
+    pub fn set_pref(&self, key: &str, value: &str) {
+        let _ = self.store.set_pref(key, value);
+    }
+
+    pub fn push_input_history(&self, line: &str) {
+        let _ = self.store.push_input_history(line);
+    }
+
+    pub fn input_history(&self, limit: usize) -> Vec<String> {
+        self.store.input_history(limit).unwrap_or_default()
+    }
+
     pub fn reset(&mut self) -> Result<()> {
+        // Bookmark the outgoing session as `prev` before we move on, so
+        // a too-eager `/reset` is recoverable via `/load prev`.
+        let _ = self.store.save_alias("prev", &self.session_id);
         let session_id = self.store.create_session(self.llm.model())?;
+        let _ = self.store.save_alias("last", &session_id);
         self.session_id = session_id;
         self.messages.clear();
         self.seq = 0;
@@ -360,14 +459,27 @@ impl Agent {
                         name: call.function.name.clone(),
                         arguments: call.function.arguments.clone(),
                     };
-                    let output = match telia_tools::dispatch(
-                        &call.function.name,
-                        &call.function.arguments,
-                    )
-                    .await
-                    {
-                        Ok(o) => o,
-                        Err(e) => format!("error: {e}"),
+                    let routed = self
+                        .router
+                        .as_ref()
+                        .map(|r| r.handles(&call.function.name))
+                        .unwrap_or(false);
+                    let output = if routed {
+                        let r = self.router.as_mut().unwrap();
+                        match r.dispatch(&call.function.name, &call.function.arguments).await {
+                            Ok(o) => o,
+                            Err(e) => format!("error: {e}"),
+                        }
+                    } else {
+                        match telia_tools::dispatch(
+                            &call.function.name,
+                            &call.function.arguments,
+                        )
+                        .await
+                        {
+                            Ok(o) => o,
+                            Err(e) => format!("error: {e}"),
+                        }
                     };
                     yield TurnEvent::ToolEnd {
                         name: call.function.name.clone(),
