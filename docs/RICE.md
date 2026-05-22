@@ -30,6 +30,10 @@ pad=12x12
 dpi-aware=yes
 
 [colors]
+# alpha < 1 makes the terminal background translucent. Combine with
+# the compositor blur rule below + `/transparent on` inside telia and
+# the wallpaper bleeds through with a Tokyo Night tint.
+alpha=0.85
 background=1a1b26
 foreground=a8a8b2
 regular0=15161e
@@ -65,21 +69,40 @@ bind = SUPER, L, exec, foot --app-id=telia-float -e telia
 windowrulev2 = float,                     class:^(telia-float)$
 windowrulev2 = size 1240 760,             class:^(telia-float)$
 windowrulev2 = center,                    class:^(telia-float)$
-windowrulev2 = opacity 0.96 0.92 override, class:^(telia-float)$
+windowrulev2 = opacity 0.92 0.88 override, class:^(telia-float)$
 windowrulev2 = bordersize 2,              class:^(telia-float)$
 windowrulev2 = rounding 12,               class:^(telia-float)$
 windowrulev2 = animation slide,           class:^(telia-float)$
+# Blur the wallpaper behind the floating panel. Paired with `alpha`
+# in foot.ini + `/transparent on` inside telia, this gives the
+# frosted-glass look the SVGs are styled after.
+windowrulev2 = noblur 0,                  class:^(telia-float)$
+windowrulev2 = xray on,                   class:^(telia-float)$
 
 # Tokyo Night borders that match the TUI accents
 general {
     col.active_border   = rgba(bb9af7ff) rgba(7dcfffff) 45deg
     col.inactive_border = rgba(414868aa)
 }
+
+# Strong blur tuned for translucent terminals. Crank passes if your
+# GPU can spare it; back off `size` for less smearing.
+decoration {
+    blur {
+        enabled = true
+        size = 8
+        passes = 3
+        new_optimizations = true
+        ignore_opacity = true
+        xray = true
+    }
+}
 ```
 
-`SUPER+L` opens a 1240×760 floating telia, centred, ~95% opaque,
+`SUPER+L` opens a 1240×760 floating telia, centred, ~90% opaque,
 rounded corners, with a purple→cyan animated border that picks up the
-same gradient as the SVG banner.
+same gradient as the SVG banner — the wallpaper behind it is blurred
+by Hyprland so the translucent foot background reads as frosted glass.
 
 ## Niri
 
@@ -100,7 +123,10 @@ copy it into `~/.config/niri/config.kdl` or `include` it. What it does:
 - **Floating, centered, 1280 × 800** with rounded `12 12 12 12`
   corners that line up with the TUI's own rounded chat / input
   block corners.
-- **96% opacity** so the wallpaper bleeds through.
+- **90% opacity** so the wallpaper bleeds through. Niri doesn't ship
+  window blur as of writing — for a frosted-glass look run a blurred
+  wallpaper (e.g. `swww img --transition-type=none blurred.png`) and
+  pair it with `/transparent on` inside telia.
 
 ```kdl
 // minimal — the full version is in assets/niri-rice.kdl
@@ -128,7 +154,7 @@ window-rule {
     }
     border { off }
     geometry-corner-radius 12 12 12 12
-    opacity 0.96
+    opacity 0.90
 }
 
 spawn-at-startup "foot" "--app-id=telia-float" "-e" "telia"
@@ -147,10 +173,32 @@ or the wallpapers from the
 [tokyo-night-vscode-theme](https://github.com/enkia/tokyo-night-vscode-theme)
 repo work well.
 
+## Blur & transparency
+
+The frosted-glass look is a three-layer stack — each piece is opt-in,
+and the whole effect only lands when all three are on:
+
+1. **Terminal alpha** — `alpha=0.85` in `foot.ini` (or the equivalent
+   in alacritty / kitty / wezterm). Makes the terminal's background
+   cell translucent.
+2. **Compositor blur** — Hyprland's `decoration { blur { enabled = true } }`
+   blurs whatever sits behind the translucent terminal. Niri has no
+   native window blur as of writing; pre-blur the wallpaper instead.
+3. **TUI transparent mode** — `/transparent on` inside telia (or
+   `:transparent on`, or set `TELIA_TRANSPARENT=1` in your shell).
+   This swaps every `bg(theme.bg)` paint for `Color::Reset`, so the
+   terminal alpha actually shows through instead of being masked by
+   the TUI's own opaque Tokyo Night background. The preference
+   persists across sessions via the sqlite store.
+
+Selection highlight, status chips, and mode badges keep their solid
+colours so they stay readable on top of the wallpaper.
+
 ## Result
 
 You get a floating, centred τέλεια panel that opens with one keystroke,
 sits on a Tokyo Night desktop, runs JetBrains Mono Nerd Font, and
-matches the TUI's purple-cyan-grey accents end to end. The TUI's own
-rounded borders + the compositor's matching rounded corners stack
-cleanly.
+matches the TUI's purple-cyan-grey accents end to end. With
+`/transparent on` and the compositor blur, the panel reads as frosted
+glass over the wallpaper while the chat text, selection highlight,
+and status chips remain fully legible.

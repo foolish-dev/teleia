@@ -47,7 +47,10 @@ window-rule {
 
     // Slight transparency so the wallpaper bleeds through; bump
     // toward 1.0 if your terminal's bg is already opaque.
-    opacity 0.96
+    // Pair with `/transparent on` inside telia + foot's `alpha=0.85`
+    // so the wallpaper shows through. Niri has no native window blur
+    // yet — pre-blur the wallpaper if you want the frosted look.
+    opacity 0.90
 }
 
 // Global Tokyo Night accents — applies to all windows, but useful

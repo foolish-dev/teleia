@@ -1869,6 +1869,7 @@ dependencies = [
  "telia-agent",
  "telia-llm",
  "telia-store",
+ "telia-tools",
  "tokio",
  "toml",
  "tracing",

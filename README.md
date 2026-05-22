@@ -131,7 +131,7 @@ The `/model` dropdown pre-populates with ~210 named models across all twenty-one
 
 - **OS-aware welcome banner** — `/etc/os-release` (or `cfg!(target_os = …)` on macOS / Windows / FreeBSD) picks a pixel-art panel: Arch / Ubuntu / Debian / Fedora / Alpine / NixOS / Gentoo / Void / openSUSE / macOS / Windows / FreeBSD or a generic Linux fallback. Lambda mark + `powered by λ τέλεια` watermark below.
 - **Modes** — Insert (default), Normal (`Esc`), Command (`:`). The status bar chip and input border colour signal the active mode.
-- **Slash commands** — `/reset`, `/clear`, `/save NAME`, `/load NAME`, `/delete NAME`, `/list`, `/model [NAME]`, `/key PROVIDER`, `/keys`, `/mcps`, `/lsps`, `/plan`, `/build`, `/auto`, `/prompt [NAME]`, `/theme [NAME]`, `/notify [on|off]`, `/show`, `/help`, `/quit`.
+- **Slash commands** — `/reset`, `/clear`, `/save NAME`, `/load NAME`, `/delete NAME`, `/list`, `/model [NAME]`, `/key PROVIDER`, `/keys`, `/mcps`, `/lsps`, `/tools`, `/plan`, `/build`, `/auto`, `/prompt [NAME]`, `/theme [NAME]`, `/notify [on|off]`, `/transparent [on|off]`, `/copy`, `/cd PATH`, `/pwd`, `/version`, `/show`, `/help`, `/quit`.
 - **Vim commands** — `:q`/`:x`/`:qa`/`:qall` → quit, `:w`/`:wa` → save, `:e`/`:l` → load, `:colo`/`:theme` → theme, `:!CMD` → shell out, `:cd PATH`, `:pwd`, `:noh` (clear drag-select), `:version`, `:r FILE` (read into chat), `:enew` → reset. `EX_COMMANDS` dropdown autocompletes via Tab.
 - **Prompt templates** — `/prompt` lists 10 starters (`review`, `debug`, `explain`, `refactor`, `test`, `docs`, `security`, `perf`, `commit`, `plan`); `/prompt NAME` drops the template into the input box.
 - **Autocomplete** — ghost-text completion as you type + a drop-down listing every match. Up to 10 entries visible at a time; longer lists scroll via Up/Down keeping the selected row in view. Title shows total count (`models · 211`).
@@ -140,6 +140,7 @@ The `/model` dropdown pre-populates with ~210 named models across all twenty-one
 - **Scrollbar** — right-edge thumb in `th.purple` over a `th.dim` track; only renders when there's overflow.
 - **Drag-select** — left-click + drag in the chat area highlights cells; release copies via [`arboard`](https://crates.io/crates/arboard) (Wayland / X11 / macOS / Windows). Works during streaming.
 - **Themes** — `tokyo-night` (default), `catppuccin`, `dracula`. Code highlighting follows the active theme (scope-aware mapping via syntect).
+- **Blur & transparency** — `/transparent on` (or `TELIA_TRANSPARENT=1`) swaps the theme background for `Color::Reset`, letting the terminal's alpha and the compositor's blur bleed through. Pair with `alpha=0.85` in foot/alacritty + Hyprland's blur decoration; selection highlight, status chips, and mode badges stay opaque so they remain legible. See [`docs/RICE.md`](docs/RICE.md).
 - **Token tracker** — status bar shows `↑prompt ↓completion` totals for the session.
 - **Desktop notifications** — Linux `notify-send`, macOS `osascript`, Windows BurntToast (silently no-op if not installed). Toggle with `/notify on|off`.
 - **Streaming** — tokens render live via SSE with a blinking caret, braille spinners on tool calls, and a running-dot "thinking" indicator. `Esc` / `Ctrl+C` mid-turn aborts.
@@ -151,7 +152,7 @@ Everything important survives a restart.
 - **Messages** stream to SQLite as they arrive — no "unsaved" state. Store lives at `$XDG_DATA_HOME/telia/telia.sqlite` (Linux), `~/Library/Application Support/telia/telia.sqlite` (macOS), `%APPDATA%\telia\telia.sqlite` (Windows). `$XDG_DATA_HOME` wins on any platform when set.
 - **Auto-bookmarks** — every launch is tagged `last`; `/reset` rotates the outgoing session to `prev`. So `telia --resume` always picks up where you left off, and the run before that is recoverable with `/load prev`.
 - **Aliases** — `/save NAME` + `/load NAME` for sessions you want to keep by hand.
-- **Sticky preferences** — theme, `/notify` toggle, permission mode, active model, and per-provider API keys all persist (CLI flags override). Launching `telia` with no `--model` picks up wherever you last `/model`-ed.
+- **Sticky preferences** — theme, `/notify` toggle, `/transparent` toggle, permission mode, active model, and per-provider API keys all persist (CLI flags override). Launching `telia` with no `--model` picks up wherever you last `/model`-ed.
 - **Input history** — last 500 submissions reload into the `Up`/`Down` recall buffer at startup, deduped against the most recent entry.
 
 ## Configuration

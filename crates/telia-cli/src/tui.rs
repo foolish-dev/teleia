@@ -39,9 +39,35 @@ fn mode_hints(mode: Mode) -> &'static str {
 /// `/exit`, `/info` are accepted by `handle_slash` but not surfaced by
 /// autocomplete to avoid suggesting ambiguous short prefixes).
 const SLASH_COMMANDS: &[&str] = &[
-    "ask", "auto", "build", "clear", "delete", "exit", "help", "key", "keys", "list", "load",
-    "lsps", "mcps", "model", "notify", "plan", "prompt", "quit", "reset", "save", "show", "theme",
+    "ask",
+    "auto",
+    "build",
+    "cd",
+    "clear",
+    "copy",
+    "delete",
+    "exit",
+    "help",
+    "key",
+    "keys",
+    "list",
+    "load",
+    "lsps",
+    "mcps",
+    "model",
+    "notify",
+    "plan",
+    "prompt",
+    "pwd",
+    "quit",
+    "reset",
+    "save",
+    "show",
+    "theme",
+    "tools",
+    "transparent",
     "update",
+    "version",
 ];
 
 /// Sync the permission-mode change across the agent + the State mirror
@@ -173,10 +199,30 @@ const THEMES: &[(&str, &Theme)] = &[
 ];
 
 static CURRENT_THEME: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static TRANSPARENT_BG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn theme() -> &'static Theme {
     let idx = CURRENT_THEME.load(std::sync::atomic::Ordering::Relaxed);
     THEMES[idx.min(THEMES.len() - 1)].1
+}
+
+/// Theme background, but `Color::Reset` when the transparent toggle is on.
+/// Reset cells inherit the host terminal's background — so terminal alpha
+/// + compositor blur bleed through every frame the TUI paints.
+fn paint_bg() -> Color {
+    if TRANSPARENT_BG.load(std::sync::atomic::Ordering::Relaxed) {
+        Color::Reset
+    } else {
+        theme().bg
+    }
+}
+
+pub fn set_transparent(on: bool) {
+    TRANSPARENT_BG.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn is_transparent() -> bool {
+    TRANSPARENT_BG.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Switch the active theme by name. Returns the matched canonical name on
@@ -525,6 +571,16 @@ pub async fn run(
     state.input_history = agent.input_history(500);
     if let Some(v) = agent.get_pref("notify") {
         state.notify = v == "on";
+    }
+    // Transparent background: stored pref wins; otherwise honour
+    // `TELIA_TRANSPARENT=1` so users can opt in via their shell env.
+    if let Some(v) = agent.get_pref("transparent") {
+        set_transparent(v == "on");
+    } else if matches!(
+        std::env::var("TELIA_TRANSPARENT").as_deref(),
+        Ok("1") | Ok("on") | Ok("true")
+    ) {
+        set_transparent(true);
     }
     // If the startup check found a newer release, surface it in the
     // chat log and fire a desktop notification on first paint. Clone
@@ -994,29 +1050,8 @@ fn execute_ex(state: &mut State, agent: &mut Agent, cmd: &str) {
     let name = parts.next().unwrap_or("");
     let arg = parts.next().unwrap_or("").trim();
     match name {
-        "cd" => {
-            let target = if arg.is_empty() {
-                std::env::var("HOME").unwrap_or_else(|_| "/".to_string())
-            } else {
-                arg.to_string()
-            };
-            match std::env::set_current_dir(&target) {
-                Ok(()) => state.push(Entry::Info(format!("cd {target}"))),
-                Err(e) => state.push(Entry::Error(format!("cd {target}: {e}"))),
-            }
-        }
-        "pwd" => match std::env::current_dir() {
-            Ok(p) => state.push(Entry::Info(p.display().to_string())),
-            Err(e) => state.push(Entry::Error(format!("pwd: {e}"))),
-        },
         "noh" | "nohlsearch" => {
             state.selection = None;
-        }
-        "version" => {
-            state.push(Entry::Info(format!(
-                "τέλεια {} · ratatui · reqwest (rustls) · rusqlite (bundled)",
-                env!("CARGO_PKG_VERSION")
-            )));
         }
         "r" | "read" => {
             if arg.is_empty() {
@@ -1091,6 +1126,12 @@ fn translate_ex(cmd: &str) -> Result<String, String> {
         "show" | "info" | "f" | "file" => "show".to_string(),
         "theme" | "colorscheme" | "colo" => format!("theme {arg}"),
         "notify" | "notifications" => format!("notify {arg}"),
+        "transparent" | "transparency" | "transp" => format!("transparent {arg}"),
+        "cd" => format!("cd {arg}"),
+        "pwd" => "pwd".to_string(),
+        "version" => "version".to_string(),
+        "tools" => "tools".to_string(),
+        "copy" | "yank" | "y" => "copy".to_string(),
         "keys" => "keys".to_string(),
         "key" => format!("key {arg}"),
         "mcps" => "mcps".to_string(),
@@ -1188,9 +1229,10 @@ fn arg_placeholder(cmd: &str) -> Option<&'static str> {
         "save" | "load" | "delete" | "rm" => Some(" NAME"),
         "model" => Some(" [NAME]"),
         "theme" => Some(" [NAME]"),
-        "notify" => Some(" [on|off]"),
+        "notify" | "transparent" => Some(" [on|off]"),
         "prompt" => Some(" [NAME]"),
         "key" => Some(" PROVIDER"),
+        "cd" => Some(" PATH"),
         _ => None,
     }
 }
@@ -1291,6 +1333,7 @@ const EX_COMMANDS: &[&str] = &[
     "cd",
     "clear",
     "colorscheme",
+    "copy",
     "delete",
     "edit",
     "exit",
@@ -1314,6 +1357,8 @@ const EX_COMMANDS: &[&str] = &[
     "reset",
     "show",
     "theme",
+    "tools",
+    "transparent",
     "version",
     "write",
 ];
@@ -1322,7 +1367,7 @@ fn ex_arg_placeholder(cmd: &str) -> Option<&'static str> {
     match cmd {
         "write" | "load" | "edit" | "delete" => Some(" NAME"),
         "model" | "theme" | "colorscheme" => Some(" [NAME]"),
-        "notify" => Some(" [on|off]"),
+        "notify" | "transparent" => Some(" [on|off]"),
         _ => None,
     }
 }
@@ -1944,12 +1989,108 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                 if new { "on" } else { "off" }
             )));
         }
+        "cd" => {
+            let target = if arg.is_empty() {
+                std::env::var("HOME").unwrap_or_else(|_| "/".to_string())
+            } else {
+                arg.to_string()
+            };
+            match std::env::set_current_dir(&target) {
+                Ok(()) => state.push(Entry::Info(format!("cd {target}"))),
+                Err(e) => state.push(Entry::Error(format!("cd {target}: {e}"))),
+            }
+        }
+        "pwd" => match std::env::current_dir() {
+            Ok(p) => state.push(Entry::Info(p.display().to_string())),
+            Err(e) => state.push(Entry::Error(format!("pwd: {e}"))),
+        },
+        "version" => {
+            state.push(Entry::Info(format!(
+                "τέλεια {} · ratatui · reqwest (rustls) · rusqlite (bundled)",
+                env!("CARGO_PKG_VERSION")
+            )));
+        }
+        "tools" => {
+            let defs = agent.tools();
+            let builtin_names: std::collections::HashSet<String> = telia_tools::definitions()
+                .into_iter()
+                .map(|d| d.function.name)
+                .collect();
+            let (builtin, mcp): (Vec<_>, Vec<_>) = defs
+                .iter()
+                .partition(|d| builtin_names.contains(&d.function.name));
+            let summarise = |d: &telia_llm::ToolDef| {
+                let first_line = d
+                    .function
+                    .description
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .chars()
+                    .take(70)
+                    .collect::<String>();
+                format!("  {:<14} {first_line}", d.function.name)
+            };
+            let mut text = format!(
+                "tools · {} total\n\nbuilt-in ({})",
+                defs.len(),
+                builtin.len()
+            );
+            for d in &builtin {
+                text.push('\n');
+                text.push_str(&summarise(d));
+            }
+            if !mcp.is_empty() {
+                text.push_str(&format!("\n\nmcp ({})", mcp.len()));
+                for d in &mcp {
+                    text.push('\n');
+                    text.push_str(&summarise(d));
+                }
+            }
+            state.push(Entry::Info(text));
+        }
+        "copy" | "yank" => {
+            let last = state.history.iter().rev().find_map(|e| match e {
+                Entry::Assistant { text, .. } if !text.is_empty() => Some(text.clone()),
+                _ => None,
+            });
+            match last {
+                Some(text) => {
+                    let len = text.chars().count();
+                    copy_to_clipboard(&text, state);
+                    state.push(Entry::Info(format!("copied {len} chars to clipboard")));
+                }
+                None => state.push(Entry::Error("nothing to copy yet".into())),
+            }
+        }
+        "transparent" | "transparency" => {
+            let new = match arg.to_ascii_lowercase().as_str() {
+                "on" | "true" | "yes" | "1" => true,
+                "off" | "false" | "no" | "0" => false,
+                "" => !is_transparent(),
+                _ => {
+                    state.push(Entry::Error(format!(
+                        "usage: /transparent [on|off]  (current: {})",
+                        if is_transparent() { "on" } else { "off" }
+                    )));
+                    return;
+                }
+            };
+            set_transparent(new);
+            agent.set_pref("transparent", if new { "on" } else { "off" });
+            state.push(Entry::Info(format!(
+                "transparent background {} — terminal alpha + compositor blur now {}",
+                if new { "on" } else { "off" },
+                if new { "pass through" } else { "are masked" }
+            )));
+        }
         "quit" | "exit" | "q" => {
             state.should_quit = true;
         }
         "help" | "?" => {
             state.push(Entry::Info(
-                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /key PROVIDER · /keys · /mcps · /lsps · /plan · /build · /auto · /prompt [NAME] · /theme [NAME] · /notify [on|off] · /show · /help · /quit"
+                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /key PROVIDER · /keys · /mcps · /lsps · /tools · /plan · /build · /auto · /prompt [NAME] · /theme [NAME] · /notify [on|off] · /transparent [on|off] · /copy · /cd PATH · /pwd · /version · /show · /help · /quit"
                     .into(),
             ));
         }
@@ -1967,7 +2108,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
     // `th.fg` (Tokyo Night `#c0caf5`) instead of the terminal's
     // default white.
     f.render_widget(
-        Block::default().style(Style::default().bg(th.bg).fg(th.fg)),
+        Block::default().style(Style::default().bg(paint_bg()).fg(th.fg)),
         f.area(),
     );
     // Up to 6 menu items inline above the input. Includes 2 for the border.
@@ -2083,13 +2224,13 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
     }
     let offset = max_offset.saturating_sub(state.scroll);
     let log = Paragraph::new(lines)
-        .style(Style::default().bg(th.bg).fg(th.fg))
+        .style(Style::default().bg(paint_bg()).fg(th.fg))
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(th.dim).bg(th.bg))
-                .style(Style::default().bg(th.bg))
+                .border_style(Style::default().fg(th.dim).bg(paint_bg()))
+                .style(Style::default().bg(paint_bg()))
                 .padding(Padding::new(h_pad, h_pad, t_pad, 0))
                 .title(Line::from(vec![
                     // Nerd Font terminal glyph + λ — soft "rice"
@@ -2098,28 +2239,28 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
                     // a stylized terminal icon. Title also gets a
                     // leading dimmed angle bracket for the
                     // Powerline-y aesthetic.
-                    Span::styled("╭ ", Style::default().fg(th.dim).bg(th.bg)),
-                    Span::styled(" ", Style::default().fg(th.cyan).bg(th.bg)),
+                    Span::styled("╭ ", Style::default().fg(th.dim).bg(paint_bg())),
+                    Span::styled(" ", Style::default().fg(th.cyan).bg(paint_bg())),
                     Span::styled(
                         "λ ",
                         Style::default()
                             .fg(th.cyan)
-                            .bg(th.bg)
+                            .bg(paint_bg())
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         "τέλεια ",
                         Style::default()
                             .fg(th.purple)
-                            .bg(th.bg)
+                            .bg(paint_bg())
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled("@ ", Style::default().fg(th.dim).bg(th.bg)),
+                    Span::styled("@ ", Style::default().fg(th.dim).bg(paint_bg())),
                     Span::styled(
                         format!("{} ", state.hostname),
                         Style::default()
                             .fg(th.cyan)
-                            .bg(th.bg)
+                            .bg(paint_bg())
                             .add_modifier(Modifier::ITALIC),
                     ),
                 ])),
@@ -2153,8 +2294,8 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
         let sb = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(None)
             .end_symbol(None)
-            .track_style(Style::default().fg(th.dim).bg(th.bg))
-            .thumb_style(Style::default().fg(th.purple).bg(th.bg));
+            .track_style(Style::default().fg(th.dim).bg(paint_bg()))
+            .thumb_style(Style::default().fg(th.purple).bg(paint_bg()));
         f.render_stateful_widget(sb, sb_area, &mut sb_state);
     }
 
@@ -2174,21 +2315,21 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
         let items: Vec<ListItem> = menu
             .items
             .iter()
-            .map(|s| ListItem::new(s.clone()).style(Style::default().fg(th.fg).bg(th.bg)))
+            .map(|s| ListItem::new(s.clone()).style(Style::default().fg(th.fg).bg(paint_bg())))
             .collect();
         let list = List::new(items)
-            .style(Style::default().bg(th.bg).fg(th.fg))
+            .style(Style::default().bg(paint_bg()).fg(th.fg))
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(th.dim).bg(th.bg))
-                    .style(Style::default().bg(th.bg))
+                    .border_style(Style::default().fg(th.dim).bg(paint_bg()))
+                    .style(Style::default().bg(paint_bg()))
                     .title(Span::styled(
                         title_text,
                         Style::default()
                             .fg(th.blue)
-                            .bg(th.bg)
+                            .bg(paint_bg())
                             .add_modifier(Modifier::BOLD),
                     )),
             )
@@ -2256,18 +2397,18 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
             ]),
         ];
         let widget = Paragraph::new(lines)
-            .style(Style::default().bg(th.bg).fg(th.fg))
+            .style(Style::default().bg(paint_bg()).fg(th.fg))
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(th.yellow).bg(th.bg))
-                    .style(Style::default().bg(th.bg))
+                    .border_style(Style::default().fg(th.yellow).bg(paint_bg()))
+                    .style(Style::default().bg(paint_bg()))
                     .title(Span::styled(
                         " api key ",
                         Style::default()
                             .fg(th.yellow)
-                            .bg(th.bg)
+                            .bg(paint_bg())
                             .add_modifier(Modifier::BOLD),
                     )),
             );
@@ -2316,18 +2457,18 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
             ]),
         ];
         let widget = Paragraph::new(lines)
-            .style(Style::default().bg(th.bg).fg(th.fg))
+            .style(Style::default().bg(paint_bg()).fg(th.fg))
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(th.yellow).bg(th.bg))
-                    .style(Style::default().bg(th.bg))
+                    .border_style(Style::default().fg(th.yellow).bg(paint_bg()))
+                    .style(Style::default().bg(paint_bg()))
                     .title(Span::styled(
                         " permission ",
                         Style::default()
                             .fg(th.yellow)
-                            .bg(th.bg)
+                            .bg(paint_bg())
                             .add_modifier(Modifier::BOLD),
                     )),
             );
@@ -2363,13 +2504,13 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
             }
         }
         let widget = Paragraph::new(Line::from(spans))
-            .style(Style::default().bg(th.bg).fg(th.fg))
+            .style(Style::default().bg(paint_bg()).fg(th.fg))
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(prompt_color).bg(th.bg))
-                    .style(Style::default().bg(th.bg)),
+                    .border_style(Style::default().fg(prompt_color).bg(paint_bg()))
+                    .style(Style::default().bg(paint_bg())),
             );
         f.render_widget(widget, chunks[3]);
         let cursor_x = inside.x + 1 + 2 + (cursor_chars - start_char) as u16;
@@ -2394,13 +2535,13 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
             }
         }
         let widget = Paragraph::new(lines)
-            .style(Style::default().bg(th.bg).fg(th.fg))
+            .style(Style::default().bg(paint_bg()).fg(th.fg))
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(prompt_color).bg(th.bg))
-                    .style(Style::default().bg(th.bg)),
+                    .border_style(Style::default().fg(prompt_color).bg(paint_bg()))
+                    .style(Style::default().bg(paint_bg())),
             );
         f.render_widget(widget, chunks[3]);
 
@@ -2504,7 +2645,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
     };
     status_spans.push(Span::styled(hint, Style::default().fg(th.dim)));
     f.render_widget(
-        Paragraph::new(Line::from(status_spans)).style(Style::default().bg(th.bg).fg(th.fg)),
+        Paragraph::new(Line::from(status_spans)).style(Style::default().bg(paint_bg()).fg(th.fg)),
         chunks[5],
     );
 

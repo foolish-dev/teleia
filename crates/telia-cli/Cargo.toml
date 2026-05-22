@@ -28,3 +28,4 @@ reqwest.workspace = true
 telia-llm.workspace = true
 telia-agent.workspace = true
 telia-store.workspace = true
+telia-tools.workspace = true

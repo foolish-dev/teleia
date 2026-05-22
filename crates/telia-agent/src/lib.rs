@@ -235,6 +235,12 @@ impl Agent {
         self.permission_mode
     }
 
+    /// Full tool catalogue advertised to the LLM — built-ins + any
+    /// tools merged in via [`Agent::set_tool_router`].
+    pub fn tools(&self) -> &[ToolDef] {
+        &self.tools
+    }
+
     pub fn set_permission_mode(&mut self, mode: PermissionMode) {
         self.permission_mode = mode;
     }
