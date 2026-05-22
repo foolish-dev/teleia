@@ -83,39 +83,60 @@ same gradient as the SVG banner.
 
 ## Niri
 
-`~/.config/niri/config.kdl`:
+A drop-in config block lives at [`assets/niri-rice.kdl`](../assets/niri-rice.kdl) —
+copy it into `~/.config/niri/config.kdl` or `include` it. What it does:
+
+- **Dedicated `agent` workspace** — telia opens on its own named
+  workspace so it never gets shuffled in with editor windows.
+  `Mod+'` jumps to it from anywhere.
+- **Idempotent launcher** — `Mod+L` runs `pgrep` first, so it
+  either focuses the existing telia or spawns a new one. No
+  duplicate windows on accidental double-press.
+- **Spawn at startup** — `spawn-at-startup "foot" "--app-id=telia-float" "-e" "telia"`
+  prewarms telia in the background so the first `Mod+L` is instant.
+- **Tokyo Night focus ring** — purple `#bb9af7` when focused,
+  dim `#414868` when not. Borders are off; the focus ring carries
+  the accent.
+- **Floating, centered, 1280 × 800** with rounded `12 12 12 12`
+  corners that line up with the TUI's own rounded chat / input
+  block corners.
+- **96% opacity** so the wallpaper bleeds through.
 
 ```kdl
+// minimal — the full version is in assets/niri-rice.kdl
+
 binds {
-    Mod+L { spawn "foot" "--app-id=telia-float" "-e" "telia"; }
+    Mod+L {
+        spawn "sh" "-c"
+            "pgrep -f 'foot.*telia-float' >/dev/null || foot --app-id=telia-float -e telia";
+    }
+    Mod+Apostrophe { focus-workspace "agent"; }
 }
+
+workspace "agent" {}
 
 window-rule {
     match app-id="telia-float"
+    open-on-workspace "agent"
     open-floating true
-    default-column-width { fixed 1240; }
-    default-window-height { fixed 760; }
-    border {
-        active-color "#bb9af7"
+    default-column-width { fixed 1280; }
+    default-window-height { fixed 800; }
+    focus-ring {
+        active-color  "#bb9af7"
         inactive-color "#414868"
         width 2
     }
+    border { off }
     geometry-corner-radius 12 12 12 12
     opacity 0.96
 }
 
-layout {
-    border {
-        width 2
-        active-color "#bb9af7"
-        inactive-color "#414868"
-    }
-}
+spawn-at-startup "foot" "--app-id=telia-float" "-e" "telia"
 ```
 
-Niri's scrolling layout pairs nicely with the chat-log paradigm — you
-can scroll the workspace horizontally past telia just like you scroll
-the chat itself.
+Niri's scrolling layout pairs nicely with the chat-log paradigm —
+the workspace scrolls horizontally past the floating telia panel
+just like the chat scrolls vertically past prior turns.
 
 ## Wallpaper
 

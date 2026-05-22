@@ -135,11 +135,7 @@ const TOKYO_NIGHT: Theme = Theme {
     blue: Color::Rgb(122, 162, 247),
     green: Color::Rgb(158, 206, 106),
     dim: Color::Rgb(86, 95, 137),
-    // Neutral grey instead of the original blue-tinted #c0caf5 —
-    // reads as a clean grey body text against the dark surface
-    // while leaving the accent colours (cyan / purple / yellow /
-    // red / blue / green) themed as before.
-    fg: Color::Rgb(168, 168, 178),
+    fg: Color::Rgb(192, 202, 245),
     bg: Color::Rgb(26, 27, 38),
     bg_hl: Color::Rgb(40, 52, 87),
 };
@@ -2133,19 +2129,33 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
     f.render_widget(log, chunks[0]);
 
     // Scrollbar on the right edge of the chat block — only when there's
-    // overflow. Track replaces the existing right-border `│`; thumb sits
-    // proportionally to `offset` over the total line count. Auto-shrinks
-    // / hides when content fits in view.
-    if total > visible && chunks[0].width >= 2 && chunks[0].height >= 2 {
+    // overflow. We render it into a 1-col strip that sits *just inside*
+    // the right border (in the right-padding column when `h_pad > 0`)
+    // and stops short of both corners, so the rounded `╮` / `╯` glyphs
+    // stay intact and the track doesn't overwrite the border line.
+    if total > visible && chunks[0].width >= 4 && chunks[0].height >= 4 {
+        let sb_x = if h_pad > 0 {
+            chunks[0].x + chunks[0].width - 2
+        } else {
+            // No padding column to spare on narrow terminals; overwrite
+            // the right border rather than skip the scrollbar entirely.
+            chunks[0].x + chunks[0].width - 1
+        };
+        let sb_area = Rect {
+            x: sb_x,
+            y: chunks[0].y + 1,
+            width: 1,
+            height: chunks[0].height - 2,
+        };
         let mut sb_state = ScrollbarState::new(total)
             .viewport_content_length(visible)
             .position(offset as usize);
         let sb = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(None)
             .end_symbol(None)
-            .track_style(Style::default().fg(th.dim))
-            .thumb_style(Style::default().fg(th.purple));
-        f.render_stateful_widget(sb, chunks[0], &mut sb_state);
+            .track_style(Style::default().fg(th.dim).bg(th.bg))
+            .thumb_style(Style::default().fg(th.purple).bg(th.bg));
+        f.render_stateful_widget(sb, sb_area, &mut sb_state);
     }
 
     // Render the menu (if any) directly above the input.

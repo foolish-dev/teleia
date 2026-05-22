@@ -1,0 +1,72 @@
+// τέλεια niri rice — drop into ~/.config/niri/config.kdl or include it.
+// Pairs niri's scrollable-tiling layout with a dedicated agent
+// workspace, Tokyo Night focus ring, and a keybind that opens
+// telia in a centered floating column.
+
+binds {
+    // Open / focus telia on its named workspace. Same key whether
+    // it's running or not — niri spawns if missing, focuses if not.
+    Mod+L {
+        spawn "sh" "-c" "pgrep -f 'foot.*telia-float' >/dev/null || foot --app-id=telia-float -e telia";
+    }
+
+    // Hop to the agent workspace from anywhere.
+    Mod+Apostrophe { focus-workspace "agent"; }
+
+    // Hide / show telia without killing it.
+    Mod+Shift+L {
+        spawn "sh" "-c" "niri msg action focus-workspace agent || true";
+    }
+}
+
+// A named workspace just for the agent. Survives session restarts
+// when persisted by your compositor session.
+workspace "agent" {}
+
+// Open telia floating, centered, sized for comfortable reading.
+window-rule {
+    match app-id="telia-float"
+
+    open-on-workspace "agent"
+    open-floating true
+    default-column-width { fixed 1280; }
+    default-window-height { fixed 800; }
+
+    // Tokyo Night focus ring — purple when focused, dim when not.
+    focus-ring {
+        active-color  "#bb9af7"
+        inactive-color "#414868"
+        width 2
+    }
+    border {
+        off
+    }
+
+    // Match telia's own rounded chat block + input box corners.
+    geometry-corner-radius 12 12 12 12
+
+    // Slight transparency so the wallpaper bleeds through; bump
+    // toward 1.0 if your terminal's bg is already opaque.
+    opacity 0.96
+}
+
+// Global Tokyo Night accents — applies to all windows, but useful
+// here so the agent's ring matches everything else on the desktop.
+layout {
+    focus-ring {
+        width 2
+        active-color  "#7aa2f7"
+        inactive-color "#414868"
+    }
+    border { off }
+    gaps 8
+    preset-column-widths {
+        proportion 0.33
+        proportion 0.5
+        proportion 0.67
+        proportion 1.0
+    }
+}
+
+// Spawn telia at startup so the first Mod+L is instant.
+spawn-at-startup "foot" "--app-id=telia-float" "-e" "telia"

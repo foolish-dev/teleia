@@ -13,7 +13,7 @@
   <a href="https://huggingface.co/FoolDev/Janus-35B"><img alt="FoolDev/Janus-35B on Hugging Face" src="https://img.shields.io/badge/%F0%9F%A4%97-FoolDev%2FJanus--35B-7aa2f7?logo=huggingface&logoColor=1a1b26&labelColor=24283b"></a>
 </p>
 
-**λ τέλεια — a minimal TUI coding agent.** One binary, no daemon. Talks to a local Ollama or any of twenty-one cloud chat-completions endpoints (≈210 named models in the dropdown). Runs twenty-two built-in tools, hosts MCP servers, persists sessions to SQLite, resumes where you left off, and paints an OS-aware welcome banner on launch.
+**λ τέλεια — a minimal TUI coding agent.** One binary, no daemon. Talks to a local Ollama or any of twenty-one cloud chat-completions endpoints (≈210 named models in the dropdown). Runs twenty-five built-in tools (read/write/edit + bash + list/glob/grep + head/tail/tree/stat/diff/which/fetch/wc/sha256/date + apply_patch/mkdir/mv/cp/touch + lint/format/typecheck), hosts MCP servers, persists sessions to SQLite, resumes where you left off, and paints an OS-aware welcome banner on launch.
 
 <p align="center">
   <img src="assets/screenshot.svg" alt="τέλεια TUI session" width="780">
@@ -56,7 +56,7 @@ Three stances control tool execution — cycle with `Shift+Tab` or set explicitl
 
 | mode      | chip    | behaviour                                                                  | trigger              |
 | --------- | ------- | -------------------------------------------------------------------------- | -------------------- |
-| **PLAN**  | blue    | only read-only tools (`read` / `list` / `glob` / `grep` / `head` / `tail` / `tree` / `stat` / `diff` / `which` / `fetch` / `wc` / `sha256` / `date`) run; mutating tools short-circuit with a synthetic "blocked: plan mode" result | `/plan`, `--plan`    |
+| **PLAN**  | blue    | only read-only tools (`read` / `list` / `glob` / `grep` / `head` / `tail` / `tree` / `stat` / `diff` / `which` / `fetch` / `wc` / `sha256` / `date` / `lint` / `typecheck`) run; mutating tools short-circuit with a synthetic "blocked: plan mode" result | `/plan`, `--plan`    |
 | **BUILD** | green (default) | every tool call pauses for `y` allow / `n` deny / `a` allow-all (auto)                          | `/build`, default    |
 | **AUTO**  | red     | every tool dispatches immediately, no prompts                              | `/auto`, `--auto`    |
 
@@ -64,7 +64,7 @@ Three stances control tool execution — cycle with `Shift+Tab` or set explicitl
 
 ## Tools
 
-Twenty-two built-ins, capped at a 16-hop loop per turn. MCP servers add more to the same dispatch loop.
+Twenty-five built-ins, capped at a 16-hop loop per turn. MCP servers add more to the same dispatch loop.
 
 | tool        | does                                                                              |
 | ----------- | --------------------------------------------------------------------------------- |
@@ -89,6 +89,9 @@ Twenty-two built-ins, capped at a 16-hop loop per turn. MCP servers add more to 
 | `wc`        | line / word / byte counts                                                         |
 | `sha256`    | hex-encoded SHA-256 (hand-rolled, no hash crate)                                  |
 | `date`      | unix + utc + local time                                                           |
+| `lint`      | `cargo clippy` / `ruff` (→ `flake8`) / `eslint` / `go vet` / `shellcheck` by extension |
+| `format`    | `rustfmt` / `ruff format` (→ `black`) / `prettier` / `gofmt` (writes in place)    |
+| `typecheck` | `cargo check` / `mypy` / `tsc --noEmit` / `go build` by extension                 |
 
 ## Providers
 
