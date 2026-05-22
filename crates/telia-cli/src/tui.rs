@@ -830,10 +830,14 @@ async fn submit_input<B: ratatui::backend::Backend>(
     state.menu = None;
     state.suggestion = None;
     state.selection = None;
-    // Anchor the chat to its bottom so the user's just-submitted prompt
-    // and the streaming reply that follows are guaranteed to be visible
-    // — they may have scrolled up to re-read prior context.
+    // Anchor the chat to its bottom and re-engage bottom-following so
+    // the just-submitted prompt + streaming reply are guaranteed
+    // visible. Without flipping `follow_bottom` back on, the smart-
+    // scroll delta-bump in draw() would shove scroll right back up to
+    // wherever the user *was* reading, hiding the new turn.
     state.scroll = 0;
+    state.follow_bottom = true;
+    state.last_total_lines = 0;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return;
@@ -1707,6 +1711,8 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
         "clear" => {
             state.history.clear();
             state.scroll = 0;
+            state.follow_bottom = true;
+            state.last_total_lines = 0;
         }
         "delete" | "rm" => {
             if arg.is_empty() {
@@ -1983,11 +1989,15 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
     // like the chat is frozen on the previous frame.
     let visible = chunks[0].height.saturating_sub(2 + t_pad) as usize;
     let total = lines.len();
-    // When the user is scrolled up, compensate for any new lines added
-    // since the last frame so the visible window stays pinned to the
-    // same content. Without this, streaming deltas would slide the
-    // user's reading position downward with the growing transcript.
-    if !state.follow_bottom && total > state.last_total_lines {
+    // Belt-and-braces: when bottom-following, `scroll` is meant to be
+    // 0. apply() and push() set it, but a stale value from an earlier
+    // state transition shouldn't strand the user away from the latest
+    // content. Enforce it here so the invariant always holds.
+    if state.follow_bottom {
+        state.scroll = 0;
+    } else if total > state.last_total_lines {
+        // Compensate for new lines so the visible window stays pinned
+        // to the same content the user was reading.
         let delta = (total - state.last_total_lines) as u16;
         state.scroll = state.scroll.saturating_add(delta);
     }
