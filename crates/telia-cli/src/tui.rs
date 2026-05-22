@@ -2,8 +2,8 @@ use crate::highlight;
 use anyhow::Result;
 use crossterm::{
     event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
-        MouseButton, MouseEvent, MouseEventKind,
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+        KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -18,7 +18,7 @@ use ratatui::{
     Terminal,
 };
 use std::{io, time::Duration};
-use telia_agent::{Agent, TokenCounts, TurnEvent};
+use telia_agent::{Agent, PermissionMode, TokenCounts, ToolApproval, TurnEvent};
 
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -36,8 +36,76 @@ fn mode_hints(mode: Mode) -> &'static str {
 /// `/exit`, `/info` are accepted by `handle_slash` but not surfaced by
 /// autocomplete to avoid suggesting ambiguous short prefixes).
 const SLASH_COMMANDS: &[&str] = &[
-    "clear", "delete", "exit", "help", "keys", "list", "load", "model", "notify", "quit", "reset",
-    "save", "show", "theme",
+    "ask", "auto", "build", "clear", "delete", "exit", "help", "keys", "list", "load", "model",
+    "notify", "plan", "prompt", "quit", "reset", "save", "show", "theme",
+];
+
+/// Sync the permission-mode change across the agent + the State mirror
+/// and surface a one-line confirmation in the chat log. Centralised so
+/// the slash commands and Shift+Tab handler stay tight.
+fn set_mode(state: &mut State, agent: &mut Agent, mode: PermissionMode) {
+    if state.permission_mode == mode {
+        return;
+    }
+    agent.set_permission_mode(mode);
+    state.permission_mode = mode;
+    let blurb = match mode {
+        PermissionMode::Plan => {
+            "plan mode — read/list/glob/grep run; write/edit/bash are blocked. Use Shift+Tab or /build to execute."
+        }
+        PermissionMode::Build => "build mode — every tool call prompts y/n/a.",
+        PermissionMode::Auto => {
+            "auto mode — tool calls run without asking. Shift+Tab or /plan to step back."
+        }
+    };
+    state.push(Entry::Info(format!("{} · {blurb}", mode.label())));
+}
+
+/// Reusable prompt templates surfaced via `/prompt NAME`. Selecting one
+/// drops the template text into the input box; the user then appends
+/// their content and submits. Plain text only — no agent-state mutation,
+/// no system-prompt swap.
+const PROMPT_TEMPLATES: &[(&str, &str)] = &[
+    (
+        "review",
+        "Review the following for bugs, edge cases, and style — call out concrete issues, not vibes.\n\n",
+    ),
+    (
+        "debug",
+        "Help me debug this. Trace through the logic, name what's wrong, and propose the smallest fix.\n\n",
+    ),
+    (
+        "explain",
+        "Explain this code: what it does, how it does it, and any non-obvious choices worth flagging.\n\n",
+    ),
+    (
+        "refactor",
+        "Refactor for clarity. Keep behaviour identical; prefer fewer abstractions over more.\n\n",
+    ),
+    (
+        "test",
+        "Write tests covering the golden path plus the edge cases that actually break in practice.\n\n",
+    ),
+    (
+        "docs",
+        "Write or update documentation for this. Concise — what it does and when to use it, not how.\n\n",
+    ),
+    (
+        "security",
+        "Audit for security issues — injection, auth, secrets handling, OWASP-style problems.\n\n",
+    ),
+    (
+        "perf",
+        "Where is time or memory spent? Identify the cheapest wins; ignore micro-optimisations.\n\n",
+    ),
+    (
+        "commit",
+        "Write a concise commit message for the diff below. Focus on the WHY, 1–2 sentences max.\n\n",
+    ),
+    (
+        "plan",
+        "Sketch a plan before writing any code. Numbered steps with a verifiable check after each.\n\n",
+    ),
 ];
 
 #[derive(Debug, Clone, Copy)]
@@ -251,6 +319,31 @@ struct State {
     /// (which run between draws) read this to clamp selection coordinates
     /// and decide whether a mouse click landed inside the log.
     log_area: Rect,
+    /// Pending tool call awaiting user permission. Set by the
+    /// `ToolApprovalRequest` event; cleared when the user presses y/n/a
+    /// (or Esc, treated as deny). While `Some`, `run_turn` stops polling
+    /// the agent stream — the agent is blocked on the matching `.await`.
+    pending_approval: Option<PendingApproval>,
+    /// Pending API-key entry from a mid-session `/model` switch. While
+    /// `Some`, the input box renders a hidden-input prompt; typed chars
+    /// land in `buf` (echoed as `•`), Enter commits the key onto the
+    /// agent, Esc cancels.
+    pending_key_entry: Option<KeyEntry>,
+    /// Mirror of `agent.permission_mode()`. Kept in sync so the status
+    /// bar + Shift+Tab cycle don't need to touch the agent for reads.
+    permission_mode: PermissionMode,
+}
+
+pub struct PendingApproval {
+    pub name: String,
+    pub arguments: String,
+    pub responder: tokio::sync::oneshot::Sender<ToolApproval>,
+}
+
+pub struct KeyEntry {
+    pub provider: String,
+    pub env_var: String,
+    pub buf: String,
 }
 
 impl State {
@@ -281,6 +374,9 @@ impl State {
             notify: true,
             selection: None,
             log_area: Rect::default(),
+            pending_approval: None,
+            pending_key_entry: None,
+            permission_mode: PermissionMode::default(),
         }
     }
 
@@ -341,6 +437,18 @@ impl State {
                 }
             }
             TurnEvent::TurnEnd => {}
+            TurnEvent::ToolApprovalRequest {
+                name,
+                arguments,
+                responder,
+            } => {
+                self.pending_approval = Some(PendingApproval {
+                    name,
+                    arguments,
+                    responder,
+                });
+                self.scroll = 0;
+            }
         }
     }
 }
@@ -358,6 +466,7 @@ pub async fn run(mut agent: Agent) -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut state = State::new(agent.session_id(), agent.model());
+    state.permission_mode = agent.permission_mode();
     let result = event_loop(&mut terminal, &mut state, &mut agent).await;
 
     disable_raw_mode()?;
@@ -399,6 +508,14 @@ async fn event_loop<B: ratatui::backend::Backend>(
 
         if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
             return Ok(());
+        }
+
+        // Hidden-input API-key entry takes precedence over normal mode
+        // dispatch — typed chars must go to the masked buffer, not the
+        // input box, until the user commits with Enter or cancels.
+        if state.pending_key_entry.is_some() {
+            handle_key_entry(state, agent, key);
+            continue;
         }
 
         match state.mode {
@@ -452,6 +569,9 @@ async fn event_loop<B: ratatui::backend::Backend>(
                     }
                     KeyCode::Home => state.input_cursor = 0,
                     KeyCode::End => state.input_cursor = state.input.len(),
+                    KeyCode::BackTab => {
+                        set_mode(state, agent, state.permission_mode.next());
+                    }
                     KeyCode::Tab => {
                         if accept_menu(state) {
                             // accepted from menu
@@ -572,6 +692,9 @@ async fn event_loop<B: ratatui::backend::Backend>(
                             state.input.push_str(&s.completion);
                             state.input_cursor = state.input.len();
                         }
+                    }
+                    KeyCode::BackTab => {
+                        set_mode(state, agent, state.permission_mode.next());
                     }
                     // Submit also works from Normal
                     KeyCode::Enter => {
@@ -849,6 +972,7 @@ fn arg_placeholder(cmd: &str) -> Option<&'static str> {
         "model" => Some(" [NAME]"),
         "theme" => Some(" [NAME]"),
         "notify" => Some(" [on|off]"),
+        "prompt" => Some(" [NAME]"),
         _ => None,
     }
 }
@@ -905,6 +1029,21 @@ fn compute_menu(input: &str, aliases: &[String], models: &[String]) -> Option<Me
                 items,
                 selected: 0,
                 kind: MenuKind::Model,
+            });
+        }
+        if cmd == "prompt" {
+            let items: Vec<String> = PROMPT_TEMPLATES
+                .iter()
+                .filter(|(n, _)| n.starts_with(arg))
+                .map(|(n, _)| (*n).to_string())
+                .collect();
+            if items.is_empty() {
+                return None;
+            }
+            return Some(Menu {
+                items,
+                selected: 0,
+                kind: MenuKind::Theme, // reuse arg-replacement semantics
             });
         }
         return None;
@@ -1150,21 +1289,52 @@ async fn run_turn<B: ratatui::backend::Backend>(
         while event::poll(Duration::from_millis(0)).unwrap_or(false) {
             let Ok(evt) = event::read() else { break };
             match evt {
+                Event::Key(k) if k.kind == KeyEventKind::Release => {}
+                // Ctrl-C is always a hard interrupt, even mid-approval.
                 Event::Key(k)
-                    if matches!(k.code, KeyCode::Esc)
-                        || (k.modifiers.contains(KeyModifiers::CONTROL)
-                            && matches!(k.code, KeyCode::Char('c'))) =>
+                    if k.modifiers.contains(KeyModifiers::CONTROL)
+                        && matches!(k.code, KeyCode::Char('c')) =>
                 {
                     state.push(Entry::Info("(interrupted)".into()));
                     return;
                 }
-                Event::Mouse(m) => handle_mouse(terminal, state, m),
-                _ => {
-                    // Other keys/mouse buttons are dropped during a turn —
-                    // typing into the input mid-stream would be confusing
-                    // since we'd have to decide whether to queue it.
+                Event::Key(k) if state.pending_approval.is_some() => {
+                    // Single-keystroke gate: y/n/a (Esc = deny).
+                    if let Some(decision) = approval_decision(k) {
+                        if let Some(pa) = state.pending_approval.take() {
+                            if matches!(decision, ToolApproval::AllowAll) {
+                                state.permission_mode = PermissionMode::Auto;
+                            }
+                            // A dropped responder just means the agent
+                            // gave up before we got back; treat as if
+                            // we never had one.
+                            let _ = pa.responder.send(decision);
+                        }
+                    }
                 }
+                Event::Key(k) if matches!(k.code, KeyCode::Esc) => {
+                    state.push(Entry::Info("(interrupted)".into()));
+                    return;
+                }
+                Event::Key(k) => {
+                    // Let the user keep typing into the input box while a
+                    // turn streams. Enter is intentionally dropped — the
+                    // current turn owns the agent until it ends; user can
+                    // Esc to interrupt then Enter to submit.
+                    handle_input_edit(state, k);
+                }
+                Event::Mouse(m) => handle_mouse(terminal, state, m),
+                _ => {}
             }
+        }
+
+        // The agent is parked on the approval oneshot. Don't poll the
+        // stream — that would block until the user answers anyway, but
+        // *also* freeze our draw/event loop. Just spin and redraw so
+        // animations + new keystrokes stay live.
+        if state.pending_approval.is_some() {
+            tokio::time::sleep(Duration::from_millis(33)).await;
+            continue;
         }
 
         tokio::select! {
@@ -1186,6 +1356,65 @@ async fn run_turn<B: ratatui::backend::Backend>(
                 // periodic redraw so deltas land smoothly
             }
         }
+    }
+}
+
+/// Hidden-input key-entry dispatch. Active only while
+/// `state.pending_key_entry` is `Some`. Enter commits the typed key
+/// onto the agent (and updates the `/keys` mirror); Esc cancels.
+/// Backspace pops one char; printable chars push.
+fn handle_key_entry(state: &mut State, agent: &mut Agent, key: KeyEvent) {
+    match key.code {
+        KeyCode::Enter => {
+            if let Some(ke) = state.pending_key_entry.take() {
+                if ke.buf.is_empty() {
+                    state.push(Entry::Info(format!(
+                        "no key entered — {} requests will 401 until ${} is set",
+                        ke.provider, ke.env_var
+                    )));
+                } else {
+                    let chars = ke.buf.chars().count();
+                    agent.set_api_key(Some(ke.buf));
+                    state.push(Entry::Info(format!(
+                        "stored {} key for this session ({chars} chars)",
+                        ke.provider
+                    )));
+                }
+            }
+        }
+        KeyCode::Esc => {
+            if let Some(ke) = state.pending_key_entry.take() {
+                state.push(Entry::Info(format!(
+                    "key entry cancelled — {} requests will 401 until ${} is set",
+                    ke.provider, ke.env_var
+                )));
+            }
+        }
+        KeyCode::Backspace => {
+            if let Some(ke) = state.pending_key_entry.as_mut() {
+                ke.buf.pop();
+            }
+        }
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if let Some(ke) = state.pending_key_entry.as_mut() {
+                ke.buf.push(c);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Map a keystroke to a [`ToolApproval`] when the permission prompt is
+/// up. `Esc` is treated as a deny so the user can dismiss the prompt
+/// with the same key they'd use anywhere else; explicit `y`/`n`/`a`
+/// (or their uppercase variants) take the obvious meanings. Other keys
+/// return `None` so the loop keeps waiting.
+fn approval_decision(k: KeyEvent) -> Option<ToolApproval> {
+    match k.code {
+        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Some(ToolApproval::Allow),
+        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Some(ToolApproval::Deny),
+        KeyCode::Char('a') | KeyCode::Char('A') => Some(ToolApproval::AllowAll),
+        _ => None,
     }
 }
 
@@ -1269,6 +1498,43 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                 agent.set_model(arg.to_string());
                 state.model = arg.to_string();
                 state.push(Entry::Info(format!("switched model to {arg}")));
+                // If the new model is a cloud one and we don't have a
+                // key for it, drop into the hidden-input prompt so the
+                // user can type one without leaving telia.
+                if !agent.has_api_key() {
+                    if let Some(prov) = telia_llm::provider_for_model(arg) {
+                        state.pending_key_entry = Some(KeyEntry {
+                            provider: prov.name.to_string(),
+                            env_var: prov.env_var.to_string(),
+                            buf: String::new(),
+                        });
+                    }
+                }
+            }
+        }
+        "auto" => set_mode(state, agent, PermissionMode::Auto),
+        "build" | "ask" => set_mode(state, agent, PermissionMode::Build),
+        "plan" => set_mode(state, agent, PermissionMode::Plan),
+        "prompt" => {
+            if arg.is_empty() {
+                let names: Vec<&str> = PROMPT_TEMPLATES.iter().map(|(n, _)| *n).collect();
+                state.push(Entry::Info(format!(
+                    "prompts: {}\n(use /prompt NAME to drop a template into the input)",
+                    names.join(" · ")
+                )));
+            } else if let Some((_, text)) = PROMPT_TEMPLATES
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(arg))
+            {
+                state.input = (*text).to_string();
+                state.input_cursor = state.input.len();
+                state.recall_idx = None;
+            } else {
+                let names: Vec<&str> = PROMPT_TEMPLATES.iter().map(|(n, _)| *n).collect();
+                state.push(Entry::Error(format!(
+                    "unknown prompt '{arg}'. known: {}",
+                    names.join(", ")
+                )));
             }
         }
         "keys" => {
@@ -1352,7 +1618,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
         }
         "help" | "?" => {
             state.push(Entry::Info(
-                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /keys · /theme [NAME] · /notify [on|off] · /show · /help · /quit"
+                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /keys · /plan · /build · /auto · /prompt [NAME] · /theme [NAME] · /notify [on|off] · /show · /help · /quit"
                     .into(),
             ));
         }
@@ -1371,12 +1637,33 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
         .map(|m| (m.items.len().min(6) as u16) + 2)
         .unwrap_or(0);
 
+    // Grow the input box vertically so long prompts wrap into view instead
+    // of horizontally scrolling off the right edge. Clamped so it never
+    // takes more than a third of the screen — the chat log keeps the rest.
+    // While an approval request is pending, the same chunk renders the
+    // approval prompt (3 content rows) instead of the input.
+    let (active_buf, active_prefix_width) = match state.mode {
+        Mode::Command => (state.command_buf.as_str(), 2usize), // ": "
+        _ => (state.input.as_str(), 2usize),                   // "> "
+    };
+    let inner_input_width = (f.area().width as usize).saturating_sub(2); // borders
+    let needed_rows = input_visual_rows(active_buf, inner_input_width, active_prefix_width);
+    let max_input_rows = (f.area().height as usize / 3).max(1);
+    let input_content_rows = if state.pending_approval.is_some() {
+        3
+    } else if state.pending_key_entry.is_some() {
+        2
+    } else {
+        needed_rows.clamp(1, max_input_rows)
+    };
+    let input_height = (input_content_rows as u16) + 2; // + borders
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(3),
             Constraint::Length(menu_height),
-            Constraint::Length(3),
+            Constraint::Length(input_height),
             Constraint::Length(1),
         ])
         .split(f.area());
@@ -1464,52 +1751,169 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
         Mode::Command => (": ", th.yellow, &state.command_buf, state.command_cursor),
     };
 
-    // Horizontally scroll so the cursor is always visible.
     let inside = chunks[2];
-    let visible_width = inside.width.saturating_sub(4) as usize; // 2 borders + prefix (2)
-    let cursor_chars = buf[..buf_cursor].chars().count();
-    let start_char = cursor_chars.saturating_sub(visible_width.saturating_sub(1));
-    let visible_text: String = buf.chars().skip(start_char).take(visible_width).collect();
-
     let body_style = if state.working {
         Style::default().fg(th.dim)
     } else {
         Style::default().fg(th.fg)
     };
-    let mut spans = vec![
-        Span::styled(prompt, Style::default().fg(prompt_color)),
-        Span::styled(visible_text, body_style),
-    ];
-    // Ghost-text suggestion only in Insert when the cursor is at the end
-    // and the menu isn't already showing the same matches.
-    if state.mode == Mode::Insert && state.menu.is_none() && state.input_cursor == state.input.len()
-    {
-        if let Some(s) = &state.suggestion {
-            let used = cursor_chars - start_char;
-            let remaining = visible_width.saturating_sub(used);
-            let ghost: String = s
-                .completion
-                .chars()
-                .chain(s.placeholder.chars())
-                .take(remaining)
-                .collect();
-            if !ghost.is_empty() {
-                spans.push(Span::styled(ghost, Style::default().fg(th.dim)));
+
+    if let Some(ke) = &state.pending_key_entry {
+        // Hidden-input prompt. Echo each typed char as `•`; never store
+        // the key in input_history.
+        let mask: String = "•".repeat(ke.buf.chars().count());
+        let lines = vec![
+            Line::from(vec![
+                Span::styled("enter ", Style::default().fg(th.dim)),
+                Span::styled(
+                    &ke.provider,
+                    Style::default().fg(th.purple).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" api key (will replace $", Style::default().fg(th.dim)),
+                Span::styled(&ke.env_var, Style::default().fg(th.cyan)),
+                Span::styled(" for this session)", Style::default().fg(th.dim)),
+            ]),
+            Line::from(vec![
+                Span::styled("> ", Style::default().fg(th.yellow)),
+                Span::styled(mask, Style::default().fg(th.fg)),
+            ]),
+        ];
+        let widget = Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(th.yellow))
+                .title(Span::styled(
+                    " api key ",
+                    Style::default().fg(th.yellow).add_modifier(Modifier::BOLD),
+                )),
+        );
+        f.render_widget(widget, chunks[2]);
+        // Cursor at end of the masked input.
+        let cursor_x = inside.x + 1 + 2 + ke.buf.chars().count() as u16;
+        let cursor_y = inside.y + 2;
+        f.set_cursor_position((cursor_x, cursor_y));
+    } else if let Some(pa) = &state.pending_approval {
+        // Approval prompt commandeers the input chunk. The chat scrollback
+        // shows the pending tool's name + args; here we just collect a
+        // single keystroke (y/n/a).
+        let preview = compact_tool_args(&pa.arguments, inside.width.saturating_sub(8) as usize);
+        let lines = vec![
+            Line::from(vec![
+                Span::styled("approve ", Style::default().fg(th.dim)),
+                Span::styled(
+                    &pa.name,
+                    Style::default().fg(th.purple).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("(", Style::default().fg(th.dim)),
+                Span::styled(preview, Style::default().fg(th.fg)),
+                Span::styled(") ?", Style::default().fg(th.dim)),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    "y",
+                    Style::default().fg(th.green).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("es · ", Style::default().fg(th.dim)),
+                Span::styled(
+                    "n",
+                    Style::default().fg(th.red).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("o · ", Style::default().fg(th.dim)),
+                Span::styled(
+                    "a",
+                    Style::default().fg(th.yellow).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    "uto (allow all for this session)",
+                    Style::default().fg(th.dim),
+                ),
+            ]),
+        ];
+        let widget = Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(th.yellow))
+                .title(Span::styled(
+                    " permission ",
+                    Style::default().fg(th.yellow).add_modifier(Modifier::BOLD),
+                )),
+        );
+        f.render_widget(widget, chunks[2]);
+        // No cursor while waiting for approval — the prompt isn't editable.
+    } else if input_content_rows == 1 {
+        // Single-line: keep the horizontal-scroll behaviour so the cursor
+        // stays in view when typing past the right edge.
+        let visible_width = inside.width.saturating_sub(4) as usize; // 2 borders + prefix (2)
+        let cursor_chars = buf[..buf_cursor].chars().count();
+        let start_char = cursor_chars.saturating_sub(visible_width.saturating_sub(1));
+        let visible_text: String = buf.chars().skip(start_char).take(visible_width).collect();
+        let mut spans = vec![
+            Span::styled(prompt, Style::default().fg(prompt_color)),
+            Span::styled(visible_text, body_style),
+        ];
+        if state.mode == Mode::Insert
+            && state.menu.is_none()
+            && state.input_cursor == state.input.len()
+        {
+            if let Some(s) = &state.suggestion {
+                let used = cursor_chars - start_char;
+                let remaining = visible_width.saturating_sub(used);
+                let ghost: String = s
+                    .completion
+                    .chars()
+                    .chain(s.placeholder.chars())
+                    .take(remaining)
+                    .collect();
+                if !ghost.is_empty() {
+                    spans.push(Span::styled(ghost, Style::default().fg(th.dim)));
+                }
             }
         }
-    }
-    let input_widget = Paragraph::new(Line::from(spans)).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(prompt_color)),
-    );
-    f.render_widget(input_widget, chunks[2]);
+        let widget = Paragraph::new(Line::from(spans)).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(prompt_color)),
+        );
+        f.render_widget(widget, chunks[2]);
+        let cursor_x = inside.x + 1 + 2 + (cursor_chars - start_char) as u16;
+        let cursor_y = inside.y + 1;
+        f.set_cursor_position((cursor_x, cursor_y));
+    } else {
+        // Multi-line: wrap by inner width, prefix on row 0 only. Ghost
+        // suggestions are suppressed here — the input is already long
+        // enough that another sneaky completion would crowd the view.
+        let inner_w = inside.width.saturating_sub(2) as usize; // borders only
+        let prefix_w = 2usize;
+        let visual_lines = wrap_input_lines(buf, inner_w, prefix_w);
+        let mut lines: Vec<Line> = Vec::with_capacity(visual_lines.len());
+        for (i, l) in visual_lines.iter().enumerate() {
+            if i == 0 {
+                lines.push(Line::from(vec![
+                    Span::styled(prompt, Style::default().fg(prompt_color)),
+                    Span::styled(l.clone(), body_style),
+                ]));
+            } else {
+                lines.push(Line::from(Span::styled(l.clone(), body_style)));
+            }
+        }
+        let widget = Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(prompt_color)),
+        );
+        f.render_widget(widget, chunks[2]);
 
-    // ratatui hides the cursor by default; positioning it each frame makes
-    // it visible at the edit point within the scrolled view.
-    let cursor_x = inside.x + 1 /* border */ + 2 /* prefix */ + (cursor_chars - start_char) as u16;
-    let cursor_y = inside.y + 1;
-    f.set_cursor_position((cursor_x, cursor_y));
+        let (cursor_col, cursor_row) = cursor_visual_pos(buf, buf_cursor, inner_w, prefix_w);
+        // Clamp inside the visible content rows so a cursor past the cap
+        // pins to the last visible row.
+        let max_row = input_content_rows.saturating_sub(1) as u16;
+        let cursor_row = cursor_row.min(max_row);
+        let cursor_x = inside.x + 1 + cursor_col;
+        let cursor_y = inside.y + 1 + cursor_row;
+        f.set_cursor_position((cursor_x, cursor_y));
+    }
 
     let (mode_label, mode_color) = match state.mode {
         Mode::Insert => ("INS", th.cyan),
@@ -1569,12 +1973,32 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
         ),
         Style::default().fg(th.yellow),
     ));
+    // Permission-mode chip. Always shown so the user can't lose track:
+    // PLAN (blue) is read-only, BUILD (green) prompts per-call, AUTO
+    // (red) skips every prompt — colour-coded by risk.
+    let (chip, chip_bg) = match state.permission_mode {
+        PermissionMode::Plan => (" PLAN ", th.blue),
+        PermissionMode::Build => (" BUILD ", th.green),
+        PermissionMode::Auto => (" AUTO ", th.red),
+    };
+    status_spans.push(Span::styled(" · ", Style::default().fg(th.dim)));
+    status_spans.push(Span::styled(
+        chip,
+        Style::default()
+            .fg(th.bg)
+            .bg(chip_bg)
+            .add_modifier(Modifier::BOLD),
+    ));
     status_spans.push(Span::raw("   "));
     // Replace the right-side mode hints while a turn is in flight: the
     // normal mode keys are dropped mid-stream anyway, and surfacing the
     // interrupt keys here is the only place a first-time user finds out
     // they can stop the model.
-    let hint = if state.working {
+    let hint = if state.pending_key_entry.is_some() {
+        "type key · enter set · esc cancel"
+    } else if state.pending_approval.is_some() {
+        "y/n/a · esc cancel"
+    } else if state.working {
         "esc / ^c interrupt"
     } else {
         mode_hints(state.mode)
@@ -1659,6 +2083,54 @@ fn selection_cells(sel: Selection, area: Rect) -> Vec<(u16, u16)> {
 
 fn rect_contains(r: Rect, col: u16, row: u16) -> bool {
     col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height
+}
+
+/// Apply a single readline-style edit to `state.input` / `input_cursor`.
+/// Subset of the Insert-mode handler: just the keys that mutate the
+/// input buffer — no menu, no recall, no scroll, no submit. Used inside
+/// `run_turn` so the user can keep typing while a turn streams.
+fn handle_input_edit(state: &mut State, key: KeyEvent) {
+    match key.code {
+        KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => match c {
+            'a' => state.input_cursor = 0,
+            'e' => state.input_cursor = state.input.len(),
+            'u' => {
+                state.input.clear();
+                state.input_cursor = 0;
+            }
+            'w' => delete_word_before_cursor(state),
+            _ => {}
+        },
+        KeyCode::Char(c) => {
+            state.input.insert(state.input_cursor, c);
+            state.input_cursor += c.len_utf8();
+        }
+        KeyCode::Backspace if state.input_cursor > 0 => {
+            let prev = state.input[..state.input_cursor]
+                .chars()
+                .next_back()
+                .expect("cursor > 0 implies at least one char before");
+            let new_cursor = state.input_cursor - prev.len_utf8();
+            state.input.remove(new_cursor);
+            state.input_cursor = new_cursor;
+        }
+        KeyCode::Delete if state.input_cursor < state.input.len() => {
+            state.input.remove(state.input_cursor);
+        }
+        KeyCode::Left => {
+            if let Some((i, _)) = state.input[..state.input_cursor].char_indices().next_back() {
+                state.input_cursor = i;
+            }
+        }
+        KeyCode::Right => {
+            if let Some(c) = state.input[state.input_cursor..].chars().next() {
+                state.input_cursor += c.len_utf8();
+            }
+        }
+        KeyCode::Home => state.input_cursor = 0,
+        KeyCode::End => state.input_cursor = state.input.len(),
+        _ => {}
+    }
 }
 
 /// Mouse-event dispatch shared by the outer event loop and the in-turn
@@ -1758,6 +2230,124 @@ fn format_count(n: u64) -> String {
     } else {
         format!("{:.1}M", n as f64 / 1_000_000.0)
     }
+}
+
+/// Strip JSON noise from tool args so the permission prompt shows
+/// something readable. For bash we surface the `command` field
+/// directly; otherwise we pretty-print the whole JSON object. Output is
+/// truncated to `max` chars with a trailing `…` so it can't blow the
+/// approval row off the screen.
+fn compact_tool_args(raw: &str, max: usize) -> String {
+    let trimmed = if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
+        if let Some(cmd) = v.get("command").and_then(|c| c.as_str()) {
+            cmd.to_string()
+        } else {
+            // Compact JSON: no whitespace.
+            v.to_string()
+        }
+    } else {
+        raw.to_string()
+    };
+    // Collapse any embedded newlines so the prompt stays single-line.
+    let single = trimmed.replace('\n', " ");
+    if single.chars().count() > max && max > 1 {
+        let head: String = single.chars().take(max.saturating_sub(1)).collect();
+        format!("{head}…")
+    } else {
+        single
+    }
+}
+
+/// How many visual rows a prompt buffer needs once wrapped at the input
+/// box's inner width. Row 0 starts with the prefix offset (`"> "` or
+/// `": "`); rows 1+ start at column 0. Explicit `'\n'` breaks the line
+/// regardless of column. Always returns at least 1.
+fn input_visual_rows(buf: &str, line_width: usize, prefix_width: usize) -> usize {
+    if line_width <= prefix_width {
+        return 1;
+    }
+    let mut rows = 1usize;
+    let mut col = prefix_width;
+    for c in buf.chars() {
+        if c == '\n' {
+            rows += 1;
+            col = 0;
+            continue;
+        }
+        if col >= line_width {
+            rows += 1;
+            col = 0;
+        }
+        col += 1;
+    }
+    rows
+}
+
+/// Split a prompt buffer into the strings that go on each rendered row.
+/// Mirrors the geometry of [`input_visual_rows`] so the cursor position
+/// computed by [`cursor_visual_pos`] lines up with what's drawn. Row 0
+/// gets one prefix-width's worth of leading slack (because the prompt
+/// itself eats those cells); subsequent rows start at column 0.
+fn wrap_input_lines(buf: &str, line_width: usize, prefix_width: usize) -> Vec<String> {
+    if line_width <= prefix_width {
+        return vec![buf.to_string()];
+    }
+    let mut out: Vec<String> = vec![String::new()];
+    let mut col = prefix_width;
+    for c in buf.chars() {
+        if c == '\n' {
+            out.push(String::new());
+            col = 0;
+            continue;
+        }
+        if col >= line_width {
+            out.push(String::new());
+            col = 0;
+        }
+        out.last_mut().unwrap().push(c);
+        col += 1;
+    }
+    out
+}
+
+/// Where the cursor lands inside the input box after rendering the
+/// portion of `buf` before `cursor_byte`. Returns `(col, row)` in the
+/// input-box's *inner* coordinate space (excluding borders). Matches the
+/// wrap geometry of [`wrap_input_lines`].
+fn cursor_visual_pos(
+    buf: &str,
+    cursor_byte: usize,
+    line_width: usize,
+    prefix_width: usize,
+) -> (u16, u16) {
+    if line_width <= prefix_width {
+        return (prefix_width as u16, 0);
+    }
+    let mut row: u16 = 0;
+    let mut col: u16 = prefix_width as u16;
+    for (b, c) in buf.char_indices() {
+        if b >= cursor_byte {
+            break;
+        }
+        if c == '\n' {
+            row += 1;
+            col = 0;
+            continue;
+        }
+        if col >= line_width as u16 {
+            row += 1;
+            col = 0;
+        }
+        col += 1;
+    }
+    // If we landed exactly at the wrap point, push the cursor onto the
+    // next row's column 0 — most terminals render that cleaner than
+    // sitting one past the right border.
+    if col >= line_width as u16 {
+        row += 1;
+        col = 0;
+    }
+    (col, row)
 }
 
 /// Compact "hf.co/FoolDev/Thanatos-27B:Q4_K_M" → "Thanatos-27B" for status-
@@ -2159,6 +2749,44 @@ mod tests {
     fn short_model_handles_slash_only_or_colon_only() {
         assert_eq!(short_model("a/b"), "b");
         assert_eq!(short_model("model:tag"), "model");
+    }
+
+    #[test]
+    fn input_visual_rows_counts_wrap_and_newlines() {
+        // line_width=10, prefix=2 → first row holds 8 input chars,
+        // subsequent rows hold 10. Empty buffer is 1 row.
+        assert_eq!(input_visual_rows("", 10, 2), 1);
+        assert_eq!(input_visual_rows("hi", 10, 2), 1);
+        // 8 chars fill row 0; 1 more wraps to row 1.
+        assert_eq!(input_visual_rows("12345678", 10, 2), 1);
+        assert_eq!(input_visual_rows("123456789", 10, 2), 2);
+        // Explicit newlines bump rows regardless of column.
+        assert_eq!(input_visual_rows("a\nb\nc", 10, 2), 3);
+        // 8 chars + 10 chars + 10 chars = 28 chars → 3 rows.
+        assert_eq!(input_visual_rows(&"x".repeat(28), 10, 2), 3);
+    }
+
+    #[test]
+    fn cursor_visual_pos_matches_wrap_geometry() {
+        // Cursor at start: just past the prefix on row 0.
+        assert_eq!(cursor_visual_pos("hello", 0, 10, 2), (2, 0));
+        // Cursor after one char: col 3.
+        assert_eq!(cursor_visual_pos("hello", 1, 10, 2), (3, 0));
+        // Cursor at the wrap point of row 0 (after 8 chars): jumps to (0, 1).
+        assert_eq!(cursor_visual_pos("12345678", 8, 10, 2), (0, 1));
+        // After a newline, cursor sits at col 0 of the next row.
+        assert_eq!(cursor_visual_pos("a\n", 2, 10, 2), (0, 1));
+    }
+
+    #[test]
+    fn wrap_input_lines_splits_at_width() {
+        let lines = wrap_input_lines("12345678abc", 10, 2);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "12345678"); // first row: 10 - 2 prefix = 8
+        assert_eq!(lines[1], "abc");
+        // Explicit newlines force a break.
+        let lines = wrap_input_lines("hi\nthere", 20, 2);
+        assert_eq!(lines, vec!["hi".to_string(), "there".to_string()]);
     }
 
     #[test]

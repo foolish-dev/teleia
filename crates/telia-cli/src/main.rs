@@ -26,34 +26,108 @@ const DEFAULT_OLLAMA_MODELS: &[&str] = &[
 /// inside `detect_endpoint`. `provider:model` form is used for entries
 /// whose bare name would collide with an Ollama-hosted local model
 /// (e.g. `groq:llama-...`).
+///
+/// Best-effort snapshot of the major providers' public chat-completions
+/// catalogs as of early 2026. Names that 404 at request time are easy
+/// to spot in the error log and easy to override via the config file
+/// (see `crates/telia-cli/src/config.rs`).
+#[rustfmt::skip]
 const KNOWN_CLOUD_MODELS: &[&str] = &[
-    // Anthropic
+    // ---------- Anthropic ----------
     "claude-opus-4-7",
     "claude-sonnet-4-6",
     "claude-haiku-4-5-20251001",
-    // OpenAI
+    "claude-opus-4-1",
+    "claude-sonnet-4-5",
+    "claude-haiku-4-5",
+    "claude-3-7-sonnet-latest",
+    "claude-3-5-sonnet-20241022",
+    "claude-3-5-haiku-20241022",
+    "claude-3-opus-20240229",
+
+    // ---------- OpenAI ----------
     "gpt-5",
     "gpt-5-mini",
-    "o3",
+    "gpt-5-nano",
+    "gpt-4.1",
+    "gpt-4.1-mini",
+    "gpt-4.1-nano",
+    "gpt-4o",
+    "gpt-4o-mini",
     "o4-mini",
-    // Google
+    "o3",
+    "o3-mini",
+    "o3-pro",
+    "o1",
+    "o1-mini",
+    "o1-pro",
+
+    // ---------- Google ----------
     "gemini-2.5-pro",
     "gemini-2.5-flash",
-    // xAI
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-1.5-pro",
+    "gemini-1.5-flash",
+
+    // ---------- xAI ----------
     "grok-4",
+    "grok-4-fast",
     "grok-3",
-    // DeepSeek
+    "grok-3-mini",
+    "grok-3-fast",
+    "grok-2",
+    "grok-2-vision",
+
+    // ---------- DeepSeek ----------
     "deepseek-chat",
     "deepseek-reasoner",
-    // Mistral
+
+    // ---------- Mistral ----------
     "mistral-large-latest",
+    "mistral-medium-latest",
+    "mistral-small-latest",
+    "ministral-8b-latest",
+    "ministral-3b-latest",
     "codestral-latest",
-    // Groq (explicit prefix — model names collide with local Ollama)
+    "pixtral-large-latest",
+    "open-mistral-nemo",
+
+    // ---------- Groq (explicit prefix — names collide with local Ollama) ----------
     "groq:llama-3.3-70b-versatile",
+    "groq:llama-3.1-8b-instant",
+    "groq:meta-llama/llama-4-scout-17b-16e-instruct",
+    "groq:meta-llama/llama-4-maverick-17b-128e-instruct",
     "groq:deepseek-r1-distill-llama-70b",
-    // OpenRouter (catalog router; explicit prefix required)
+    "groq:qwen-qwq-32b",
+    "groq:qwen-2.5-coder-32b",
+    "groq:qwen-2.5-32b",
+    "groq:mixtral-8x7b-32768",
+    "groq:gemma2-9b-it",
+
+    // ---------- OpenRouter (popular routes; the full catalog is in the thousands) ----------
     "openrouter:anthropic/claude-opus-4-7",
+    "openrouter:anthropic/claude-sonnet-4-6",
+    "openrouter:anthropic/claude-haiku-4-5",
     "openrouter:openai/gpt-5",
+    "openrouter:openai/gpt-5-mini",
+    "openrouter:openai/o3",
+    "openrouter:openai/o4-mini",
+    "openrouter:google/gemini-2.5-pro",
+    "openrouter:google/gemini-2.5-flash",
+    "openrouter:x-ai/grok-4",
+    "openrouter:x-ai/grok-3",
+    "openrouter:deepseek/deepseek-chat",
+    "openrouter:deepseek/deepseek-r1",
+    "openrouter:meta-llama/llama-3.3-70b-instruct",
+    "openrouter:meta-llama/llama-4-scout",
+    "openrouter:meta-llama/llama-4-maverick",
+    "openrouter:qwen/qwen-2.5-coder-32b-instruct",
+    "openrouter:qwen/qwen-2.5-72b-instruct",
+    "openrouter:mistralai/mistral-large-2411",
+    "openrouter:mistralai/codestral-2501",
+    "openrouter:nvidia/llama-3.1-nemotron-70b-instruct",
 ];
 
 #[derive(Parser, Debug)]
@@ -114,6 +188,18 @@ struct Args {
     /// scripts don't hang on stdin).
     #[arg(long, alias = "yes", short = 'y')]
     pull_yes: bool,
+    /// Start in auto mode — every tool call dispatches without a y/n/a
+    /// prompt. Equivalent to typing `/auto` after launch. Use with care:
+    /// the agent can run arbitrary `bash`, `write`, and `edit` without
+    /// asking. Toggle off mid-session with `/build` (or Shift+Tab).
+    #[arg(long, conflicts_with = "plan")]
+    auto: bool,
+    /// Start in plan mode — `read` / `list` / `glob` / `grep` run, but
+    /// `write` / `edit` / `bash` are blocked. The model is pushed toward
+    /// describing what it would do rather than executing. Toggle off
+    /// mid-session with `/build` (or Shift+Tab).
+    #[arg(long, conflicts_with = "auto")]
+    plan: bool,
 }
 
 #[tokio::main]
@@ -154,7 +240,19 @@ async fn main() -> Result<()> {
         detect_endpoint(&args.model)
     };
     let base_url = args.base_url.unwrap_or(auto_url);
-    let api_key = args.api_key.or(auto_key);
+    let mut api_key = args.api_key.or(auto_key);
+
+    // If the resolved provider is a cloud one and we still don't have a
+    // key, offer to read one from the terminal now. Skipped when stdin
+    // isn't a TTY (scripts, pipes, CI) so unattended runs keep working
+    // with whatever the env said.
+    if api_key.is_none() {
+        if let Some(prov) = telia_llm::provider_for_model(&args.model) {
+            if let Some(key) = prompt_api_key(prov) {
+                api_key = Some(key);
+            }
+        }
+    }
 
     if !args.no_pull && looks_like_ollama(&base_url) {
         // Walk every default Ollama model plus the active --model
@@ -176,6 +274,13 @@ async fn main() -> Result<()> {
     let llm = LlmClient::with_api_key(base_url, args.model, api_key);
     let store = Store::open()?;
     let mut agent = Agent::new(llm, store)?;
+    if args.auto {
+        agent.set_permission_mode(telia_agent::PermissionMode::Auto);
+        eprintln!("· auto mode ON (--auto). Tool calls will dispatch without prompting.");
+    } else if args.plan {
+        agent.set_permission_mode(telia_agent::PermissionMode::Plan);
+        eprintln!("· plan mode ON (--plan). write/edit/bash are blocked.");
+    }
     // Best-effort: cache the installed-model list once so the /model
     // dropdown has something to show without hitting the network on
     // every keypress.
@@ -255,6 +360,38 @@ fn render_pull_line(prog: &PullProgress, spinner: &str) {
     };
     let _ = std::io::stderr().write_all(line.as_bytes());
     let _ = std::io::stderr().flush();
+}
+
+/// Read an API key for `prov` from the terminal with input hidden, after
+/// asking the user for permission. Returns `None` if stdin isn't a TTY,
+/// the user declines, or the typed string is empty. The key lives in
+/// process memory only — persistence is up to the user (env var or the
+/// `[llms.NAME]` config entry).
+fn prompt_api_key(prov: &telia_llm::Provider) -> Option<String> {
+    if !std::io::stdin().is_terminal() {
+        return None;
+    }
+    eprintln!(
+        "· {} API key not found (looked at ${}).",
+        prov.name, prov.env_var
+    );
+    eprint!("  enter a key now? [Y/n] ");
+    let _ = std::io::stderr().flush();
+    let mut line = String::new();
+    if std::io::stdin().lock().read_line(&mut line).is_err() {
+        return None;
+    }
+    if line.trim().to_lowercase().starts_with('n') {
+        return None;
+    }
+    let prompt = format!("  {} key: ", prov.name);
+    match rpassword::prompt_password(prompt) {
+        Ok(k) if !k.is_empty() => {
+            eprintln!("  ✓ key stored for this session ({} chars)", k.len());
+            Some(k)
+        }
+        _ => None,
+    }
 }
 
 /// Ask the user whether to pull a missing model. Non-TTY stdin (scripts,

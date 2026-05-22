@@ -4,7 +4,7 @@ use futures_util::{pin_mut, Stream, StreamExt};
 use telia_llm::{ChatEvent, LlmClient, Message, ToolDef};
 use telia_store::Store;
 
-mod karpathy;
+mod kaparthy;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TokenCounts {
@@ -16,22 +16,90 @@ const SYSTEM_PROMPT_BASE: &str = "You are τέλεια, a terse coding assistant
 Use the provided tools (read, write, edit, bash, list, glob, grep) to do real work. \
 Default to brief replies. When you finish a turn, stop — do not narrate.";
 
-/// Base prompt + the karpathy-derived guidelines, joined once at startup.
+/// Base prompt + the kaparthy-derived guidelines, joined once at startup.
 fn system_prompt() -> String {
-    format!("{SYSTEM_PROMPT_BASE}\n\n{}", karpathy::GUIDELINES)
+    format!("{SYSTEM_PROMPT_BASE}\n\n{}", kaparthy::GUIDELINES)
 }
 
 pub const MAX_TOOL_HOPS: usize = 16;
 
-/// Events emitted by `turn()`. The TUI consumes these to render incrementally.
-#[derive(Debug, Clone)]
+/// Events emitted by `turn()`. The TUI consumes these to render
+/// incrementally. Not `Clone` because `ToolApprovalRequest` carries a
+/// `oneshot::Sender` that owns its single reply slot.
+#[derive(Debug)]
 pub enum TurnEvent {
     AssistantStart,
     AssistantDelta(String),
     AssistantEnd,
-    ToolStart { name: String, arguments: String },
-    ToolEnd { name: String, output: String },
+    /// Sent before each tool dispatch when the agent isn't in auto
+    /// mode. The TUI must send a [`ToolApproval`] through `responder`
+    /// before the stream produces another event — the agent's loop is
+    /// blocked on the matching `.await`.
+    ToolApprovalRequest {
+        name: String,
+        arguments: String,
+        responder: tokio::sync::oneshot::Sender<ToolApproval>,
+    },
+    ToolStart {
+        name: String,
+        arguments: String,
+    },
+    ToolEnd {
+        name: String,
+        output: String,
+    },
     TurnEnd,
+}
+
+/// User's response to a [`TurnEvent::ToolApprovalRequest`]. `AllowAll`
+/// permits the call and also flips the agent into auto mode for the
+/// rest of the session; `Deny` injects a `"denied by user"` tool result
+/// so the model can react.
+#[derive(Debug, Clone, Copy)]
+pub enum ToolApproval {
+    Allow,
+    AllowAll,
+    Deny,
+}
+
+/// Per-session permission mode. Cycles via Shift+Tab in the TUI:
+/// `Plan` → `Build` → `Auto` → `Plan`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PermissionMode {
+    /// Read-only investigation: `read` / `list` / `glob` / `grep` run
+    /// without prompting; `write` / `edit` / `bash` short-circuit with
+    /// a synthetic "blocked: plan mode" tool result so the model is
+    /// pushed toward describing what it would do.
+    Plan,
+    /// Default: every tool call yields a `ToolApprovalRequest` and
+    /// waits for the user's y/n/a.
+    #[default]
+    Build,
+    /// Yolo: every tool dispatches immediately, no prompts.
+    Auto,
+}
+
+impl PermissionMode {
+    pub fn next(self) -> Self {
+        match self {
+            PermissionMode::Plan => PermissionMode::Build,
+            PermissionMode::Build => PermissionMode::Auto,
+            PermissionMode::Auto => PermissionMode::Plan,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            PermissionMode::Plan => "PLAN",
+            PermissionMode::Build => "BUILD",
+            PermissionMode::Auto => "AUTO",
+        }
+    }
+}
+
+/// Tools that just *look* at the filesystem and don't change anything.
+/// Anything else is gated by [`PermissionMode::Plan`].
+fn is_readonly_tool(name: &str) -> bool {
+    matches!(name, "read" | "list" | "glob" | "grep")
 }
 
 pub struct Agent {
@@ -43,6 +111,10 @@ pub struct Agent {
     seq: usize,
     tokens: TokenCounts,
     available_models: Vec<String>,
+    /// Current permission stance. See [`PermissionMode`]. Flipped by
+    /// the TUI's `/plan` / `/build` / `/auto` commands, by Shift+Tab,
+    /// by the CLI's `--auto` flag, or by an `AllowAll` response.
+    permission_mode: PermissionMode,
 }
 
 impl Agent {
@@ -57,11 +129,32 @@ impl Agent {
             seq: 0,
             tokens: TokenCounts::default(),
             available_models: Vec::new(),
+            permission_mode: PermissionMode::default(),
         };
         agent.push(Message::System {
             content: system_prompt(),
         })?;
         Ok(agent)
+    }
+
+    pub fn permission_mode(&self) -> PermissionMode {
+        self.permission_mode
+    }
+
+    pub fn set_permission_mode(&mut self, mode: PermissionMode) {
+        self.permission_mode = mode;
+    }
+
+    pub fn auto_mode(&self) -> bool {
+        matches!(self.permission_mode, PermissionMode::Auto)
+    }
+
+    pub fn set_auto_mode(&mut self, on: bool) {
+        self.permission_mode = if on {
+            PermissionMode::Auto
+        } else {
+            PermissionMode::Build
+        };
     }
 
     /// Cached list of Ollama-installed models; populated once via
@@ -143,6 +236,14 @@ impl Agent {
         self.llm.set_model(model);
     }
 
+    pub fn has_api_key(&self) -> bool {
+        self.llm.api_key().map(|k| !k.is_empty()).unwrap_or(false)
+    }
+
+    pub fn set_api_key(&mut self, key: Option<String>) {
+        self.llm.set_api_key(key);
+    }
+
     pub fn turn<'a>(
         &'a mut self,
         user_input: String,
@@ -195,6 +296,66 @@ impl Agent {
                 }
 
                 for call in tool_calls {
+                    // Permission gate. Three modes, each with its own
+                    // policy: Auto runs everything; Plan auto-allows
+                    // read-only tools and synthesizes a "blocked" result
+                    // for write/edit/bash so the model knows to describe
+                    // rather than execute; Build prompts per-call.
+                    match self.permission_mode {
+                        PermissionMode::Auto => {}
+                        PermissionMode::Plan if is_readonly_tool(&call.function.name) => {}
+                        PermissionMode::Plan => {
+                            let output = format!(
+                                "blocked: plan mode does not permit `{}`. Describe what you would do; the user can switch to build mode (Shift+Tab or /build) to execute.",
+                                call.function.name
+                            );
+                            yield TurnEvent::ToolStart {
+                                name: call.function.name.clone(),
+                                arguments: call.function.arguments.clone(),
+                            };
+                            yield TurnEvent::ToolEnd {
+                                name: call.function.name.clone(),
+                                output: output.clone(),
+                            };
+                            self.push(Message::Tool {
+                                tool_call_id: call.id.clone(),
+                                content: output,
+                            })?;
+                            continue;
+                        }
+                        PermissionMode::Build => {
+                            let (tx, rx) = tokio::sync::oneshot::channel();
+                            yield TurnEvent::ToolApprovalRequest {
+                                name: call.function.name.clone(),
+                                arguments: call.function.arguments.clone(),
+                                responder: tx,
+                            };
+                            let decision = rx.await.unwrap_or(ToolApproval::Deny);
+                            match decision {
+                                ToolApproval::Allow => {}
+                                ToolApproval::AllowAll => {
+                                    self.permission_mode = PermissionMode::Auto;
+                                }
+                                ToolApproval::Deny => {
+                                    let output = "denied by user".to_string();
+                                    yield TurnEvent::ToolStart {
+                                        name: call.function.name.clone(),
+                                        arguments: call.function.arguments.clone(),
+                                    };
+                                    yield TurnEvent::ToolEnd {
+                                        name: call.function.name.clone(),
+                                        output: output.clone(),
+                                    };
+                                    self.push(Message::Tool {
+                                        tool_call_id: call.id.clone(),
+                                        content: output,
+                                    })?;
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+
                     yield TurnEvent::ToolStart {
                         name: call.function.name.clone(),
                         arguments: call.function.arguments.clone(),

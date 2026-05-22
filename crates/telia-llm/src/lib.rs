@@ -339,6 +339,14 @@ impl LlmClient {
         self.model = resolve_model_name(&model).to_string();
     }
 
+    pub fn api_key(&self) -> Option<&str> {
+        self.api_key.as_deref()
+    }
+
+    pub fn set_api_key(&mut self, key: Option<String>) {
+        self.api_key = key.filter(|k| !k.is_empty());
+    }
+
     /// List models Ollama has cached locally. Returns the `name` field of
     /// each entry in `/api/tags` (e.g. `"llama3:latest"`,
     /// `"hf.co/FoolDev/Thanatos-27B:Q4_K_M"`). Best-effort — returns an
