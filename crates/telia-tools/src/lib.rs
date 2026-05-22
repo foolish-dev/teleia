@@ -57,6 +57,40 @@ pub fn definitions() -> Vec<ToolDef> {
                 "required": ["command"]
             }),
         ),
+        ToolDef::new(
+            "list",
+            "List the contents of a directory. Returns one entry per line; directories are suffixed with '/'.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" }
+                },
+                "required": ["path"]
+            }),
+        ),
+        ToolDef::new(
+            "glob",
+            "Find files matching a shell-style glob pattern (e.g. '**/*.rs'). Returns up to 200 matching paths.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "pattern": { "type": "string" }
+                },
+                "required": ["pattern"]
+            }),
+        ),
+        ToolDef::new(
+            "grep",
+            "Search for a regex pattern across files. `path` may be a single file or a directory (walked recursively, skipping hidden dirs and target/node_modules). Returns up to 200 file:line:text matches.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "pattern": { "type": "string", "description": "Rust regex syntax" },
+                    "path":    { "type": "string", "description": "File or directory to search" }
+                },
+                "required": ["pattern", "path"]
+            }),
+        ),
     ]
 }
 
@@ -69,6 +103,9 @@ pub async fn dispatch(name: &str, arguments: &str) -> Result<String> {
         "write" => write_tool(args).await,
         "edit" => edit_tool(args).await,
         "bash" => bash_tool(args).await,
+        "list" => list_tool(args).await,
+        "glob" => glob_tool(args).await,
+        "grep" => grep_tool(args).await,
         other => Err(anyhow!("unknown tool: {other}")),
     }
 }
@@ -188,6 +225,130 @@ async fn bash_tool(args: Value) -> Result<String> {
         out.push_str(&format!("\n[exit {}]", exit_status.code().unwrap_or(-1)));
     }
     Ok(out)
+}
+
+#[derive(Deserialize)]
+struct ListArgs {
+    path: String,
+}
+
+async fn list_tool(args: Value) -> Result<String> {
+    let ListArgs { path } = serde_json::from_value(args)?;
+    let mut entries: Vec<String> = std::fs::read_dir(&path)
+        .with_context(|| format!("read_dir {path}"))?
+        .filter_map(|r| r.ok())
+        .map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            if is_dir {
+                format!("{name}/")
+            } else {
+                name
+            }
+        })
+        .collect();
+    entries.sort();
+    if entries.is_empty() {
+        Ok(format!("{path}: (empty)"))
+    } else {
+        Ok(entries.join("\n"))
+    }
+}
+
+#[derive(Deserialize)]
+struct GlobArgs {
+    pattern: String,
+}
+
+async fn glob_tool(args: Value) -> Result<String> {
+    let GlobArgs { pattern } = serde_json::from_value(args)?;
+    let paths: Vec<String> = glob::glob(&pattern)
+        .with_context(|| format!("invalid glob: {pattern}"))?
+        .filter_map(|r| r.ok())
+        .take(200)
+        .map(|p| p.display().to_string())
+        .collect();
+    if paths.is_empty() {
+        Ok(format!("no matches for {pattern}"))
+    } else {
+        Ok(paths.join("\n"))
+    }
+}
+
+#[derive(Deserialize)]
+struct GrepArgs {
+    pattern: String,
+    path: String,
+}
+
+async fn grep_tool(args: Value) -> Result<String> {
+    let GrepArgs { pattern, path } = serde_json::from_value(args)?;
+    let re = regex::Regex::new(&pattern).with_context(|| format!("invalid regex: {pattern}"))?;
+    let root = PathBuf::from(&path);
+
+    let mut files = Vec::new();
+    if root.is_file() {
+        files.push(root);
+    } else if root.is_dir() {
+        // Cap walk size so a giant tree doesn't explode the search.
+        walk_files(&root, &mut files, 5000)?;
+    } else {
+        return Err(anyhow!("not found: {path}"));
+    }
+
+    const MAX_MATCHES: usize = 200;
+    let mut matches: Vec<String> = Vec::new();
+    'outer: for file in &files {
+        let content = match std::fs::read_to_string(file) {
+            Ok(c) => c,
+            // Binary / unreadable files are silently skipped — typical
+            // grep behaviour with --binary-files=without-match.
+            Err(_) => continue,
+        };
+        for (i, line) in content.lines().enumerate() {
+            if re.is_match(line) {
+                matches.push(format!("{}:{}:{line}", file.display(), i + 1));
+                if matches.len() >= MAX_MATCHES {
+                    matches.push(format!("[truncated at {MAX_MATCHES} matches]"));
+                    break 'outer;
+                }
+            }
+        }
+    }
+    if matches.is_empty() {
+        Ok(format!("no matches for /{pattern}/ in {path}"))
+    } else {
+        Ok(matches.join("\n"))
+    }
+}
+
+/// Recursive directory walk for grep_tool. Skips hidden entries, the
+/// usual heavy build/install dirs, and stops once `cap` files have been
+/// collected so a search over `/` doesn't melt the process.
+fn walk_files(root: &std::path::Path, out: &mut Vec<PathBuf>, cap: usize) -> std::io::Result<()> {
+    if out.len() >= cap {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(root)? {
+        if out.len() >= cap {
+            break;
+        }
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') || matches!(&*name, "target" | "node_modules" | "dist" | "build") {
+            continue;
+        }
+        let ft = entry.file_type()?;
+        if ft.is_dir() {
+            // Errors in sub-walks are non-fatal — skip the subtree.
+            let _ = walk_files(&path, out, cap);
+        } else if ft.is_file() {
+            out.push(path);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -311,5 +472,93 @@ mod tests {
         let result = dispatch("bash", &args).await.unwrap();
         assert!(result.contains("out"));
         assert!(result.contains("err"));
+    }
+
+    struct DirCleanup(PathBuf);
+    impl Drop for DirCleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn list_returns_entries_with_dir_suffix() {
+        let dir = tmp_path("list-dir");
+        std::fs::create_dir_all(&dir).unwrap();
+        let _c = DirCleanup(dir.clone());
+        std::fs::write(dir.join("a.txt"), "x").unwrap();
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        let args = json!({ "path": dir.to_str().unwrap() }).to_string();
+        let out = dispatch("list", &args).await.unwrap();
+        assert!(out.contains("a.txt"));
+        assert!(out.contains("sub/"));
+    }
+
+    #[tokio::test]
+    async fn list_reports_empty_directory() {
+        let dir = tmp_path("list-empty");
+        std::fs::create_dir_all(&dir).unwrap();
+        let _c = DirCleanup(dir.clone());
+        let args = json!({ "path": dir.to_str().unwrap() }).to_string();
+        let out = dispatch("list", &args).await.unwrap();
+        assert!(out.contains("(empty)"));
+    }
+
+    #[tokio::test]
+    async fn glob_finds_matching_files() {
+        let dir = tmp_path("glob-dir");
+        std::fs::create_dir_all(&dir).unwrap();
+        let _c = DirCleanup(dir.clone());
+        std::fs::write(dir.join("one.rs"), "").unwrap();
+        std::fs::write(dir.join("two.rs"), "").unwrap();
+        std::fs::write(dir.join("nope.txt"), "").unwrap();
+        let pattern = format!("{}/*.rs", dir.display());
+        let args = json!({ "pattern": pattern }).to_string();
+        let out = dispatch("glob", &args).await.unwrap();
+        assert!(out.contains("one.rs"));
+        assert!(out.contains("two.rs"));
+        assert!(!out.contains("nope.txt"));
+    }
+
+    #[tokio::test]
+    async fn glob_reports_no_matches() {
+        let pattern = format!("{}/glob-miss-*", tmp_path("glob-miss").display());
+        let args = json!({ "pattern": pattern }).to_string();
+        let out = dispatch("glob", &args).await.unwrap();
+        assert!(out.contains("no matches"));
+    }
+
+    #[tokio::test]
+    async fn grep_matches_lines_in_file() {
+        let path = tmp_path("grep.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "alpha\nbeta gamma\ndelta\n").unwrap();
+        let args = json!({ "pattern": "gamm[a]", "path": path.to_str().unwrap() }).to_string();
+        let out = dispatch("grep", &args).await.unwrap();
+        assert!(out.contains(":2:"));
+        assert!(out.contains("beta gamma"));
+        assert!(!out.contains("alpha"));
+    }
+
+    #[tokio::test]
+    async fn grep_walks_directory() {
+        let dir = tmp_path("grep-dir");
+        std::fs::create_dir_all(&dir).unwrap();
+        let _c = DirCleanup(dir.clone());
+        std::fs::write(dir.join("a.txt"), "needle here\n").unwrap();
+        std::fs::write(dir.join("b.txt"), "haystack only\n").unwrap();
+        let args = json!({ "pattern": "needle", "path": dir.to_str().unwrap() }).to_string();
+        let out = dispatch("grep", &args).await.unwrap();
+        assert!(out.contains("a.txt:1:needle here"));
+        assert!(!out.contains("b.txt"));
+    }
+
+    #[tokio::test]
+    async fn grep_rejects_invalid_regex() {
+        let path = tmp_path("grep-bad-re.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "x").unwrap();
+        let args = json!({ "pattern": "(", "path": path.to_str().unwrap() }).to_string();
+        assert!(dispatch("grep", &args).await.is_err());
     }
 }

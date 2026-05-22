@@ -173,23 +173,119 @@ pub struct LlmClient {
     http: reqwest::Client,
 }
 
-/// Detect the base URL and API-key env var for a model name. Used as a
-/// fallback when the caller doesn't supply `--base-url` / `--api-key`
-/// explicitly: `claude-*` → Anthropic's OpenAI-compatible endpoint,
-/// `gpt-*` / `o1*` / `o3*` → OpenAI, everything else → local Ollama.
+/// Static descriptor for a cloud chat-completions provider. The table
+/// below is the single source of truth for routing model names → base
+/// URL + API-key env var.
+#[derive(Debug, Clone, Copy)]
+pub struct Provider {
+    /// Human-readable name; doubles as the explicit `provider:` selector
+    /// (matched case-insensitively) for ambiguous model names.
+    pub name: &'static str,
+    pub base_url: &'static str,
+    pub env_var: &'static str,
+    /// Model-name prefixes that route here automatically (e.g.
+    /// `claude-` → Anthropic). May be empty for providers whose model
+    /// names collide with others — those require the explicit
+    /// `provider:model` form.
+    pub prefixes: &'static [&'static str],
+}
+
+/// All cloud providers telia knows about out of the box. The order
+/// matters: detection scans top-to-bottom and returns the first match.
+/// Anything not matched falls back to a local Ollama endpoint.
+pub const PROVIDERS: &[Provider] = &[
+    Provider {
+        name: "Anthropic",
+        base_url: "https://api.anthropic.com/v1",
+        env_var: "ANTHROPIC_API_KEY",
+        prefixes: &["claude-"],
+    },
+    Provider {
+        name: "OpenAI",
+        base_url: "https://api.openai.com/v1",
+        env_var: "OPENAI_API_KEY",
+        prefixes: &["gpt-", "o1", "o3", "o4"],
+    },
+    Provider {
+        name: "Google",
+        base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        env_var: "GEMINI_API_KEY",
+        prefixes: &["gemini-"],
+    },
+    Provider {
+        name: "xAI",
+        base_url: "https://api.x.ai/v1",
+        env_var: "XAI_API_KEY",
+        prefixes: &["grok-"],
+    },
+    Provider {
+        name: "DeepSeek",
+        base_url: "https://api.deepseek.com/v1",
+        env_var: "DEEPSEEK_API_KEY",
+        prefixes: &["deepseek-"],
+    },
+    Provider {
+        name: "Mistral",
+        base_url: "https://api.mistral.ai/v1",
+        env_var: "MISTRAL_API_KEY",
+        prefixes: &["mistral-", "codestral-"],
+    },
+    Provider {
+        name: "Groq",
+        base_url: "https://api.groq.com/openai/v1",
+        env_var: "GROQ_API_KEY",
+        // Groq hosts open models whose names (`llama-*`, etc.) collide
+        // with what users might run locally on Ollama. Require the
+        // explicit `groq:` prefix to route here.
+        prefixes: &[],
+    },
+    Provider {
+        name: "OpenRouter",
+        base_url: "https://openrouter.ai/api/v1",
+        env_var: "OPENROUTER_API_KEY",
+        // OpenRouter mirrors every other provider's catalog; explicit
+        // `openrouter:` prefix only.
+        prefixes: &[],
+    },
+];
+
+/// Resolve a model name to its provider. Checks the explicit
+/// `provider:model` form first (case-insensitive on the provider name),
+/// then falls back to prefix matching against the [`PROVIDERS`] table.
+/// Returns `None` for names that should route to Ollama.
+pub fn provider_for_model(model: &str) -> Option<&'static Provider> {
+    if let Some((head, _)) = model.split_once(':') {
+        if let Some(p) = PROVIDERS.iter().find(|p| p.name.eq_ignore_ascii_case(head)) {
+            return Some(p);
+        }
+    }
+    PROVIDERS
+        .iter()
+        .find(|p| p.prefixes.iter().any(|pre| model.starts_with(pre)))
+}
+
+/// Strip a leading `provider:` prefix when present and recognized —
+/// providers don't accept their own name in the `"model"` request field.
+/// `groq:llama-3.3-70b-versatile` → `llama-3.3-70b-versatile`;
+/// `hf.co/FoolDev/Thanatos-27B:Q4_K_M` → unchanged (no provider
+/// matches `hf.co/...`).
+pub fn resolve_model_name(model: &str) -> &str {
+    if let Some((head, rest)) = model.split_once(':') {
+        if PROVIDERS.iter().any(|p| p.name.eq_ignore_ascii_case(head)) {
+            return rest;
+        }
+    }
+    model
+}
+
+/// Detect the base URL and API-key env-var value for a model name. Used
+/// as a fallback when the caller doesn't supply `--base-url` /
+/// `--api-key` explicitly. See [`PROVIDERS`] for the full routing table;
+/// unrecognized names fall back to local Ollama with no key.
 pub fn detect_endpoint(model: &str) -> (String, Option<String>) {
-    if model.starts_with("claude-") {
-        (
-            "https://api.anthropic.com/v1".to_string(),
-            std::env::var("ANTHROPIC_API_KEY").ok(),
-        )
-    } else if model.starts_with("gpt-") || model.starts_with("o1") || model.starts_with("o3") {
-        (
-            "https://api.openai.com/v1".to_string(),
-            std::env::var("OPENAI_API_KEY").ok(),
-        )
-    } else {
-        (DEFAULT_BASE_URL.to_string(), None)
+    match provider_for_model(model) {
+        Some(p) => (p.base_url.to_string(), std::env::var(p.env_var).ok()),
+        None => (DEFAULT_BASE_URL.to_string(), None),
     }
 }
 
@@ -225,8 +321,22 @@ impl LlmClient {
         &self.model
     }
 
+    /// Re-point at a different model. If the new name resolves to a
+    /// different provider (e.g. switching from `claude-opus-4-7` to
+    /// `gpt-5`), the base URL and API key are re-read from the
+    /// [`PROVIDERS`] table — without this, the request would still hit
+    /// the old provider's endpoint with the wrong model name. Within
+    /// the same provider the existing `api_key` is preserved so any
+    /// manual `--api-key` override survives a `/model` swap. Inline
+    /// `provider:` prefixes are stripped before storage so the API call
+    /// uses the bare model name.
     pub fn set_model(&mut self, model: String) {
-        self.model = model;
+        let (new_base, new_key) = detect_endpoint(&model);
+        if new_base != self.base_url {
+            self.base_url = new_base;
+            self.api_key = new_key;
+        }
+        self.model = resolve_model_name(&model).to_string();
     }
 
     /// List models Ollama has cached locally. Returns the `name` field of
@@ -527,5 +637,77 @@ mod tests {
         assert!(looks_like_ollama("http://ollama.example.com/v1"));
         assert!(!looks_like_ollama("https://api.anthropic.com/v1"));
         assert!(!looks_like_ollama("https://api.openai.com/v1"));
+    }
+
+    #[test]
+    fn detect_endpoint_routes_all_prefix_providers() {
+        for (model, host) in [
+            ("claude-opus-4-7", "anthropic.com"),
+            ("gpt-5", "openai.com"),
+            ("o4-mini", "openai.com"),
+            ("gemini-2.5-pro", "googleapis.com"),
+            ("grok-4", "x.ai"),
+            ("deepseek-chat", "deepseek.com"),
+            ("mistral-large-latest", "mistral.ai"),
+            ("codestral-latest", "mistral.ai"),
+        ] {
+            let (url, _) = detect_endpoint(model);
+            assert!(
+                url.contains(host),
+                "{model} routed to {url}, expected {host}"
+            );
+        }
+    }
+
+    #[test]
+    fn detect_endpoint_routes_explicit_provider_prefix() {
+        let (url, _) = detect_endpoint("groq:llama-3.3-70b-versatile");
+        assert!(url.contains("groq.com"));
+        let (url, _) = detect_endpoint("openrouter:anthropic/claude-opus-4-7");
+        assert!(url.contains("openrouter.ai"));
+        // Case-insensitive on the provider name.
+        let (url, _) = detect_endpoint("GROQ:llama-3.3-70b-versatile");
+        assert!(url.contains("groq.com"));
+    }
+
+    #[test]
+    fn resolve_model_name_strips_only_known_provider_prefix() {
+        assert_eq!(
+            resolve_model_name("groq:llama-3.3-70b-versatile"),
+            "llama-3.3-70b-versatile"
+        );
+        assert_eq!(
+            resolve_model_name("openrouter:anthropic/claude-opus-4-7"),
+            "anthropic/claude-opus-4-7"
+        );
+        // Ollama quant tags must NOT be stripped — `hf.co/...` isn't a provider.
+        assert_eq!(
+            resolve_model_name("hf.co/FoolDev/Thanatos-27B:Q4_K_M"),
+            "hf.co/FoolDev/Thanatos-27B:Q4_K_M"
+        );
+        assert_eq!(resolve_model_name("llama3:latest"), "llama3:latest");
+        assert_eq!(resolve_model_name("claude-opus-4-7"), "claude-opus-4-7");
+    }
+
+    #[test]
+    fn set_model_switches_endpoint_across_providers() {
+        let mut client = LlmClient::with_api_key(
+            "https://api.anthropic.com/v1",
+            "claude-opus-4-7",
+            Some("manual-anthropic-key".to_string()),
+        );
+        // Within Anthropic: manual key is preserved, model name swapped.
+        client.set_model("claude-sonnet-4-6".to_string());
+        assert_eq!(client.base_url(), "https://api.anthropic.com/v1");
+        assert_eq!(client.model(), "claude-sonnet-4-6");
+        // Cross-provider swap: base_url updates; manual key dropped (it was
+        // for the old provider and wouldn't authenticate anyway).
+        client.set_model("gpt-5".to_string());
+        assert_eq!(client.base_url(), "https://api.openai.com/v1");
+        assert_eq!(client.model(), "gpt-5");
+        // Explicit-prefix swap strips the provider tag from the stored name.
+        client.set_model("groq:llama-3.3-70b-versatile".to_string());
+        assert!(client.base_url().contains("groq.com"));
+        assert_eq!(client.model(), "llama-3.3-70b-versatile");
     }
 }

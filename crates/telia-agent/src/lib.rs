@@ -4,15 +4,22 @@ use futures_util::{pin_mut, Stream, StreamExt};
 use telia_llm::{ChatEvent, LlmClient, Message, ToolDef};
 use telia_store::Store;
 
+mod karpathy;
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TokenCounts {
     pub prompt: u64,
     pub completion: u64,
 }
 
-const SYSTEM_PROMPT: &str = "You are τέλεια, a terse coding assistant running in a terminal. \
-Use the provided tools (read, write, edit, bash) to do real work. \
+const SYSTEM_PROMPT_BASE: &str = "You are τέλεια, a terse coding assistant running in a terminal. \
+Use the provided tools (read, write, edit, bash, list, glob, grep) to do real work. \
 Default to brief replies. When you finish a turn, stop — do not narrate.";
+
+/// Base prompt + the karpathy-derived guidelines, joined once at startup.
+fn system_prompt() -> String {
+    format!("{SYSTEM_PROMPT_BASE}\n\n{}", karpathy::GUIDELINES)
+}
 
 pub const MAX_TOOL_HOPS: usize = 16;
 
@@ -52,7 +59,7 @@ impl Agent {
             available_models: Vec::new(),
         };
         agent.push(Message::System {
-            content: SYSTEM_PROMPT.to_string(),
+            content: system_prompt(),
         })?;
         Ok(agent)
     }
@@ -97,7 +104,7 @@ impl Agent {
         self.seq = 0;
         self.tokens = TokenCounts::default();
         self.push(Message::System {
-            content: SYSTEM_PROMPT.to_string(),
+            content: system_prompt(),
         })?;
         Ok(())
     }

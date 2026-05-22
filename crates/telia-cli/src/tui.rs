@@ -3,7 +3,7 @@ use anyhow::Result;
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
-        MouseEvent, MouseEventKind,
+        MouseButton, MouseEvent, MouseEventKind,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -11,7 +11,7 @@ use crossterm::{
 use futures_util::{pin_mut, StreamExt};
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
@@ -36,8 +36,8 @@ fn mode_hints(mode: Mode) -> &'static str {
 /// `/exit`, `/info` are accepted by `handle_slash` but not surfaced by
 /// autocomplete to avoid suggesting ambiguous short prefixes).
 const SLASH_COMMANDS: &[&str] = &[
-    "clear", "delete", "exit", "help", "list", "load", "model", "notify", "quit", "reset", "save",
-    "show", "theme",
+    "clear", "delete", "exit", "help", "keys", "list", "load", "model", "notify", "quit", "reset",
+    "save", "show", "theme",
 ];
 
 #[derive(Debug, Clone, Copy)]
@@ -182,6 +182,35 @@ enum Mode {
     Command,
 }
 
+/// Text-style (not rectangular) drag-selection: anchor is where the mouse
+/// went down, cursor is the latest drag position. Coordinates are raw
+/// terminal cells; clamping to the chat-area happens at render/extract time.
+#[derive(Debug, Clone, Copy)]
+struct Selection {
+    anchor: (u16, u16),
+    cursor: (u16, u16),
+}
+
+impl Selection {
+    fn new(col: u16, row: u16) -> Self {
+        Self {
+            anchor: (col, row),
+            cursor: (col, row),
+        }
+    }
+    /// Returns `(start, end)` in reading order — start <= end where the
+    /// ordering is row-first, col-second.
+    fn ordered(&self) -> ((u16, u16), (u16, u16)) {
+        let a = (self.anchor.1, self.anchor.0);
+        let b = (self.cursor.1, self.cursor.0);
+        let (s, e) = if a <= b { (a, b) } else { (b, a) };
+        ((s.1, s.0), (e.1, e.0))
+    }
+    fn is_point(&self) -> bool {
+        self.anchor == self.cursor
+    }
+}
+
 struct State {
     input: String,
     input_cursor: usize, // byte offset into input
@@ -213,6 +242,15 @@ struct State {
     /// Whether to fire a desktop notification after each chat turn ends.
     /// Toggled at runtime via `/notify`; defaults to on.
     notify: bool,
+    /// Active mouse drag-selection, if any. Set on mouse-down inside the
+    /// chat area, updated on drag, cleared on the next mouse-down (or Esc).
+    /// On mouse-up the selected text is copied to the system clipboard and
+    /// the highlight stays visible until the next interaction.
+    selection: Option<Selection>,
+    /// The chat-area `Rect` from the most recent `draw()`. Event handlers
+    /// (which run between draws) read this to clamp selection coordinates
+    /// and decide whether a mouse click landed inside the log.
+    log_area: Rect,
 }
 
 impl State {
@@ -241,6 +279,8 @@ impl State {
             hostname: hostname(),
             username: username(),
             notify: true,
+            selection: None,
+            log_area: Rect::default(),
         }
     }
 
@@ -347,17 +387,8 @@ async fn event_loop<B: ratatui::backend::Backend>(
         }
         let key = match event::read()? {
             Event::Key(k) => k,
-            Event::Mouse(MouseEvent { kind, .. }) => {
-                // 3 lines per wheel tick is the usual ratio.
-                match kind {
-                    MouseEventKind::ScrollUp => {
-                        state.scroll = state.scroll.saturating_add(3);
-                    }
-                    MouseEventKind::ScrollDown => {
-                        state.scroll = state.scroll.saturating_sub(3);
-                    }
-                    _ => {}
-                }
+            Event::Mouse(m) => {
+                handle_mouse(terminal, state, m);
                 continue;
             }
             _ => continue,
@@ -373,7 +404,11 @@ async fn event_loop<B: ratatui::backend::Backend>(
         match state.mode {
             Mode::Insert => {
                 match key.code {
-                    KeyCode::Esc if state.menu.take().is_none() => {
+                    // Esc precedence: dismiss menu, then clear drag-select
+                    // highlight, then fall back to switching to Normal mode.
+                    KeyCode::Esc
+                        if state.menu.take().is_none() && state.selection.take().is_none() =>
+                    {
                         state.mode = Mode::Normal;
                     }
                     KeyCode::Esc => {}
@@ -1116,20 +1151,14 @@ async fn run_turn<B: ratatui::backend::Backend>(
             let Ok(evt) = event::read() else { break };
             match evt {
                 Event::Key(k)
-                    if k.modifiers.contains(KeyModifiers::CONTROL)
-                        && matches!(k.code, KeyCode::Char('c')) =>
+                    if matches!(k.code, KeyCode::Esc)
+                        || (k.modifiers.contains(KeyModifiers::CONTROL)
+                            && matches!(k.code, KeyCode::Char('c'))) =>
                 {
-                    state.push(Entry::Info("(turn aborted)".into()));
+                    state.push(Entry::Info("(interrupted)".into()));
                     return;
                 }
-                Event::Mouse(MouseEvent {
-                    kind: MouseEventKind::ScrollUp,
-                    ..
-                }) => state.scroll = state.scroll.saturating_add(3),
-                Event::Mouse(MouseEvent {
-                    kind: MouseEventKind::ScrollDown,
-                    ..
-                }) => state.scroll = state.scroll.saturating_sub(3),
+                Event::Mouse(m) => handle_mouse(terminal, state, m),
                 _ => {
                     // Other keys/mouse buttons are dropped during a turn —
                     // typing into the input mid-stream would be confusing
@@ -1242,6 +1271,29 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                 state.push(Entry::Info(format!("switched model to {arg}")));
             }
         }
+        "keys" => {
+            let active = telia_llm::provider_for_model(&state.model);
+            let mut text = String::from("api keys (env var → status)");
+            for p in telia_llm::PROVIDERS {
+                let set = std::env::var(p.env_var)
+                    .map(|v| !v.is_empty())
+                    .unwrap_or(false);
+                let mark = if set { "✓ set" } else { "✗ unset" };
+                let star = if active.map(|a| a.name == p.name).unwrap_or(false) {
+                    " ← active"
+                } else {
+                    ""
+                };
+                text.push_str(&format!(
+                    "\n  {:<10} {:<22} {mark}{star}",
+                    p.name, p.env_var
+                ));
+            }
+            if active.is_none() {
+                text.push_str("\n\nactive: Ollama (no key needed)");
+            }
+            state.push(Entry::Info(text));
+        }
         "theme" => {
             if arg.is_empty() {
                 let names = theme_names().join(", ");
@@ -1300,7 +1352,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
         }
         "help" | "?" => {
             state.push(Entry::Info(
-                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /theme [NAME] · /notify [on|off] · /show · /help · /quit"
+                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /keys · /theme [NAME] · /notify [on|off] · /show · /help · /quit"
                     .into(),
             ));
         }
@@ -1310,7 +1362,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
     }
 }
 
-fn draw(f: &mut ratatui::Frame, state: &State) {
+fn draw(f: &mut ratatui::Frame, state: &mut State) {
     let th = theme();
     // Up to 6 menu items inline above the input. Includes 2 for the border.
     let menu_height: u16 = state
@@ -1328,6 +1380,9 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
             Constraint::Length(1),
         ])
         .split(f.area());
+    // Stash the chat-area rect so mouse handlers (which run between draws)
+    // can map raw terminal coordinates back to log content.
+    state.log_area = chunks[0];
 
     let frame = state.frame;
     let lines: Vec<Line> = if state.history.is_empty() {
@@ -1515,11 +1570,183 @@ fn draw(f: &mut ratatui::Frame, state: &State) {
         Style::default().fg(th.yellow),
     ));
     status_spans.push(Span::raw("   "));
-    status_spans.push(Span::styled(
-        mode_hints(state.mode),
-        Style::default().fg(th.dim),
-    ));
+    // Replace the right-side mode hints while a turn is in flight: the
+    // normal mode keys are dropped mid-stream anyway, and surfacing the
+    // interrupt keys here is the only place a first-time user finds out
+    // they can stop the model.
+    let hint = if state.working {
+        "esc / ^c interrupt"
+    } else {
+        mode_hints(state.mode)
+    };
+    status_spans.push(Span::styled(hint, Style::default().fg(th.dim)));
     f.render_widget(Paragraph::new(Line::from(status_spans)), chunks[3]);
+
+    // Drag-selection highlight overlay. Applied last so it paints on top of
+    // every widget; clamped to the log area's inner rect so it never bleeds
+    // onto the border, title, input, or status bar.
+    if let Some(sel) = state.selection {
+        let inner = selection_inner_area(state.log_area);
+        let buf = f.buffer_mut();
+        for (col, row) in selection_cells(sel, inner) {
+            if let Some(cell) = buf.cell_mut((col, row)) {
+                cell.set_bg(th.bg_hl);
+            }
+        }
+    }
+}
+
+/// The inside of the chat-area block (i.e. inside its borders) — drag
+/// selection is clamped to this rect so it never crosses the border,
+/// title, input, or status bar.
+fn selection_inner_area(area: Rect) -> Rect {
+    if area.width < 2 || area.height < 2 {
+        return Rect::default();
+    }
+    Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width - 2,
+        height: area.height - 2,
+    }
+}
+
+/// Iterator of `(col, row)` cells covered by a text-style selection (not
+/// rectangular: first row goes from anchor → end-of-row, middle rows go
+/// full-width, last row goes start-of-row → cursor). All coordinates are
+/// clamped to `area`.
+fn selection_cells(sel: Selection, area: Rect) -> Vec<(u16, u16)> {
+    if area.width == 0 || area.height == 0 || sel.is_point() {
+        return Vec::new();
+    }
+    let (start, end) = sel.ordered();
+    let left = area.x;
+    let right = area.x + area.width - 1;
+    let top = area.y;
+    let bottom = area.y + area.height - 1;
+    let clamp_col = |c: u16| c.clamp(left, right);
+    let clamp_row = |r: u16| r.clamp(top, bottom);
+    let s_row = clamp_row(start.1);
+    let e_row = clamp_row(end.1);
+
+    let mut out = Vec::new();
+    if s_row == e_row {
+        let s_col = clamp_col(start.0);
+        let e_col = clamp_col(end.0);
+        for c in s_col..=e_col {
+            out.push((c, s_row));
+        }
+        return out;
+    }
+    // First (partial) row.
+    let s_col = clamp_col(start.0);
+    for c in s_col..=right {
+        out.push((c, s_row));
+    }
+    // Middle (full) rows.
+    for r in (s_row + 1)..e_row {
+        for c in left..=right {
+            out.push((c, r));
+        }
+    }
+    // Last (partial) row.
+    let e_col = clamp_col(end.0);
+    for c in left..=e_col {
+        out.push((c, e_row));
+    }
+    out
+}
+
+fn rect_contains(r: Rect, col: u16, row: u16) -> bool {
+    col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height
+}
+
+/// Mouse-event dispatch shared by the outer event loop and the in-turn
+/// event drain. Scroll wheel adjusts `state.scroll`; left-button
+/// down/drag/up drives drag-select + clipboard copy.
+fn handle_mouse<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+    state: &mut State,
+    m: MouseEvent,
+) {
+    match m.kind {
+        MouseEventKind::ScrollUp => {
+            state.scroll = state.scroll.saturating_add(3);
+        }
+        MouseEventKind::ScrollDown => {
+            state.scroll = state.scroll.saturating_sub(3);
+        }
+        MouseEventKind::Down(MouseButton::Left) => {
+            // Any new click clears the previous selection's highlight; a
+            // click inside the chat area also begins a fresh selection.
+            let inner = selection_inner_area(state.log_area);
+            state.selection = if rect_contains(inner, m.column, m.row) {
+                Some(Selection::new(m.column, m.row))
+            } else {
+                None
+            };
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            if let Some(sel) = state.selection.as_mut() {
+                sel.cursor = (m.column, m.row);
+            }
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            if let Some(sel) = state.selection {
+                if !sel.is_point() {
+                    let inner = selection_inner_area(state.log_area);
+                    let text = extract_selection_text(terminal.current_buffer_mut(), sel, inner);
+                    if !text.is_empty() {
+                        copy_to_clipboard(&text, state);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Push selected text to the system clipboard and surface a one-line
+/// status. arboard can fail when no display server is reachable (SSH
+/// without forwarding, headless CI) — in that case we report the error
+/// rather than silently dropping the copy.
+fn copy_to_clipboard(text: &str, state: &mut State) {
+    match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(text.to_string())) {
+        Ok(()) => {
+            let chars = text.chars().count();
+            state.status = format!("copied {chars} chars to clipboard");
+        }
+        Err(e) => {
+            state.status = format!("clipboard error: {e}");
+        }
+    }
+}
+
+/// Pull the symbol from each cell in the selection range into a string,
+/// inserting a newline between rows. Trailing spaces on every line are
+/// trimmed so block highlights of short text don't drag a slab of padding
+/// onto the user's clipboard.
+fn extract_selection_text(buf: &ratatui::buffer::Buffer, sel: Selection, area: Rect) -> String {
+    let cells = selection_cells(sel, area);
+    if cells.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut current_row = cells[0].1;
+    let mut line_buf = String::new();
+    for (col, row) in cells {
+        if row != current_row {
+            out.push_str(line_buf.trim_end());
+            out.push('\n');
+            line_buf.clear();
+            current_row = row;
+        }
+        if let Some(cell) = buf.cell((col, row)) {
+            line_buf.push_str(cell.symbol());
+        }
+    }
+    out.push_str(line_buf.trim_end());
+    out
 }
 
 /// Compact token count: 0..999 as-is, 1k..999k as "1k"/"45k", 1M+ as "1.2M".
@@ -1534,10 +1761,12 @@ fn format_count(n: u64) -> String {
 }
 
 /// Compact "hf.co/FoolDev/Thanatos-27B:Q4_K_M" → "Thanatos-27B" for status-
-/// bar use: take the segment after the last '/', then drop everything from
-/// the first ':'. Leaves short names like "llama3" alone.
+/// bar use: strip any leading `provider:` selector, then take the segment
+/// after the last '/', then drop the Ollama quant tag from the first ':'.
+/// Leaves short names like "llama3" alone.
 fn short_model(model: &str) -> &str {
-    let tail = model.rsplit('/').next().unwrap_or(model);
+    let resolved = telia_llm::resolve_model_name(model);
+    let tail = resolved.rsplit('/').next().unwrap_or(resolved);
     tail.split(':').next().unwrap_or(tail)
 }
 

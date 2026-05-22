@@ -23,11 +23,37 @@ const DEFAULT_OLLAMA_MODELS: &[&str] = &[
 /// aren't backed by anything that can be `ollama pull`-ed. Selecting
 /// one of these effectively routes telia's chat requests through that
 /// provider; the API key comes from `--api-key` or the env-var fallback
-/// inside `detect_endpoint`.
+/// inside `detect_endpoint`. `provider:model` form is used for entries
+/// whose bare name would collide with an Ollama-hosted local model
+/// (e.g. `groq:llama-...`).
 const KNOWN_CLOUD_MODELS: &[&str] = &[
+    // Anthropic
     "claude-opus-4-7",
     "claude-sonnet-4-6",
     "claude-haiku-4-5-20251001",
+    // OpenAI
+    "gpt-5",
+    "gpt-5-mini",
+    "o3",
+    "o4-mini",
+    // Google
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    // xAI
+    "grok-4",
+    "grok-3",
+    // DeepSeek
+    "deepseek-chat",
+    "deepseek-reasoner",
+    // Mistral
+    "mistral-large-latest",
+    "codestral-latest",
+    // Groq (explicit prefix — model names collide with local Ollama)
+    "groq:llama-3.3-70b-versatile",
+    "groq:deepseek-r1-distill-llama-70b",
+    // OpenRouter (catalog router; explicit prefix required)
+    "openrouter:anthropic/claude-opus-4-7",
+    "openrouter:openai/gpt-5",
 ];
 
 #[derive(Parser, Debug)]
@@ -39,9 +65,10 @@ const KNOWN_CLOUD_MODELS: &[&str] = &[
     long_about = "τέλεια is a small TUI coding agent.\n\
                   \n\
                   It talks to any OpenAI-compatible chat-completions endpoint — local Ollama (default), \
-                  Anthropic, or OpenAI — picking the provider automatically from the model name unless \
-                  --base-url is overridden. Four tools round-trip through a 16-hop loop: `read`, `write`, \
-                  `edit`, and `bash` (combined stdout/stderr, 30s timeout).\n\
+                  Anthropic, OpenAI, Google, xAI, DeepSeek, Mistral, Groq, or OpenRouter — picking the \
+                  provider automatically from the model name unless --base-url is overridden. Tools \
+                  round-trip through a 16-hop loop: `read`, `write`, `edit`, `bash`, `list`, `glob`, \
+                  and `grep`.\n\
                   \n\
                   The TUI offers vim-style Insert / Normal / Command modes, autocomplete with drop-down \
                   menus for slash commands and saved aliases, ghost-text suggestions, readline-style input \
@@ -55,18 +82,22 @@ const KNOWN_CLOUD_MODELS: &[&str] = &[
 )]
 struct Args {
     /// Model to chat with. Detection by name: `claude-*` → Anthropic,
-    /// `gpt-*`/`o1*`/`o3*` → OpenAI, everything else → local Ollama.
-    /// The choice of base-url and API key follow this detection unless
-    /// overridden.
+    /// `gpt-*` / `o1*` / `o3*` / `o4*` → OpenAI, `gemini-*` → Google,
+    /// `grok-*` → xAI, `deepseek-*` → DeepSeek, `mistral-*` /
+    /// `codestral-*` → Mistral. Use `groq:NAME` or `openrouter:NAME` for
+    /// providers whose model names collide with local Ollama; anything
+    /// else routes to local Ollama.
     #[arg(long, default_value = "hf.co/FoolDev/Thanatos-27B:Q4_K_M")]
     model: String,
-    /// Override the auto-detected base URL. By default `claude-*` models
-    /// route to https://api.anthropic.com/v1, `gpt-*` to OpenAI, and
-    /// everything else to local Ollama at http://127.0.0.1:11434/v1.
+    /// Override the auto-detected base URL. See --model for the
+    /// per-provider defaults; Ollama is http://127.0.0.1:11434/v1.
     #[arg(long)]
     base_url: Option<String>,
-    /// API key for cloud backends. Falls back to $ANTHROPIC_API_KEY /
-    /// $OPENAI_API_KEY based on the active model. Ignored for Ollama.
+    /// API key for cloud backends. Falls back to the env var for the
+    /// detected provider — $ANTHROPIC_API_KEY, $OPENAI_API_KEY,
+    /// $GEMINI_API_KEY, $XAI_API_KEY, $DEEPSEEK_API_KEY,
+    /// $MISTRAL_API_KEY, $GROQ_API_KEY, $OPENROUTER_API_KEY. Run /keys
+    /// inside telia to see which are set. Ignored for Ollama.
     #[arg(long)]
     api_key: Option<String>,
     /// Colour theme. Known: tokyo-night (default), catppuccin, dracula.

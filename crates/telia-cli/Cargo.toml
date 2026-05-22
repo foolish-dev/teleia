@@ -22,6 +22,7 @@ serde.workspace = true
 serde_json.workspace = true
 syntect.workspace = true
 toml.workspace = true
+arboard.workspace = true
 telia-llm.workspace = true
 telia-agent.workspace = true
 telia-store.workspace = true
