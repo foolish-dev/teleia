@@ -15,7 +15,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
-        Block, Borders, List, ListItem, ListState, Padding, Paragraph, Scrollbar,
+        Block, BorderType, Borders, List, ListItem, ListState, Padding, Paragraph, Scrollbar,
         ScrollbarOrientation, ScrollbarState, Wrap,
     },
     Terminal,
@@ -2079,12 +2079,21 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(th.dim).bg(th.bg))
                 .style(Style::default().bg(th.bg))
                 .padding(Padding::new(h_pad, h_pad, t_pad, 0))
                 .title(Line::from(vec![
+                    // Nerd Font terminal glyph + λ — soft "rice"
+                    // accent. Renders as a tiny box on terminals
+                    // without a Nerd Font installed, otherwise as
+                    // a stylized terminal icon. Title also gets a
+                    // leading dimmed angle bracket for the
+                    // Powerline-y aesthetic.
+                    Span::styled("╭ ", Style::default().fg(th.dim).bg(th.bg)),
+                    Span::styled(" ", Style::default().fg(th.cyan).bg(th.bg)),
                     Span::styled(
-                        " λ ",
+                        "λ ",
                         Style::default()
                             .fg(th.cyan)
                             .bg(th.bg)
@@ -2150,6 +2159,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
                     .border_style(Style::default().fg(th.dim).bg(th.bg))
                     .style(Style::default().bg(th.bg))
                     .title(Span::styled(
@@ -2228,6 +2238,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
                     .border_style(Style::default().fg(th.yellow).bg(th.bg))
                     .style(Style::default().bg(th.bg))
                     .title(Span::styled(
@@ -2287,6 +2298,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
                     .border_style(Style::default().fg(th.yellow).bg(th.bg))
                     .style(Style::default().bg(th.bg))
                     .title(Span::styled(
@@ -2333,6 +2345,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
                     .border_style(Style::default().fg(prompt_color).bg(th.bg))
                     .style(Style::default().bg(th.bg)),
             );
@@ -2363,6 +2376,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
                     .border_style(Style::default().fg(prompt_color).bg(th.bg))
                     .style(Style::default().bg(th.bg)),
             );
@@ -3134,6 +3148,11 @@ fn welcome_banner(width: u16, frame: usize) -> Vec<Line<'static>> {
             Style::default().fg(th.purple).add_modifier(Modifier::BOLD),
         ),
     ]));
+
+    // Breathing row between the distro mark/name and the λ brand
+    // glyph below — without it the two pixel-art blocks read as one
+    // stacked thing.
+    out.push(Line::from(""));
 
     // Pixel-art λ — the telia brand mark, painted in the Tokyo Night
     // gradient (cyan → blue → purple top-down). Sits between the
