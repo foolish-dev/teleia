@@ -15,6 +15,10 @@ use telia_store::Store;
 /// can switch between them without a fresh download. The active `--model`
 /// is added to this set automatically if it isn't already in it. Only
 /// pulled when the resolved base URL looks like Ollama.
+/// Active model on first launch — also used to detect "user didn't
+/// supply --model" so a saved `current_model` pref can take over.
+const DEFAULT_MODEL: &str = "hf.co/FoolDev/Thanatos-27B:Q4_K_M";
+
 const DEFAULT_OLLAMA_MODELS: &[&str] = &[
     "hf.co/FoolDev/Thanatos-27B:Q4_K_M",
     "hf.co/FoolDev/Janus-35B:Q4_K_M",
@@ -315,7 +319,7 @@ struct Args {
     /// `codestral-*` → Mistral. Use `groq:NAME` or `openrouter:NAME` for
     /// providers whose model names collide with local Ollama; anything
     /// else routes to local Ollama.
-    #[arg(long, default_value = "hf.co/FoolDev/Thanatos-27B:Q4_K_M")]
+    #[arg(long, default_value = DEFAULT_MODEL)]
     model: String,
     /// Override the auto-detected base URL. See --model for the
     /// per-provider defaults; Ollama is http://127.0.0.1:11434/v1.
@@ -392,51 +396,81 @@ async fn main() -> Result<()> {
         );
     }
 
+    // Open the store early so saved prefs (current model, API keys) can
+    // feed into the rest of startup before LlmClient is built.
+    let store = Store::open()?;
+
+    // Restore previously-active model when the user didn't pass --model
+    // explicitly. `args.model == DEFAULT_MODEL` is the heuristic for
+    // "no flag supplied" since clap derive doesn't surface value-source
+    // cleanly.
+    let model = if args.model == DEFAULT_MODEL {
+        store
+            .get_pref("current_model")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| args.model.clone())
+    } else {
+        args.model.clone()
+    };
+
     // Resolve provider:
     //   1. Explicit --base-url / --api-key win.
     //   2. Otherwise, if the model matches a configured [llms.NAME] entry,
     //      take base_url + api_key from there.
-    //   3. Otherwise fall back to detect_endpoint's prefix detection
-    //      (claude-* → Anthropic, gpt-* → OpenAI, else Ollama).
-    let (auto_url, auto_key) = if let Some(entry) = cfg.llms.get(&args.model) {
+    //   3. Otherwise fall back to detect_endpoint's prefix detection.
+    //   4. As a last fallback, restore a key saved to prefs from a
+    //      previous run (via the startup or in-TUI key prompt).
+    let (auto_url, auto_key) = if let Some(entry) = cfg.llms.get(&model) {
         (entry.base_url.clone(), entry.resolve_key())
     } else {
-        detect_endpoint(&args.model)
+        detect_endpoint(&model)
     };
     let base_url = args.base_url.unwrap_or(auto_url);
-    let mut api_key = args.api_key.or(auto_key);
+    let stored_key = telia_llm::provider_for_model(&model).and_then(|p| {
+        store
+            .get_pref(&pref_key_for(p.env_var))
+            .ok()
+            .flatten()
+            .filter(|v| !v.is_empty())
+    });
+    let mut api_key = args.api_key.or(auto_key).or(stored_key);
 
     // If the resolved provider is a cloud one and we still don't have a
     // key, offer to read one from the terminal now. Skipped when stdin
     // isn't a TTY (scripts, pipes, CI) so unattended runs keep working
-    // with whatever the env said.
+    // with whatever the env said. On success, persist for next launch.
     if api_key.is_none() {
-        if let Some(prov) = telia_llm::provider_for_model(&args.model) {
+        if let Some(prov) = telia_llm::provider_for_model(&model) {
             if let Some(key) = prompt_api_key(prov) {
+                let _ = store.set_pref(&pref_key_for(prov.env_var), &key);
                 api_key = Some(key);
             }
         }
     }
 
     if !args.no_pull && looks_like_ollama(&base_url) {
-        // Walk every default Ollama model plus the active --model
+        // Walk every default Ollama model plus the active model
         // (deduped). For each missing one, ask the user before pulling —
         // unless --pull-yes / -y is set or stdin isn't a TTY (scripts).
         let mut want: Vec<String> = DEFAULT_OLLAMA_MODELS
             .iter()
             .map(|s| s.to_string())
             .collect();
-        if !want.iter().any(|m| m == &args.model) {
-            want.push(args.model.clone());
+        if !want.iter().any(|m| m == &model) {
+            want.push(model.clone());
         }
-        for model in &want {
-            let pre = LlmClient::new(base_url.clone(), model.clone());
+        for m in &want {
+            let pre = LlmClient::new(base_url.clone(), m.clone());
             ensure_model(&pre, args.pull_yes).await?;
         }
     }
 
-    let llm = LlmClient::with_api_key(base_url, args.model, api_key);
-    let store = Store::open()?;
+    // Record the active model so the next launch picks it up unless
+    // overridden by --model.
+    let _ = store.set_pref("current_model", &model);
+
+    let llm = LlmClient::with_api_key(base_url, model, api_key);
     let mut agent = if args.resume {
         let resumed = Agent::resume(llm, store)?;
         let n = resumed.session_id().len().min(12);
@@ -568,6 +602,13 @@ fn render_pull_line(prog: &PullProgress, spinner: &str) {
     };
     let _ = std::io::stderr().write_all(line.as_bytes());
     let _ = std::io::stderr().flush();
+}
+
+/// Namespace under which API keys are stored in the prefs table. Keys
+/// live alongside other prefs (theme, mode, etc.) but the prefix keeps
+/// them isolated and easy to recognise.
+pub fn pref_key_for(env_var: &str) -> String {
+    format!("api_key:{env_var}")
 }
 
 /// Read an API key for `prov` from the terminal with input hidden, after

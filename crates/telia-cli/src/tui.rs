@@ -1381,9 +1381,11 @@ fn handle_key_entry(state: &mut State, agent: &mut Agent, key: KeyEvent) {
                     )));
                 } else {
                     let chars = ke.buf.chars().count();
+                    let pref = crate::pref_key_for(&ke.env_var);
+                    agent.set_pref(&pref, &ke.buf);
                     agent.set_api_key(Some(ke.buf));
                     state.push(Entry::Info(format!(
-                        "stored {} key for this session ({chars} chars)",
+                        "stored {} key ({chars} chars) — saved for future launches too",
                         ke.provider
                     )));
                 }
@@ -1504,6 +1506,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
             } else {
                 agent.set_model(arg.to_string());
                 state.model = arg.to_string();
+                agent.set_pref("current_model", arg);
                 state.push(Entry::Info(format!("switched model to {arg}")));
                 // If the new model is a cloud one and we don't have a
                 // key for it, drop into the hidden-input prompt so the

@@ -117,7 +117,7 @@ The model name picks the provider. Use `provider:NAME` to disambiguate names tha
 
 The `/model` dropdown pre-populates with ~210 named models across all twenty-one providers (Tab to accept, type to filter; any name is accepted). `/keys` lists every provider and marks which env vars are set.
 
-**Key handling.** `--api-key KEY` overrides the env-var fallback. If no key is found for a cloud provider, telia prompts at startup with hidden input (`rpassword`); the same prompt fires inside the TUI when `/model NAME` switches to a provider without a key. Keys live in process memory only — persist via env var or a `[llms.NAME]` config entry.
+**Key handling.** `--api-key KEY` overrides the env-var fallback. If no key is found for a cloud provider, telia prompts at startup with hidden input (`rpassword`); the same prompt fires inside the TUI when `/model NAME` switches to a provider without a key. **Entered keys are saved to the sqlite store** (under `prefs.api_key:<ENV_VAR>`) and restored on the next launch, so you only enter each provider's key once. Env-set values still take precedence over saved ones — set the env var to override. The store file is plaintext sqlite at `$XDG_DATA_HOME/telia/telia.sqlite` (mode 0600 on unix); treat its security like any other secrets file.
 
 **Ollama pre-flight.** When the resolved endpoint is local Ollama, missing models trigger an interactive `pull from Ollama now? [Y/n]` with an animated progress bar. `--pull-yes` auto-confirms, `--no-pull` skips. Non-interactive stdin (scripts, CI, pipes) auto-confirms.
 
@@ -143,7 +143,7 @@ Everything important survives a restart.
 - **Messages** are streamed to SQLite (`$XDG_DATA_HOME/telia/telia.sqlite`) as they arrive — there's no "unsaved" state.
 - **Auto-bookmarks**: every launch is tagged `last`; `/reset` rotates the outgoing session to `prev`. So `--resume` (alias `--continue`, short `-r`) always picks up where you left off, and the run before that is recoverable with `/load prev`.
 - **Aliases**: `/save NAME` and `/load NAME` for sessions you want to keep by hand.
-- **Sticky preferences**: theme, `/notify` toggle, and permission mode persist across launches (CLI flags override).
+- **Sticky preferences**: theme, `/notify` toggle, permission mode, **the active model**, and **per-provider API keys** persist across launches (CLI flags override). Launching `telia` with no `--model` picks up wherever you last `/model`-ed.
 - **Input history**: up to the last 500 submissions reload into the `Up`/`Down` recall buffer, deduped shell-style.
 
 ## Configuration
