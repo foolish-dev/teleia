@@ -23,7 +23,8 @@ pub struct TokenCounts {
 }
 
 const SYSTEM_PROMPT_BASE: &str = "You are τέλεια, a terse coding assistant running in a terminal. \
-Use the provided tools (read, write, edit, bash, list, glob, grep) to do real work. \
+Use the provided tools to do real work: read, write, edit, bash, list, glob, grep, head, tail, \
+tree, stat, diff, which, fetch, mkdir, mv, cp (plus any MCP tools the user has configured). \
 Default to brief replies. When you finish a turn, stop — do not narrate.";
 
 /// Base prompt + the kaparthy-derived guidelines, joined once at startup.
@@ -115,10 +116,24 @@ impl PermissionMode {
     }
 }
 
-/// Tools that just *look* at the filesystem and don't change anything.
-/// Anything else is gated by [`PermissionMode::Plan`].
+/// Tools that just *look* at the filesystem (or fetch read-only data)
+/// and don't change anything. Anything else is gated by
+/// [`PermissionMode::Plan`].
 fn is_readonly_tool(name: &str) -> bool {
-    matches!(name, "read" | "list" | "glob" | "grep")
+    matches!(
+        name,
+        "read"
+            | "list"
+            | "glob"
+            | "grep"
+            | "head"
+            | "tail"
+            | "tree"
+            | "stat"
+            | "diff"
+            | "which"
+            | "fetch"
+    )
 }
 
 pub struct Agent {

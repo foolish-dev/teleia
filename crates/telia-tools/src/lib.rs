@@ -91,6 +91,82 @@ pub fn definitions() -> Vec<ToolDef> {
                 "required": ["pattern", "path"]
             }),
         ),
+        ToolDef::new(
+            "head",
+            "Read the first N lines of a file (default 40). Cheaper than `read` for huge files when only the top matters.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" },
+                "lines": { "type": "integer", "description": "How many lines to return (default 40, capped at 2000)" }
+            }, "required": ["path"] }),
+        ),
+        ToolDef::new(
+            "tail",
+            "Read the last N lines of a file (default 40). Useful for logs and append-only files.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" },
+                "lines": { "type": "integer", "description": "How many lines to return (default 40, capped at 2000)" }
+            }, "required": ["path"] }),
+        ),
+        ToolDef::new(
+            "tree",
+            "Recursive directory tree, depth-limited. Skips hidden dirs and target/node_modules/dist/build.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" },
+                "depth": { "type": "integer", "description": "Max recursion depth (default 3, capped at 8)" }
+            }, "required": ["path"] }),
+        ),
+        ToolDef::new(
+            "stat",
+            "File metadata: size, mtime, mode, type. Cheap inspection that doesn't burn tokens on the contents.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" }
+            }, "required": ["path"] }),
+        ),
+        ToolDef::new(
+            "diff",
+            "Line-based diff between two files. Shells out to `/usr/bin/diff -u`; returns the unified-diff output (or `(no differences)`).",
+            json!({ "type": "object", "properties": {
+                "a": { "type": "string", "description": "Path to the original file" },
+                "b": { "type": "string", "description": "Path to the changed file" }
+            }, "required": ["a", "b"] }),
+        ),
+        ToolDef::new(
+            "which",
+            "Locate an executable on $PATH. Returns the first match or an error.",
+            json!({ "type": "object", "properties": {
+                "name": { "type": "string" }
+            }, "required": ["name"] }),
+        ),
+        ToolDef::new(
+            "fetch",
+            "HTTP GET a URL and return the response body as text. 10s timeout, 1 MiB cap. Use for fetching docs / API JSON without shelling to curl.",
+            json!({ "type": "object", "properties": {
+                "url": { "type": "string", "description": "Fully-qualified http(s) URL" }
+            }, "required": ["url"] }),
+        ),
+        ToolDef::new(
+            "mkdir",
+            "Create a directory (and any missing parents). Idempotent — succeeds if it already exists.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" }
+            }, "required": ["path"] }),
+        ),
+        ToolDef::new(
+            "mv",
+            "Rename or move a file/dir. Fails if the destination already exists (refuse-to-clobber).",
+            json!({ "type": "object", "properties": {
+                "src": { "type": "string" },
+                "dst": { "type": "string" }
+            }, "required": ["src", "dst"] }),
+        ),
+        ToolDef::new(
+            "cp",
+            "Copy a file. Fails if the destination already exists (refuse-to-clobber). For directories, use bash.",
+            json!({ "type": "object", "properties": {
+                "src": { "type": "string" },
+                "dst": { "type": "string" }
+            }, "required": ["src", "dst"] }),
+        ),
     ]
 }
 
@@ -106,6 +182,16 @@ pub async fn dispatch(name: &str, arguments: &str) -> Result<String> {
         "list" => list_tool(args).await,
         "glob" => glob_tool(args).await,
         "grep" => grep_tool(args).await,
+        "head" => head_tool(args).await,
+        "tail" => tail_tool(args).await,
+        "tree" => tree_tool(args).await,
+        "stat" => stat_tool(args).await,
+        "diff" => diff_tool(args).await,
+        "which" => which_tool(args).await,
+        "fetch" => fetch_tool(args).await,
+        "mkdir" => mkdir_tool(args).await,
+        "mv" => mv_tool(args).await,
+        "cp" => cp_tool(args).await,
         other => Err(anyhow!("unknown tool: {other}")),
     }
 }
@@ -351,6 +437,237 @@ fn walk_files(root: &std::path::Path, out: &mut Vec<PathBuf>, cap: usize) -> std
     Ok(())
 }
 
+#[derive(Deserialize)]
+struct LinesArgs {
+    path: String,
+    #[serde(default)]
+    lines: Option<usize>,
+}
+
+const MAX_LINES: usize = 2000;
+
+async fn head_tool(args: Value) -> Result<String> {
+    let LinesArgs { path, lines } = serde_json::from_value(args)?;
+    let n = lines.unwrap_or(40).min(MAX_LINES);
+    let content =
+        std::fs::read_to_string(&path).with_context(|| format!("read_to_string {path}"))?;
+    Ok(content.lines().take(n).collect::<Vec<_>>().join("\n"))
+}
+
+async fn tail_tool(args: Value) -> Result<String> {
+    let LinesArgs { path, lines } = serde_json::from_value(args)?;
+    let n = lines.unwrap_or(40).min(MAX_LINES);
+    let content =
+        std::fs::read_to_string(&path).with_context(|| format!("read_to_string {path}"))?;
+    let all: Vec<&str> = content.lines().collect();
+    let start = all.len().saturating_sub(n);
+    Ok(all[start..].join("\n"))
+}
+
+#[derive(Deserialize)]
+struct TreeArgs {
+    path: String,
+    #[serde(default)]
+    depth: Option<usize>,
+}
+
+async fn tree_tool(args: Value) -> Result<String> {
+    let TreeArgs { path, depth } = serde_json::from_value(args)?;
+    let max_depth = depth.unwrap_or(3).min(8);
+    let root = PathBuf::from(&path);
+    if !root.is_dir() {
+        return Err(anyhow!("not a directory: {path}"));
+    }
+    let mut out = String::new();
+    out.push_str(&path);
+    out.push('\n');
+    walk_tree(&root, 0, max_depth, "", &mut out)?;
+    Ok(out)
+}
+
+fn walk_tree(
+    dir: &std::path::Path,
+    depth: usize,
+    max_depth: usize,
+    prefix: &str,
+    out: &mut String,
+) -> Result<()> {
+    if depth >= max_depth {
+        return Ok(());
+    }
+    let mut entries: Vec<_> = std::fs::read_dir(dir)?
+        .filter_map(|r| r.ok())
+        .filter(|e| {
+            let n = e.file_name();
+            let n = n.to_string_lossy();
+            !(n.starts_with('.') || matches!(&*n, "target" | "node_modules" | "dist" | "build"))
+        })
+        .collect();
+    entries.sort_by_key(|e| e.file_name());
+    let last_idx = entries.len().saturating_sub(1);
+    for (i, entry) in entries.iter().enumerate() {
+        let last = i == last_idx;
+        let branch = if last { "└── " } else { "├── " };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        let suffix = if is_dir { "/" } else { "" };
+        out.push_str(prefix);
+        out.push_str(branch);
+        out.push_str(&name);
+        out.push_str(suffix);
+        out.push('\n');
+        if is_dir {
+            let child_prefix = format!("{prefix}{}", if last { "    " } else { "│   " });
+            let _ = walk_tree(&entry.path(), depth + 1, max_depth, &child_prefix, out);
+        }
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+struct PathArgs {
+    path: String,
+}
+
+async fn stat_tool(args: Value) -> Result<String> {
+    let PathArgs { path } = serde_json::from_value(args)?;
+    let m = std::fs::symlink_metadata(&path).with_context(|| format!("stat {path}"))?;
+    let kind = if m.is_dir() {
+        "directory"
+    } else if m.is_symlink() {
+        "symlink"
+    } else if m.is_file() {
+        "file"
+    } else {
+        "other"
+    };
+    let mut out = format!("path:  {path}\ntype:  {kind}\nsize:  {} bytes", m.len());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        out.push_str(&format!("\nmode:  {:o}", m.permissions().mode() & 0o7777));
+    }
+    if let Ok(mt) = m.modified() {
+        if let Ok(d) = mt.duration_since(std::time::UNIX_EPOCH) {
+            out.push_str(&format!("\nmtime: {} (unix)", d.as_secs()));
+        }
+    }
+    Ok(out)
+}
+
+#[derive(Deserialize)]
+struct DiffArgs {
+    a: String,
+    b: String,
+}
+
+async fn diff_tool(args: Value) -> Result<String> {
+    let DiffArgs { a, b } = serde_json::from_value(args)?;
+    let output = Command::new("diff")
+        .arg("-u")
+        .arg(&a)
+        .arg(&b)
+        .output()
+        .await
+        .with_context(|| "running /usr/bin/diff")?;
+    if output.stdout.is_empty() && output.status.success() {
+        return Ok("(no differences)".to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+#[derive(Deserialize)]
+struct WhichArgs {
+    name: String,
+}
+
+async fn which_tool(args: Value) -> Result<String> {
+    let WhichArgs { name } = serde_json::from_value(args)?;
+    let path = std::env::var_os("PATH").ok_or_else(|| anyhow!("$PATH unset"))?;
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join(&name);
+        if candidate.is_file() {
+            // crude executability check (mode & 0o111 != 0 on unix).
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(m) = std::fs::metadata(&candidate) {
+                    if m.permissions().mode() & 0o111 == 0 {
+                        continue;
+                    }
+                }
+            }
+            return Ok(candidate.display().to_string());
+        }
+    }
+    Err(anyhow!("`{name}` not found on $PATH"))
+}
+
+#[derive(Deserialize)]
+struct FetchArgs {
+    url: String,
+}
+
+async fn fetch_tool(args: Value) -> Result<String> {
+    let FetchArgs { url } = serde_json::from_value(args)?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()?;
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .with_context(|| format!("GET {url}"))?;
+    let status = resp.status();
+    // Cap at 1 MiB so a giant payload can't blow the context window.
+    const CAP: usize = 1024 * 1024;
+    let bytes = resp
+        .bytes()
+        .await
+        .with_context(|| format!("reading body from {url}"))?;
+    let truncated = bytes.len() > CAP;
+    let slice = if truncated { &bytes[..CAP] } else { &bytes[..] };
+    let body = String::from_utf8_lossy(slice);
+    let mut out = format!("HTTP {}\n\n{body}", status.as_u16());
+    if truncated {
+        out.push_str(&format!(
+            "\n\n[truncated at {CAP} bytes; original was {}]",
+            bytes.len()
+        ));
+    }
+    Ok(out)
+}
+
+async fn mkdir_tool(args: Value) -> Result<String> {
+    let PathArgs { path } = serde_json::from_value(args)?;
+    std::fs::create_dir_all(&path).with_context(|| format!("mkdir -p {path}"))?;
+    Ok(format!("created {path}"))
+}
+
+#[derive(Deserialize)]
+struct MoveArgs {
+    src: String,
+    dst: String,
+}
+
+async fn mv_tool(args: Value) -> Result<String> {
+    let MoveArgs { src, dst } = serde_json::from_value(args)?;
+    if std::fs::symlink_metadata(&dst).is_ok() {
+        return Err(anyhow!("destination already exists: {dst}"));
+    }
+    std::fs::rename(&src, &dst).with_context(|| format!("mv {src} -> {dst}"))?;
+    Ok(format!("renamed {src} -> {dst}"))
+}
+
+async fn cp_tool(args: Value) -> Result<String> {
+    let MoveArgs { src, dst } = serde_json::from_value(args)?;
+    if std::fs::symlink_metadata(&dst).is_ok() {
+        return Err(anyhow!("destination already exists: {dst}"));
+    }
+    let bytes = std::fs::copy(&src, &dst).with_context(|| format!("cp {src} -> {dst}"))?;
+    Ok(format!("copied {bytes} bytes: {src} -> {dst}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -560,5 +877,111 @@ mod tests {
         std::fs::write(&path, "x").unwrap();
         let args = json!({ "pattern": "(", "path": path.to_str().unwrap() }).to_string();
         assert!(dispatch("grep", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn head_returns_first_n_lines() {
+        let path = tmp_path("head.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "1\n2\n3\n4\n5\n").unwrap();
+        let args = json!({ "path": path.to_str().unwrap(), "lines": 2 }).to_string();
+        assert_eq!(dispatch("head", &args).await.unwrap(), "1\n2");
+    }
+
+    #[tokio::test]
+    async fn tail_returns_last_n_lines() {
+        let path = tmp_path("tail.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "1\n2\n3\n4\n5\n").unwrap();
+        let args = json!({ "path": path.to_str().unwrap(), "lines": 2 }).to_string();
+        assert_eq!(dispatch("tail", &args).await.unwrap(), "4\n5");
+    }
+
+    #[tokio::test]
+    async fn tree_walks_and_skips_target() {
+        let dir = tmp_path("tree-dir");
+        std::fs::create_dir_all(&dir).unwrap();
+        let _c = DirCleanup(dir.clone());
+        std::fs::write(dir.join("a.txt"), "").unwrap();
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("sub/b.txt"), "").unwrap();
+        std::fs::create_dir_all(dir.join("target")).unwrap();
+        std::fs::write(dir.join("target/skip.txt"), "").unwrap();
+        let args = json!({ "path": dir.to_str().unwrap() }).to_string();
+        let out = dispatch("tree", &args).await.unwrap();
+        assert!(out.contains("a.txt"));
+        assert!(out.contains("sub/"));
+        assert!(out.contains("b.txt"));
+        assert!(!out.contains("target"));
+        assert!(!out.contains("skip.txt"));
+    }
+
+    #[tokio::test]
+    async fn stat_reports_size_and_type() {
+        let path = tmp_path("stat.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "hello").unwrap();
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        let out = dispatch("stat", &args).await.unwrap();
+        assert!(out.contains("type:  file"));
+        assert!(out.contains("size:  5 bytes"));
+    }
+
+    #[tokio::test]
+    async fn which_finds_sh_on_path() {
+        // Every Unix-like host has /bin/sh on $PATH.
+        let args = json!({ "name": "sh" }).to_string();
+        let out = dispatch("which", &args).await.unwrap();
+        assert!(out.ends_with("/sh") || out.contains("/sh"));
+    }
+
+    #[tokio::test]
+    async fn which_errors_on_missing() {
+        let args = json!({ "name": "definitely-not-a-real-binary-xyzzy" }).to_string();
+        assert!(dispatch("which", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn mkdir_is_idempotent() {
+        let dir = tmp_path("mkdir-dir");
+        let _c = DirCleanup(dir.clone());
+        let args = json!({ "path": dir.to_str().unwrap() }).to_string();
+        assert!(dispatch("mkdir", &args).await.is_ok());
+        // Second call still succeeds (idempotent).
+        assert!(dispatch("mkdir", &args).await.is_ok());
+        assert!(dir.is_dir());
+    }
+
+    #[tokio::test]
+    async fn mv_renames_and_refuses_to_clobber() {
+        let src = tmp_path("mv-src.txt");
+        let dst = tmp_path("mv-dst.txt");
+        let _c1 = Cleanup(src.clone());
+        let _c2 = Cleanup(dst.clone());
+        std::fs::write(&src, "hi").unwrap();
+        let args =
+            json!({ "src": src.to_str().unwrap(), "dst": dst.to_str().unwrap() }).to_string();
+        assert!(dispatch("mv", &args).await.is_ok());
+        assert!(dst.is_file());
+        assert!(!src.exists());
+        // Now src is gone, recreate; mv to existing dst should refuse.
+        std::fs::write(&src, "again").unwrap();
+        assert!(dispatch("mv", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn cp_copies_and_refuses_to_clobber() {
+        let src = tmp_path("cp-src.txt");
+        let dst = tmp_path("cp-dst.txt");
+        let _c1 = Cleanup(src.clone());
+        let _c2 = Cleanup(dst.clone());
+        std::fs::write(&src, "data").unwrap();
+        let args =
+            json!({ "src": src.to_str().unwrap(), "dst": dst.to_str().unwrap() }).to_string();
+        assert!(dispatch("cp", &args).await.is_ok());
+        assert_eq!(std::fs::read_to_string(&dst).unwrap(), "data");
+        assert!(src.is_file());
+        // Second call should refuse to clobber.
+        assert!(dispatch("cp", &args).await.is_err());
     }
 }
