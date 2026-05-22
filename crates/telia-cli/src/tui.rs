@@ -36,8 +36,8 @@ fn mode_hints(mode: Mode) -> &'static str {
 /// `/exit`, `/info` are accepted by `handle_slash` but not surfaced by
 /// autocomplete to avoid suggesting ambiguous short prefixes).
 const SLASH_COMMANDS: &[&str] = &[
-    "ask", "auto", "build", "clear", "delete", "exit", "help", "keys", "list", "load", "log",
-    "model", "notify", "plan", "prompt", "quit", "reset", "save", "show", "theme",
+    "ask", "auto", "build", "clear", "delete", "exit", "help", "keys", "list", "load", "model",
+    "notify", "plan", "prompt", "quit", "reset", "save", "show", "theme",
 ];
 
 /// Sync the permission-mode change across the agent + the State mirror
@@ -332,10 +332,6 @@ struct State {
     /// Mirror of `agent.permission_mode()`. Kept in sync so the status
     /// bar + Shift+Tab cycle don't need to touch the agent for reads.
     permission_mode: PermissionMode,
-    /// External command to run after the current event-loop iteration,
-    /// with the TUI temporarily suspended. Slash commands like `/log`
-    /// fill this; the loop drains it once and clears it.
-    pending_subprocess: Option<(String, Vec<String>)>,
 }
 
 pub struct PendingApproval {
@@ -381,7 +377,6 @@ impl State {
             pending_approval: None,
             pending_key_entry: None,
             permission_mode: PermissionMode::default(),
-            pending_subprocess: None,
         }
     }
 
@@ -492,16 +487,6 @@ async fn event_loop<B: ratatui::backend::Backend>(
     loop {
         if state.should_quit {
             return Ok(());
-        }
-        // External tool launched by a slash command (e.g. /log →
-        // gitlogue). Suspend the TUI, run it inheriting stdio, then
-        // restore the alt screen and raw mode. Error messages land in
-        // the chat log as Info entries so the user sees what happened.
-        if let Some((cmd, args)) = state.pending_subprocess.take() {
-            match run_external(terminal, &cmd, &args) {
-                Ok(status) => state.push(Entry::Info(format!("{cmd} exited ({status})"))),
-                Err(e) => state.push(Entry::Error(format!("{cmd}: {e}"))),
-            }
         }
         state.frame = state.frame.wrapping_add(1);
         terminal.draw(|f| draw(f, state))?;
@@ -1374,41 +1359,6 @@ async fn run_turn<B: ratatui::backend::Backend>(
     }
 }
 
-/// Suspend the TUI, run an external command with stdio inherited so
-/// the user can interact with it, then restore the alt screen + raw
-/// mode + mouse capture. Returns a stringified exit status; surface a
-/// hint about how to install if the binary isn't on `PATH`.
-fn run_external<B: ratatui::backend::Backend>(
-    terminal: &mut Terminal<B>,
-    cmd: &str,
-    args: &[String],
-) -> Result<String> {
-    // Drive crossterm directly against stdout — the Terminal's generic
-    // `B: Backend` doesn't expose io::Write so `execute!(backend_mut)`
-    // wouldn't compile, but the escape sequences land on stdout either
-    // way since that's where CrosstermBackend writes.
-    let mut out = io::stdout();
-    disable_raw_mode()?;
-    execute!(out, LeaveAlternateScreen, DisableMouseCapture)?;
-
-    let status = std::process::Command::new(cmd).args(args).status();
-
-    enable_raw_mode()?;
-    execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
-    terminal.clear()?;
-
-    match status {
-        Ok(s) => Ok(s
-            .code()
-            .map(|c| format!("status {c}"))
-            .unwrap_or_else(|| "signal".to_string())),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            Err(anyhow::anyhow!("not found on $PATH. Install with `cargo install {cmd}` (gitlogue: https://github.com/unhappychoice/gitlogue)"))
-        }
-        Err(e) => Err(anyhow::anyhow!("{e}")),
-    }
-}
-
 /// Hidden-input key-entry dispatch. Active only while
 /// `state.pending_key_entry` is `Some`. Enter commits the typed key
 /// onto the agent (and updates the `/keys` mirror); Esc cancels.
@@ -1565,15 +1515,6 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
         "auto" => set_mode(state, agent, PermissionMode::Auto),
         "build" | "ask" => set_mode(state, agent, PermissionMode::Build),
         "plan" => set_mode(state, agent, PermissionMode::Plan),
-        "log" | "gitlogue" => {
-            // gitlogue (https://github.com/unhappychoice/gitlogue) is a
-            // cinematic git-replay TUI; we launch it as a subprocess
-            // with telia's screen temporarily suspended. Extra words
-            // after `/log` become positional args, so `/log -c HEAD~5`
-            // passes through.
-            let args: Vec<String> = arg.split_whitespace().map(|s| s.to_string()).collect();
-            state.pending_subprocess = Some(("gitlogue".to_string(), args));
-        }
         "prompt" => {
             if arg.is_empty() {
                 let names: Vec<&str> = PROMPT_TEMPLATES.iter().map(|(n, _)| *n).collect();
@@ -1677,7 +1618,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
         }
         "help" | "?" => {
             state.push(Entry::Info(
-                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /keys · /plan · /build · /auto · /prompt [NAME] · /log · /theme [NAME] · /notify [on|off] · /show · /help · /quit"
+                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /keys · /plan · /build · /auto · /prompt [NAME] · /theme [NAME] · /notify [on|off] · /show · /help · /quit"
                     .into(),
             ));
         }
