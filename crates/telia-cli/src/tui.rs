@@ -14,7 +14,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, ListState, Padding, Paragraph, Wrap},
     Terminal,
 };
 use std::{io, time::Duration};
@@ -1698,11 +1698,17 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
     let max_offset = total.saturating_sub(visible) as u16;
     let offset = max_offset.saturating_sub(state.scroll);
 
+    // Chat log breathes: 1-char horizontal padding on terminals wide
+    // enough to spare, 1-row top padding when tall enough. Auto-shrinks
+    // to zero on cramped screens so the transcript keeps the space.
+    let h_pad = if f.area().width >= 60 { 1 } else { 0 };
+    let t_pad = if f.area().height >= 24 { 1 } else { 0 };
     let log = Paragraph::new(lines)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(th.dim))
+                .padding(Padding::new(h_pad, h_pad, t_pad, 0))
                 .title(Line::from(vec![
                     Span::styled(
                         " τέλεια ",
