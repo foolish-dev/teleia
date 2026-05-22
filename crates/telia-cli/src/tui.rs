@@ -41,6 +41,7 @@ fn mode_hints(mode: Mode) -> &'static str {
 const SLASH_COMMANDS: &[&str] = &[
     "ask", "auto", "build", "clear", "delete", "exit", "help", "key", "keys", "list", "load",
     "lsps", "mcps", "model", "notify", "plan", "prompt", "quit", "reset", "save", "show", "theme",
+    "update",
 ];
 
 /// Sync the permission-mode change across the agent + the State mirror
@@ -342,6 +343,10 @@ struct State {
     /// Pre-formatted summary of LSP entries from config. `None` when no
     /// `[lsps.NAME]` entries were configured. Rendered by `/lsps`.
     lsp_summary: Option<String>,
+    /// Cached update-check result from startup. `/update` re-displays
+    /// it; on startup an Info entry is auto-pushed (and a desktop
+    /// notification fires) if a newer release is available.
+    update_check: Option<crate::update::UpdateCheck>,
     /// True when the chat should snap to the bottom whenever new content
     /// arrives. Flipped to `false` the moment the user scrolls up to
     /// re-read prior turns and back to `true` when they return to the
@@ -404,6 +409,7 @@ impl State {
             permission_mode: PermissionMode::default(),
             mcp_summary: None,
             lsp_summary: None,
+            update_check: None,
             follow_bottom: true,
             last_total_lines: 0,
         }
@@ -497,6 +503,7 @@ pub async fn run(
     mut agent: Agent,
     mcp_summary: Option<String>,
     lsp_summary: Option<String>,
+    update_check: Option<crate::update::UpdateCheck>,
 ) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -513,10 +520,32 @@ pub async fn run(
     state.permission_mode = agent.permission_mode();
     state.mcp_summary = mcp_summary;
     state.lsp_summary = lsp_summary;
+    state.update_check = update_check;
     // Restore readline history + notify preference from prior runs.
     state.input_history = agent.input_history(500);
     if let Some(v) = agent.get_pref("notify") {
         state.notify = v == "on";
+    }
+    // If the startup check found a newer release, surface it in the
+    // chat log and fire a desktop notification on first paint. Clone
+    // out of the cache first so the subsequent `state.push` mutation
+    // doesn't conflict with the immutable borrow.
+    let new_release = state
+        .update_check
+        .as_ref()
+        .filter(|u| u.newer)
+        .map(|u| (u.latest.clone(), u.current.clone(), u.url.clone()));
+    if let Some((latest, current, url)) = new_release {
+        let msg = format!(
+            "update available: telia v{latest} (you're on v{current})\n  {url}\n  run /update for the upgrade command"
+        );
+        state.push(Entry::Info(msg));
+        if state.notify {
+            notify_user(
+                "τέλεια update available",
+                &format!("v{current} → v{latest}"),
+            );
+        }
     }
     let result = event_loop(&mut terminal, &mut state, &mut agent).await;
 
@@ -1751,6 +1780,24 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
         "auto" => set_mode(state, agent, PermissionMode::Auto),
         "build" | "ask" => set_mode(state, agent, PermissionMode::Build),
         "plan" => set_mode(state, agent, PermissionMode::Plan),
+        "update" => {
+            // Re-display the cached check from startup. We don't re-hit
+            // the network here — the slash handler is sync and the
+            // check would block the event loop.
+            let body = match &state.update_check {
+                Some(uc) if uc.newer => format!(
+                    "update available: telia v{} (you're on v{})\n  {}\n\n  cargo install --git https://github.com/foolish-dev/telia telia-cli --force\n  # or re-run the install.sh one-liner",
+                    uc.latest, uc.current, uc.url
+                ),
+                Some(uc) => format!(
+                    "telia v{} is the latest release · you're on v{}",
+                    uc.latest, uc.current
+                ),
+                None => "update check unavailable (offline, rate-limited, or no releases yet)"
+                    .to_string(),
+            };
+            state.push(Entry::Info(body));
+        }
         "mcps" => {
             let text = state.mcp_summary.clone().unwrap_or_else(|| {
                 "no MCP servers configured. Add `[mcps.NAME]` entries to ~/.config/telia/config.toml.".to_string()

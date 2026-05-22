@@ -1861,6 +1861,7 @@ dependencies = [
  "crossterm",
  "futures-util",
  "ratatui",
+ "reqwest",
  "rpassword",
  "serde",
  "serde_json",

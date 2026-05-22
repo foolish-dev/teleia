@@ -24,6 +24,7 @@ syntect.workspace = true
 toml.workspace = true
 arboard.workspace = true
 rpassword.workspace = true
+reqwest.workspace = true
 telia-llm.workspace = true
 telia-agent.workspace = true
 telia-store.workspace = true

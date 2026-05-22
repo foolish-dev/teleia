@@ -3,6 +3,7 @@ mod highlight;
 mod lsp;
 mod mcp;
 mod tui;
+mod update;
 
 use anyhow::Result;
 use clap::Parser;
@@ -608,7 +609,20 @@ async fn main() -> Result<()> {
         Some(text)
     };
 
-    tui::run(agent, mcp_summary, lsp_summary).await
+    // Best-effort update check against the GitHub releases API. 5s
+    // timeout; offline / rate-limited returns None silently. The
+    // result rides into the TUI so `/update` can re-display it.
+    let update_check = update::check().await;
+    if let Some(uc) = &update_check {
+        if uc.newer {
+            eprintln!(
+                "· update available: telia v{} (you're on v{}) — {}",
+                uc.latest, uc.current, uc.url
+            );
+        }
+    }
+
+    tui::run(agent, mcp_summary, lsp_summary, update_check).await
 }
 
 /// Pre-flight: if Ollama can be reached and reports the model isn't
