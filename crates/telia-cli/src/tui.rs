@@ -135,7 +135,11 @@ const TOKYO_NIGHT: Theme = Theme {
     blue: Color::Rgb(122, 162, 247),
     green: Color::Rgb(158, 206, 106),
     dim: Color::Rgb(86, 95, 137),
-    fg: Color::Rgb(192, 202, 245),
+    // Neutral grey instead of the original blue-tinted #c0caf5 —
+    // reads as a clean grey body text against the dark surface
+    // while leaving the accent colours (cyan / purple / yellow /
+    // red / blue / green) themed as before.
+    fg: Color::Rgb(168, 168, 178),
     bg: Color::Rgb(26, 27, 38),
     bg_hl: Color::Rgb(40, 52, 87),
 };
