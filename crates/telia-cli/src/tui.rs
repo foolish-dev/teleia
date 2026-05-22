@@ -1988,7 +1988,16 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
     // and new streamed deltas can land behind the padding strip, looking
     // like the chat is frozen on the previous frame.
     let visible = chunks[0].height.saturating_sub(2 + t_pad) as usize;
-    let total = lines.len();
+    // Count *visual* rows after wrapping, not raw logical lines —
+    // otherwise `max_offset` under-counts and the chat stops scrolling
+    // before the latest content reaches the bottom of the view. We
+    // build a measurement Paragraph (same wrap semantics, no block /
+    // padding so ratatui's word-wrapper sees the actual content width
+    // it'll render at) and ask it for the visual row count.
+    let wrap_width = chunks[0].width.saturating_sub(2 + h_pad * 2);
+    let total = Paragraph::new(lines.clone())
+        .wrap(Wrap { trim: false })
+        .line_count(wrap_width);
     // Belt-and-braces: when bottom-following, `scroll` is meant to be
     // 0. apply() and push() set it, but a stale value from an earlier
     // state transition shouldn't strand the user away from the latest
@@ -3130,6 +3139,24 @@ fn welcome_banner(width: u16, frame: usize) -> Vec<Line<'static>> {
 /// Walk an assistant message looking for ```lang ... ``` code fences. Plain
 /// prose lines render unchanged; fenced blocks are syntax-highlighted using
 /// the language token (or unhighlighted if syntect doesn't recognise it).
+/// Build the syntax-highlighting palette from the active TUI theme so
+/// code blocks read with the same colour vocabulary as the surrounding
+/// chat. `/theme dracula` automatically reshuffles all highlighted
+/// content.
+fn highlight_palette() -> highlight::Palette {
+    let th = theme();
+    highlight::Palette {
+        keyword: th.purple,
+        string: th.green,
+        number: th.yellow,
+        function: th.blue,
+        type_: th.cyan,
+        comment: th.dim,
+        punctuation: th.dim,
+        fg: th.fg,
+    }
+}
+
 fn render_assistant_lines(text: &str) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     let mut in_code = false;
@@ -3139,7 +3166,7 @@ fn render_assistant_lines(text: &str) -> Vec<Line<'static>> {
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("```") {
             if in_code {
-                for hl in highlight::highlight(&code_buf, &code_lang, "") {
+                for hl in highlight::highlight(&code_buf, &code_lang, "", highlight_palette()) {
                     out.push(hl);
                 }
                 code_buf.clear();
@@ -3160,7 +3187,7 @@ fn render_assistant_lines(text: &str) -> Vec<Line<'static>> {
     // If the message ended mid-fence (mid-stream), flush what we have so the
     // user sees the partial code rather than nothing.
     if in_code && !code_buf.is_empty() {
-        for hl in highlight::highlight(&code_buf, &code_lang, "") {
+        for hl in highlight::highlight(&code_buf, &code_lang, "", highlight_palette()) {
             out.push(hl);
         }
     }
@@ -3261,7 +3288,7 @@ fn render_entry(entry: &Entry, frame: usize, username: &str) -> Vec<Line<'static
             )));
             let highlighted = if name == "read" {
                 highlight::extension_from_read_args(args)
-                    .map(|ext| highlight::highlight(output, &ext, "  "))
+                    .map(|ext| highlight::highlight(output, &ext, "  ", highlight_palette()))
             } else {
                 None
             };
