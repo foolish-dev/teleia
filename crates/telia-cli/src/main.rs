@@ -510,6 +510,9 @@ async fn main() -> Result<()> {
     // dropdown has something to show without hitting the network on
     // every keypress.
     agent.refresh_models().await;
+    // Surface the two FoolDev HF GGUFs in the dropdown even when Ollama
+    // hasn't pulled them yet — they're telia's headline local picks.
+    agent.extend_models(DEFAULT_OLLAMA_MODELS.iter().copied());
     agent.extend_models(KNOWN_CLOUD_MODELS.iter().copied());
     // Custom LLM names from config become first-class /model targets too.
     agent.extend_models(cfg.llms.keys().cloned());

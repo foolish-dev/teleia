@@ -36,8 +36,8 @@ fn mode_hints(mode: Mode) -> &'static str {
 /// `/exit`, `/info` are accepted by `handle_slash` but not surfaced by
 /// autocomplete to avoid suggesting ambiguous short prefixes).
 const SLASH_COMMANDS: &[&str] = &[
-    "ask", "auto", "build", "clear", "delete", "exit", "help", "keys", "list", "load", "lsps",
-    "mcps", "model", "notify", "plan", "prompt", "quit", "reset", "save", "show", "theme",
+    "ask", "auto", "build", "clear", "delete", "exit", "help", "key", "keys", "list", "load",
+    "lsps", "mcps", "model", "notify", "plan", "prompt", "quit", "reset", "save", "show", "theme",
 ];
 
 /// Sync the permission-mode change across the agent + the State mirror
@@ -351,6 +351,10 @@ pub struct KeyEntry {
     pub provider: String,
     pub env_var: String,
     pub buf: String,
+    /// True when a key is already saved for this provider — Enter with
+    /// an empty buffer keeps it; the prompt wording also changes to
+    /// "(already set · type new to replace or Esc to keep)".
+    pub existing: bool,
 }
 
 impl State {
@@ -1005,6 +1009,7 @@ fn arg_placeholder(cmd: &str) -> Option<&'static str> {
         "theme" => Some(" [NAME]"),
         "notify" => Some(" [on|off]"),
         "prompt" => Some(" [NAME]"),
+        "key" => Some(" PROVIDER"),
         _ => None,
     }
 }
@@ -1400,10 +1405,14 @@ fn handle_key_entry(state: &mut State, agent: &mut Agent, key: KeyEvent) {
         KeyCode::Enter => {
             if let Some(ke) = state.pending_key_entry.take() {
                 if ke.buf.is_empty() {
-                    state.push(Entry::Info(format!(
-                        "no key entered — {} requests will 401 until ${} is set",
-                        ke.provider, ke.env_var
-                    )));
+                    if ke.existing {
+                        state.push(Entry::Info(format!("kept existing {} key", ke.provider)));
+                    } else {
+                        state.push(Entry::Info(format!(
+                            "no key entered — {} requests will 401 until ${} is set",
+                            ke.provider, ke.env_var
+                        )));
+                    }
                 } else {
                     let chars = ke.buf.chars().count();
                     let pref = crate::pref_key_for(&ke.env_var);
@@ -1418,10 +1427,14 @@ fn handle_key_entry(state: &mut State, agent: &mut Agent, key: KeyEvent) {
         }
         KeyCode::Esc => {
             if let Some(ke) = state.pending_key_entry.take() {
-                state.push(Entry::Info(format!(
-                    "key entry cancelled — {} requests will 401 until ${} is set",
-                    ke.provider, ke.env_var
-                )));
+                if ke.existing {
+                    state.push(Entry::Info(format!("kept existing {} key", ke.provider)));
+                } else {
+                    state.push(Entry::Info(format!(
+                        "key entry cancelled — {} requests will 401 until ${} is set",
+                        ke.provider, ke.env_var
+                    )));
+                }
             }
         }
         KeyCode::Backspace => {
@@ -1533,17 +1546,19 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                 state.model = arg.to_string();
                 agent.set_pref("current_model", arg);
                 state.push(Entry::Info(format!("switched model to {arg}")));
-                // If the new model is a cloud one and we don't have a
-                // key for it, drop into the hidden-input prompt so the
-                // user can type one without leaving telia.
-                if !agent.has_api_key() {
-                    if let Some(prov) = telia_llm::provider_for_model(arg) {
-                        state.pending_key_entry = Some(KeyEntry {
-                            provider: prov.name.to_string(),
-                            env_var: prov.env_var.to_string(),
-                            buf: String::new(),
-                        });
-                    }
+                // For *every* cloud-model switch, drop into the
+                // hidden-input prompt so the key for the new provider
+                // can be confirmed or replaced. When a key is already
+                // saved, Enter with an empty buffer keeps it; Esc
+                // dismisses without touching it. Ollama models skip
+                // this — no provider, no key needed.
+                if let Some(prov) = telia_llm::provider_for_model(arg) {
+                    state.pending_key_entry = Some(KeyEntry {
+                        provider: prov.name.to_string(),
+                        env_var: prov.env_var.to_string(),
+                        buf: String::new(),
+                        existing: agent.has_api_key(),
+                    });
                 }
             }
         }
@@ -1580,6 +1595,40 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                 let names: Vec<&str> = PROMPT_TEMPLATES.iter().map(|(n, _)| *n).collect();
                 state.push(Entry::Error(format!(
                     "unknown prompt '{arg}'. known: {}",
+                    names.join(", ")
+                )));
+            }
+        }
+        "key" => {
+            // /key PROVIDER  →  open the hidden-input prompt for that provider
+            // /key           →  short usage hint pointing at /keys
+            if arg.is_empty() {
+                let names: Vec<&str> = telia_llm::PROVIDERS.iter().map(|p| p.name).collect();
+                state.push(Entry::Info(format!(
+                    "usage: /key PROVIDER  (one of: {})\n  or /keys to list status",
+                    names.join(", ")
+                )));
+            } else if let Some(prov) = telia_llm::PROVIDERS
+                .iter()
+                .find(|p| p.name.eq_ignore_ascii_case(arg))
+            {
+                let existing = agent
+                    .get_pref(&crate::pref_key_for(prov.env_var))
+                    .map(|v| !v.is_empty())
+                    .unwrap_or(false)
+                    || std::env::var(prov.env_var)
+                        .map(|v| !v.is_empty())
+                        .unwrap_or(false);
+                state.pending_key_entry = Some(KeyEntry {
+                    provider: prov.name.to_string(),
+                    env_var: prov.env_var.to_string(),
+                    buf: String::new(),
+                    existing,
+                });
+            } else {
+                let names: Vec<&str> = telia_llm::PROVIDERS.iter().map(|p| p.name).collect();
+                state.push(Entry::Error(format!(
+                    "unknown provider '{arg}'. known: {}",
                     names.join(", ")
                 )));
             }
@@ -1667,7 +1716,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
         }
         "help" | "?" => {
             state.push(Entry::Info(
-                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /keys · /mcps · /lsps · /plan · /build · /auto · /prompt [NAME] · /theme [NAME] · /notify [on|off] · /show · /help · /quit"
+                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /key PROVIDER · /keys · /mcps · /lsps · /plan · /build · /auto · /prompt [NAME] · /theme [NAME] · /notify [on|off] · /show · /help · /quit"
                     .into(),
             ));
         }
@@ -1831,17 +1880,34 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
         // Hidden-input prompt. Echo each typed char as `•`; never store
         // the key in input_history.
         let mask: String = "•".repeat(ke.buf.chars().count());
-        let lines = vec![
-            Line::from(vec![
-                Span::styled("enter ", Style::default().fg(th.dim)),
+        let suffix: Vec<Span> = if ke.existing {
+            vec![
                 Span::styled(
-                    &ke.provider,
-                    Style::default().fg(th.purple).add_modifier(Modifier::BOLD),
+                    " api key (already set · type new to replace, ",
+                    Style::default().fg(th.dim),
                 ),
-                Span::styled(" api key (will replace $", Style::default().fg(th.dim)),
+                Span::styled("Enter", Style::default().fg(th.green)),
+                Span::styled("/", Style::default().fg(th.dim)),
+                Span::styled("Esc", Style::default().fg(th.yellow)),
+                Span::styled(" to keep)", Style::default().fg(th.dim)),
+            ]
+        } else {
+            vec![
+                Span::styled(" api key (will save to $", Style::default().fg(th.dim)),
                 Span::styled(&ke.env_var, Style::default().fg(th.cyan)),
-                Span::styled(" for this session)", Style::default().fg(th.dim)),
-            ]),
+                Span::styled(" pref)", Style::default().fg(th.dim)),
+            ]
+        };
+        let mut header = vec![
+            Span::styled("enter ", Style::default().fg(th.dim)),
+            Span::styled(
+                &ke.provider,
+                Style::default().fg(th.purple).add_modifier(Modifier::BOLD),
+            ),
+        ];
+        header.extend(suffix);
+        let lines = vec![
+            Line::from(header),
             Line::from(vec![
                 Span::styled("> ", Style::default().fg(th.yellow)),
                 Span::styled(mask, Style::default().fg(th.fg)),
