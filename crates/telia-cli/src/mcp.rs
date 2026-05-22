@@ -283,6 +283,23 @@ impl McpRegistry {
     pub fn server_count(&self) -> usize {
         self.clients.len()
     }
+
+    /// Per-server name + tool count. Used by the TUI's `/mcps` command
+    /// to render the configured server list with how many tools each
+    /// one contributed to the catalogue.
+    pub fn server_summaries(&self) -> Vec<(String, usize)> {
+        let mut counts = vec![0usize; self.clients.len()];
+        for &idx in self.index.values() {
+            if let Some(slot) = counts.get_mut(idx) {
+                *slot += 1;
+            }
+        }
+        self.clients
+            .iter()
+            .zip(counts)
+            .map(|(c, n)| (c.name.clone(), n))
+            .collect()
+    }
 }
 
 impl ToolRouter for McpRegistry {

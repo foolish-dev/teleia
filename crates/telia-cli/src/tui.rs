@@ -36,8 +36,8 @@ fn mode_hints(mode: Mode) -> &'static str {
 /// `/exit`, `/info` are accepted by `handle_slash` but not surfaced by
 /// autocomplete to avoid suggesting ambiguous short prefixes).
 const SLASH_COMMANDS: &[&str] = &[
-    "ask", "auto", "build", "clear", "delete", "exit", "help", "keys", "list", "load", "model",
-    "notify", "plan", "prompt", "quit", "reset", "save", "show", "theme",
+    "ask", "auto", "build", "clear", "delete", "exit", "help", "keys", "list", "load", "lsps",
+    "mcps", "model", "notify", "plan", "prompt", "quit", "reset", "save", "show", "theme",
 ];
 
 /// Sync the permission-mode change across the agent + the State mirror
@@ -333,6 +333,12 @@ struct State {
     /// Mirror of `agent.permission_mode()`. Kept in sync so the status
     /// bar + Shift+Tab cycle don't need to touch the agent for reads.
     permission_mode: PermissionMode,
+    /// Pre-formatted summary of MCP servers booted at startup. `None`
+    /// when no `[mcps.NAME]` entries were configured. Rendered by `/mcps`.
+    mcp_summary: Option<String>,
+    /// Pre-formatted summary of LSP entries from config. `None` when no
+    /// `[lsps.NAME]` entries were configured. Rendered by `/lsps`.
+    lsp_summary: Option<String>,
 }
 
 pub struct PendingApproval {
@@ -378,6 +384,8 @@ impl State {
             pending_approval: None,
             pending_key_entry: None,
             permission_mode: PermissionMode::default(),
+            mcp_summary: None,
+            lsp_summary: None,
         }
     }
 
@@ -454,7 +462,11 @@ impl State {
     }
 }
 
-pub async fn run(mut agent: Agent) -> Result<()> {
+pub async fn run(
+    mut agent: Agent,
+    mcp_summary: Option<String>,
+    lsp_summary: Option<String>,
+) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     // Mouse capture forwards wheel events to telia so the log can scroll
@@ -468,6 +480,8 @@ pub async fn run(mut agent: Agent) -> Result<()> {
 
     let mut state = State::new(agent.session_id(), agent.model());
     state.permission_mode = agent.permission_mode();
+    state.mcp_summary = mcp_summary;
+    state.lsp_summary = lsp_summary;
     // Restore readline history + notify preference from prior runs.
     state.input_history = agent.input_history(500);
     if let Some(v) = agent.get_pref("notify") {
@@ -787,6 +801,17 @@ async fn submit_input<B: ratatui::backend::Backend>(
     state.input_cursor = 0;
     state.recall_idx = None;
     state.mode = Mode::Insert;
+    // The dropdown menu, ghost-text completion, and any drag-select
+    // highlight all key off the now-empty input — clearing them
+    // immediately keeps a stale frame from showing up between submit
+    // and the next outer-loop refresh.
+    state.menu = None;
+    state.suggestion = None;
+    state.selection = None;
+    // Anchor the chat to its bottom so the user's just-submitted prompt
+    // and the streaming reply that follows are guaranteed to be visible
+    // — they may have scrolled up to re-read prior context.
+    state.scroll = 0;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return;
@@ -1525,6 +1550,18 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
         "auto" => set_mode(state, agent, PermissionMode::Auto),
         "build" | "ask" => set_mode(state, agent, PermissionMode::Build),
         "plan" => set_mode(state, agent, PermissionMode::Plan),
+        "mcps" => {
+            let text = state.mcp_summary.clone().unwrap_or_else(|| {
+                "no MCP servers configured. Add `[mcps.NAME]` entries to ~/.config/telia/config.toml.".to_string()
+            });
+            state.push(Entry::Info(text));
+        }
+        "lsps" => {
+            let text = state.lsp_summary.clone().unwrap_or_else(|| {
+                "no LSP servers configured. Add `[lsps.NAME]` entries to ~/.config/telia/config.toml.".to_string()
+            });
+            state.push(Entry::Info(text));
+        }
         "prompt" => {
             if arg.is_empty() {
                 let names: Vec<&str> = PROMPT_TEMPLATES.iter().map(|(n, _)| *n).collect();
@@ -1630,7 +1667,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
         }
         "help" | "?" => {
             state.push(Entry::Info(
-                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /keys · /plan · /build · /auto · /prompt [NAME] · /theme [NAME] · /notify [on|off] · /show · /help · /quit"
+                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /keys · /mcps · /lsps · /plan · /build · /auto · /prompt [NAME] · /theme [NAME] · /notify [on|off] · /show · /help · /quit"
                     .into(),
             ));
         }
@@ -1643,10 +1680,15 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
 fn draw(f: &mut ratatui::Frame, state: &mut State) {
     let th = theme();
     // Up to 6 menu items inline above the input. Includes 2 for the border.
+    // Dropdown shows up to 10 entries at a time; longer lists (the full
+    // /model catalogue, ~200+ entries) scroll inside the panel via
+    // ListState's offset-tracking, with `Up`/`Down` always keeping the
+    // selected row in view.
+    const MENU_VISIBLE: usize = 10;
     let menu_height: u16 = state
         .menu
         .as_ref()
-        .map(|m| (m.items.len().min(6) as u16) + 2)
+        .map(|m| (m.items.len().min(MENU_VISIBLE) as u16) + 2)
         .unwrap_or(0);
 
     // Grow the input box vertically so long prompts wrap into view instead
@@ -1733,17 +1775,20 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
 
     // Render the menu (if any) directly above the input.
     if let Some(menu) = &state.menu {
-        let title = match menu.kind {
-            MenuKind::Command => " commands ",
-            MenuKind::Alias => " aliases ",
-            MenuKind::Theme => " themes ",
-            MenuKind::Ex => " ex ",
-            MenuKind::Model => " models ",
+        let total = menu.items.len();
+        let title_text = match menu.kind {
+            MenuKind::Command => format!(" commands · {total} "),
+            MenuKind::Alias => format!(" aliases · {total} "),
+            MenuKind::Theme => format!(" themes · {total} "),
+            MenuKind::Ex => format!(" ex · {total} "),
+            MenuKind::Model => format!(" models · {total} "),
         };
+        // Pass the whole list to ratatui — ListState's offset handling
+        // scrolls long catalogues automatically and keeps `selected` in
+        // the visible window.
         let items: Vec<ListItem> = menu
             .items
             .iter()
-            .take(6)
             .map(|s| ListItem::new(s.clone()))
             .collect();
         let list = List::new(items)
@@ -1752,7 +1797,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(th.dim))
                     .title(Span::styled(
-                        title,
+                        title_text,
                         Style::default().fg(th.blue).add_modifier(Modifier::BOLD),
                     )),
             )

@@ -517,6 +517,7 @@ async fn main() -> Result<()> {
     // Boot MCP servers (if any). Each surfaces its tool catalogue,
     // which is merged into the agent's tool list. Spawn failures are
     // already reported on stderr by the registry; we keep booting.
+    let mut mcp_summary: Option<String> = None;
     if !cfg.mcps.is_empty() {
         let registry = mcp::McpRegistry::spawn_all(cfg.mcps.iter()).await;
         let tools = registry.tool_count();
@@ -527,11 +528,52 @@ async fn main() -> Result<()> {
                 if servers == 1 { "" } else { "s" },
                 if tools == 1 { "" } else { "s" }
             );
+            // Pre-format the /mcps panel: one row per server with its
+            // command line and how many tools it contributed.
+            let mut text = format!("{servers} MCP server(s), {tools} tool(s):");
+            let counts: std::collections::HashMap<String, usize> =
+                registry.server_summaries().into_iter().collect();
+            for (name, entry) in &cfg.mcps {
+                let cmd = if entry.args.is_empty() {
+                    entry.command.clone()
+                } else {
+                    format!("{} {}", entry.command, entry.args.join(" "))
+                };
+                let n = counts.get(name).copied().unwrap_or(0);
+                text.push_str(&format!("\n  {name}  ·  {cmd}  ·  {n} tools"));
+            }
+            mcp_summary = Some(text);
             agent.set_tool_router(Box::new(registry));
         }
     }
 
-    tui::run(agent).await
+    // LSP runtime isn't wired yet, but pre-format the /lsps panel so
+    // configured entries are at least introspectable.
+    let lsp_summary = if cfg.lsps.is_empty() {
+        None
+    } else {
+        let mut text = format!(
+            "{} LSP entr{} (runtime stub — tools coming):",
+            cfg.lsps.len(),
+            if cfg.lsps.len() == 1 { "y" } else { "ies" }
+        );
+        for (name, entry) in &cfg.lsps {
+            let cmd = if entry.args.is_empty() {
+                entry.command.clone()
+            } else {
+                format!("{} {}", entry.command, entry.args.join(" "))
+            };
+            let roots = if entry.root_patterns.is_empty() {
+                "(any)".to_string()
+            } else {
+                entry.root_patterns.join(", ")
+            };
+            text.push_str(&format!("\n  {name}  ·  {cmd}  ·  roots: {roots}"));
+        }
+        Some(text)
+    };
+
+    tui::run(agent, mcp_summary, lsp_summary).await
 }
 
 /// Pre-flight: if Ollama can be reached and reports the model isn't
