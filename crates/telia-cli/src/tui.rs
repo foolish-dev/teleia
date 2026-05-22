@@ -1675,11 +1675,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
     let lines: Vec<Line> = if state.history.is_empty() {
         welcome_banner(chunks[0].width, frame)
     } else {
-        state
-            .history
-            .iter()
-            .flat_map(|e| render_entry(e, frame, &state.username))
-            .collect()
+        render_history(&state.history, frame, &state.username)
     };
     let visible = chunks[0].height.saturating_sub(2) as usize;
     let total = lines.len();
@@ -2545,6 +2541,49 @@ fn render_assistant_lines(text: &str) -> Vec<Line<'static>> {
     out
 }
 
+/// Render the full chat history with automatic inter-entry spacing.
+/// Consecutive agent-side entries (Assistant + Tool, or Tool + Tool)
+/// stay tight because they belong to the same logical turn; a blank
+/// line separates one conceptual turn from the next, and Info / Error
+/// rows always get a trailing breath of space.
+fn render_history(history: &[Entry], frame: usize, username: &str) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    let mut prev: Option<&Entry> = None;
+    for entry in history {
+        if let Some(p) = prev {
+            if needs_spacer(p, entry) {
+                out.push(Line::from(""));
+            }
+        }
+        out.extend(render_entry(entry, frame, username));
+        prev = Some(entry);
+    }
+    out
+}
+
+/// Should a blank line sit between `prev` and `next`? `true` separates
+/// conceptual turns; `false` lets a tightly-related block (assistant
+/// reply + its tool calls, consecutive tools, an info burst followed by
+/// the next message) read as one unit.
+fn needs_spacer(prev: &Entry, next: &Entry) -> bool {
+    use Entry::*;
+    match (prev, next) {
+        // Inside an agent turn: assistant prose, then its tools, then
+        // possibly more assistant prose. No gap.
+        (Assistant { .. } | Tool { .. }, Assistant { .. } | Tool { .. }) => false,
+        // A user message right after their own previous one (rare) or
+        // right after an agent block always opens a fresh turn.
+        (_, User(_)) => true,
+        // Info / Error always get breathing room before the next entry.
+        (Info(_) | Error(_), _) => true,
+        // Agent reply right after a user message — no extra gap; the
+        // user header already has its own one-line separator from the
+        // text body inside `render_entry`.
+        (User(_), _) => false,
+        _ => true,
+    }
+}
+
 fn render_entry(entry: &Entry, frame: usize, username: &str) -> Vec<Line<'static>> {
     let th = theme();
     let mut out = Vec::new();
@@ -2557,7 +2596,6 @@ fn render_entry(entry: &Entry, frame: usize, username: &str) -> Vec<Line<'static
             for line in text.lines() {
                 out.push(Line::from(line.to_string()));
             }
-            out.push(Line::from(""));
         }
         Entry::Assistant { text, complete } => {
             // Blink "▌" while streaming. Frame ticks every ~50ms; /10 gives
@@ -2576,7 +2614,6 @@ fn render_entry(entry: &Entry, frame: usize, username: &str) -> Vec<Line<'static
             for line in render_assistant_lines(text) {
                 out.push(line);
             }
-            out.push(Line::from(""));
         }
         Entry::Tool {
             name,
@@ -2613,14 +2650,12 @@ fn render_entry(entry: &Entry, frame: usize, username: &str) -> Vec<Line<'static
             for line in body.take(20) {
                 out.push(line);
             }
-            out.push(Line::from(""));
         }
         Entry::Error(text) => {
             out.push(Line::from(Span::styled(
                 format!("error: {text}"),
                 Style::default().fg(th.red),
             )));
-            out.push(Line::from(""));
         }
         Entry::Info(text) => {
             let mut first = true;
@@ -2632,7 +2667,6 @@ fn render_entry(entry: &Entry, frame: usize, username: &str) -> Vec<Line<'static
                 )));
                 first = false;
             }
-            out.push(Line::from(""));
         }
     }
     out
