@@ -1961,11 +1961,15 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
 
 fn draw(f: &mut ratatui::Frame, state: &mut State) {
     let th = theme();
-    // Paint the entire frame with the active theme background first.
-    // Every other widget renders on top, so even spacer gaps and the
-    // status-bar tail show the theme colour instead of the terminal's
-    // default background bleeding through.
-    f.render_widget(Block::default().style(Style::default().bg(th.bg)), f.area());
+    // Paint the entire frame with the active theme bg + fg first. Any
+    // widget rendered on top inherits the base colours unless it sets
+    // its own style — so spans/lines without an explicit fg pick up
+    // `th.fg` (Tokyo Night `#c0caf5`) instead of the terminal's
+    // default white.
+    f.render_widget(
+        Block::default().style(Style::default().bg(th.bg).fg(th.fg)),
+        f.area(),
+    );
     // Up to 6 menu items inline above the input. Includes 2 for the border.
     // Dropdown shows up to 10 entries at a time; longer lists (the full
     // /model catalogue, ~200+ entries) scroll inside the panel via

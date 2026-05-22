@@ -31,7 +31,7 @@
        gradient. Iosevka / JetBrains Mono / etc. all render this well;
        fallbacks cover everywhere else. -->
   <text x="118" y="188"
-        font-family="Iosevka, 'JetBrains Mono', 'IBM Plex Mono', Menlo, monospace"
+        font-family="'JetBrainsMonoNF-Regular', 'JetBrains Mono Nerd Font', 'JetBrains Mono', Iosevka, 'IBM Plex Mono', Menlo, monospace"
         font-size="200" font-weight="700"
         text-anchor="middle" fill="url(#t)">λ</text>
 

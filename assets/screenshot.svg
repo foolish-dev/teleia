@@ -31,7 +31,7 @@
     <!-- λ + full-stop cursor block as brand mark in the title bar -->
     <g transform="translate(525 47)">
       <text x="0" y="20"
-            font-family="Iosevka, 'JetBrains Mono', monospace"
+            font-family="'JetBrainsMonoNF-Regular', 'JetBrains Mono Nerd Font', 'JetBrains Mono', Iosevka, monospace"
             font-size="24" font-weight="700" fill="url(#markGrad)">λ</text>
       <rect x="20" y="14" width="5" height="5" rx="1" fill="#f7768e">
         <animate attributeName="opacity"
@@ -40,12 +40,12 @@
                  dur="1.06s" repeatCount="indefinite"/>
       </rect>
     </g>
-    <text x="562" y="62" font-family="Iosevka, 'JetBrains Mono', monospace"
+    <text x="562" y="62" font-family="'JetBrainsMonoNF-Regular', 'JetBrains Mono Nerd Font', 'JetBrains Mono', Iosevka, monospace"
           font-size="12" fill="#565f89">τέλεια @ arch · session 01K3R7H · resumed · 3 tools, 1 turn</text>
   </g>
 
   <!-- chat log title with λ -->
-  <g font-family="Iosevka, 'JetBrains Mono', monospace" font-size="12">
+  <g font-family="'JetBrainsMonoNF-Regular', 'JetBrains Mono Nerd Font', 'JetBrains Mono', Iosevka, monospace" font-size="12">
     <text x="58" y="96" fill="#7dcfff" font-weight="700">λ</text>
     <text x="70" y="96" fill="#bb9af7" font-weight="700">τέλεια</text>
     <text x="127" y="96" fill="#565f89">@</text>
@@ -53,7 +53,7 @@
   </g>
 
   <!-- transcript -->
-  <g font-family="Iosevka, 'JetBrains Mono', 'IBM Plex Mono', monospace" font-size="14">
+  <g font-family="'JetBrainsMonoNF-Regular', 'JetBrains Mono Nerd Font', 'JetBrains Mono', Iosevka, 'IBM Plex Mono', monospace" font-size="14">
     <!-- user 1 -->
     <text x="68" y="130" fill="#7dcfff" font-weight="700">fool</text>
     <text x="68" y="152" fill="#c0caf5">find every TODO in the workspace and group them by crate</text>
@@ -115,15 +115,15 @@
   <!-- permission prompt -->
   <g>
     <rect x="56" y="510" width="988" height="60" rx="4" fill="none" stroke="#e0af68" stroke-width="1.2"/>
-    <text x="72" y="528" font-family="Iosevka, monospace" font-size="11" fill="#e0af68" font-weight="700">permission</text>
-    <text x="72" y="546" font-family="Iosevka, monospace" font-size="13">
+    <text x="72" y="528" font-family="'JetBrainsMonoNF-Regular', 'JetBrains Mono Nerd Font', 'JetBrains Mono', Iosevka, monospace" font-size="11" fill="#e0af68" font-weight="700">permission</text>
+    <text x="72" y="546" font-family="'JetBrainsMonoNF-Regular', 'JetBrains Mono Nerd Font', 'JetBrains Mono', Iosevka, monospace" font-size="13">
       <tspan fill="#565f89">approve </tspan>
       <tspan fill="#bb9af7" font-weight="700">edit</tspan>
       <tspan fill="#565f89">(</tspan>
       <tspan fill="#c0caf5">crates/telia-llm/src/lib.rs, "// TODO:…", "// done:…"</tspan>
       <tspan fill="#565f89">) ?</tspan>
     </text>
-    <text x="72" y="562" font-family="Iosevka, monospace" font-size="13">
+    <text x="72" y="562" font-family="'JetBrainsMonoNF-Regular', 'JetBrains Mono Nerd Font', 'JetBrains Mono', Iosevka, monospace" font-size="13">
       <tspan fill="#9ece6a" font-weight="700">y</tspan>
       <tspan fill="#565f89">es · </tspan>
       <tspan fill="#f7768e" font-weight="700">n</tspan>
@@ -134,7 +134,7 @@
   </g>
 
   <!-- status bar -->
-  <g font-family="Iosevka, monospace" font-size="12">
+  <g font-family="'JetBrainsMonoNF-Regular', 'JetBrains Mono Nerd Font', 'JetBrains Mono', Iosevka, monospace" font-size="12">
     <rect x="56" y="596" width="32" height="16" fill="#7dcfff"/>
     <text x="72" y="608" text-anchor="middle" font-weight="700" fill="#1a1b26">INS</text>
     <text x="94" y="608" fill="#565f89">·</text>
@@ -154,7 +154,7 @@
 
   <!-- footer hint -->
   <text x="550" y="708" text-anchor="middle"
-        font-family="Iosevka, monospace" font-size="11" fill="#414868" font-style="italic">
+        font-family="'JetBrainsMonoNF-Regular', 'JetBrains Mono Nerd Font', 'JetBrains Mono', Iosevka, monospace" font-size="11" fill="#414868" font-style="italic">
     Shift+Tab cycles PLAN · BUILD · AUTO · telia --resume picks up where you left off · powered by λ τέλεια
   </text>
 </svg>

@@ -16,7 +16,7 @@
     </linearGradient>
     <clipPath id="word">
       <text x="324" y="160" font-size="108" font-weight="700" letter-spacing="-2"
-            font-family="Iosevka, 'JetBrains Mono', 'IBM Plex Mono', Menlo, monospace">τέλεια</text>
+            font-family="'JetBrainsMonoNF-Regular', 'JetBrains Mono Nerd Font', 'JetBrains Mono', Iosevka, 'IBM Plex Mono', Menlo, monospace">τέλεια</text>
     </clipPath>
     <radialGradient id="bgGlow" cx="0.25" cy="0.45" r="0.6">
       <stop offset="0" stop-color="#414868" stop-opacity="0.35"/>
@@ -37,7 +37,7 @@
   <!-- λ mark + full-stop cursor block -->
   <g transform="translate(140 150)">
     <text x="0" y="0"
-          font-family="Iosevka, 'JetBrains Mono', 'IBM Plex Mono', Menlo, monospace"
+          font-family="'JetBrainsMonoNF-Regular', 'JetBrains Mono Nerd Font', 'JetBrains Mono', Iosevka, 'IBM Plex Mono', Menlo, monospace"
           font-size="200" font-weight="700"
           text-anchor="middle" fill="url(#t)">λ</text>
     <g transform="translate(64 -14)">
@@ -57,7 +57,7 @@
   </g>
 
   <!-- wordmark + blink cursor + shimmer sweep -->
-  <g font-family="Iosevka, 'JetBrains Mono', 'IBM Plex Mono', Menlo, monospace">
+  <g font-family="'JetBrainsMonoNF-Regular', 'JetBrains Mono Nerd Font', 'JetBrains Mono', Iosevka, 'IBM Plex Mono', Menlo, monospace">
     <text x="324" y="160" font-size="108" font-weight="700" letter-spacing="-2" fill="#c0caf5">τέλεια</text>
     <rect x="720" y="78" width="22" height="86" fill="#7dcfff" opacity="0.85">
       <animate attributeName="opacity"
