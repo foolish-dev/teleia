@@ -2000,17 +2000,19 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
     let input_height = (input_content_rows as u16) + 2; // + borders
 
     // No spacer rows around the prompt — the chat block's own border
-    // already separates it from the input box. Indices unchanged so
-    // existing chunks[3] (input) + chunks[5] (status) references
-    // stay valid; spacers collapse to zero-height.
+    // One blank row sits between the chat bottom border and the input
+    // top border — keeps the prompt visually distinct without burning
+    // a second row below it. Drops to 0 on cramped (<24-row) terminals
+    // so small screens keep their chat space.
+    let gap: u16 = if f.area().height >= 24 { 1 } else { 0 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(3),               // 0 chat log
             Constraint::Length(menu_height),  // 1 menu
-            Constraint::Length(0),            // 2 (was spacer above input)
+            Constraint::Length(gap),          // 2 spacer above input
             Constraint::Length(input_height), // 3 input box
-            Constraint::Length(0),            // 4 (was spacer below input)
+            Constraint::Length(0),            // 4 (no spacer below input)
             Constraint::Length(1),            // 5 status bar
         ])
         .split(f.area());
@@ -2027,10 +2029,11 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
     // Chat log breathes: 1-char horizontal padding on terminals wide
     // enough to spare, 1-row top padding when tall enough. Auto-shrinks
     // to zero on cramped screens so the transcript keeps the space.
-    let h_pad = if f.area().width >= 60 { 1 } else { 0 };
-    // Drop the top padding inside the chat block so transcripts use the
-    // full height — borders alone separate it from neighbours.
-    let t_pad: u16 = 0;
+    let h_pad: u16 = if f.area().width >= 60 { 1 } else { 0 };
+    // One-row top padding inside the chat block so the first entry
+    // doesn't crash into the title bar. Drops to 0 on cramped (<24-row)
+    // terminals so small screens keep their content space.
+    let t_pad: u16 = if f.area().height >= 24 { 1 } else { 0 };
     // The visible content area = block height − borders (2) − top padding.
     // Without subtracting the padding, the auto-scroll math is off by one
     // and new streamed deltas can land behind the padding strip, looking
@@ -2136,7 +2139,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
         let items: Vec<ListItem> = menu
             .items
             .iter()
-            .map(|s| ListItem::new(s.clone()))
+            .map(|s| ListItem::new(s.clone()).style(Style::default().fg(th.fg).bg(th.bg)))
             .collect();
         let list = List::new(items)
             .style(Style::default().bg(th.bg).fg(th.fg))

@@ -201,6 +201,27 @@ pub fn definitions() -> Vec<ToolDef> {
             "Current local + UTC time. RFC3339-shaped.",
             json!({ "type": "object", "properties": {} }),
         ),
+        ToolDef::new(
+            "lint",
+            "Run the standard linter for the path's language. Auto-detects via extension: .rs → cargo clippy, .py → ruff check / flake8, .js/.ts/.tsx → eslint, .go → go vet, .sh → shellcheck. Returns combined stdout/stderr + exit code. Falls back to an error if no linter is known.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string", "description": "File or directory to lint" }
+            }, "required": ["path"] }),
+        ),
+        ToolDef::new(
+            "format",
+            "Run the standard formatter for the path's language (writes in place). Auto-detects via extension: .rs → rustfmt, .py → black / ruff format, .js/.ts/.tsx/.json/.md → prettier, .go → gofmt. Returns the formatter's output.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string", "description": "File to format" }
+            }, "required": ["path"] }),
+        ),
+        ToolDef::new(
+            "typecheck",
+            "Run the static type-checker for the path's language. .rs → cargo check, .py → mypy, .ts/.tsx → tsc --noEmit, .go → go build -o /dev/null. Returns combined stdout/stderr.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string", "description": "File or directory" }
+            }, "required": ["path"] }),
+        ),
     ]
 }
 
@@ -231,6 +252,9 @@ pub async fn dispatch(name: &str, arguments: &str) -> Result<String> {
         "touch" => touch_tool(args).await,
         "sha256" => sha256_tool(args).await,
         "date" => date_tool(args).await,
+        "lint" => lint_tool(args).await,
+        "format" => format_tool(args).await,
+        "typecheck" => typecheck_tool(args).await,
         other => Err(anyhow!("unknown tool: {other}")),
     }
 }
@@ -941,6 +965,107 @@ fn format_unix(t: u64, local: bool) -> String {
 #[cfg(not(unix))]
 fn format_unix(t: u64, _local: bool) -> String {
     format!("{t}")
+}
+
+/// Run `cmd args…` and return combined stdout/stderr + exit hint.
+/// Used by lint/format/typecheck; missing binary surfaces as a
+/// "not found" error so the agent knows to suggest installing.
+async fn run_command(cmd: &str, args: &[&str]) -> Result<String> {
+    let mut c = Command::new(cmd);
+    c.args(args);
+    c.stdin(Stdio::null());
+    c.stdout(Stdio::piped());
+    c.stderr(Stdio::piped());
+    let out = c
+        .output()
+        .await
+        .with_context(|| format!("running `{cmd}`"))?;
+    let mut body = String::from_utf8_lossy(&out.stdout).into_owned();
+    let err = String::from_utf8_lossy(&out.stderr);
+    if !err.is_empty() {
+        if !body.is_empty() {
+            body.push('\n');
+        }
+        body.push_str(&err);
+    }
+    if !out.status.success() {
+        body.push_str(&format!("\n[exit {}]", out.status.code().unwrap_or(-1)));
+    }
+    if body.trim().is_empty() {
+        body = "(no output)".to_string();
+    }
+    Ok(body)
+}
+
+fn ext_of(path: &str) -> Option<String> {
+    std::path::Path::new(path)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase())
+}
+
+async fn lint_tool(args: Value) -> Result<String> {
+    let PathArgs { path } = serde_json::from_value(args)?;
+    let ext = ext_of(&path);
+    match ext.as_deref() {
+        Some("rs") => {
+            // cargo clippy operates on the whole workspace; the path is
+            // informational only here.
+            run_command(
+                "cargo",
+                &["clippy", "--all-targets", "--", "-D", "warnings"],
+            )
+            .await
+        }
+        Some("py") => {
+            // Prefer ruff (fast), fall back to flake8 if ruff isn't on PATH.
+            match run_command("ruff", &["check", &path]).await {
+                Ok(o) => Ok(o),
+                Err(_) => run_command("flake8", &[&path]).await,
+            }
+        }
+        Some("js") | Some("jsx") | Some("ts") | Some("tsx") => {
+            run_command("eslint", &[&path]).await
+        }
+        Some("go") => run_command("go", &["vet", &path]).await,
+        Some("sh") | Some("bash") => run_command("shellcheck", &[&path]).await,
+        Some(other) => Err(anyhow!("no linter known for .{other} files")),
+        None => Err(anyhow!("no extension on {path} — can't pick a linter")),
+    }
+}
+
+async fn format_tool(args: Value) -> Result<String> {
+    let PathArgs { path } = serde_json::from_value(args)?;
+    let ext = ext_of(&path);
+    match ext.as_deref() {
+        Some("rs") => run_command("rustfmt", &[&path]).await,
+        Some("py") => match run_command("ruff", &["format", &path]).await {
+            Ok(o) => Ok(o),
+            Err(_) => run_command("black", &[&path]).await,
+        },
+        Some("js") | Some("jsx") | Some("ts") | Some("tsx") | Some("json") | Some("md")
+        | Some("css") | Some("html") | Some("yaml") | Some("yml") => {
+            run_command("prettier", &["--write", &path]).await
+        }
+        Some("go") => run_command("gofmt", &["-w", &path]).await,
+        Some(other) => Err(anyhow!("no formatter known for .{other} files")),
+        None => Err(anyhow!("no extension on {path} — can't pick a formatter")),
+    }
+}
+
+async fn typecheck_tool(args: Value) -> Result<String> {
+    let PathArgs { path } = serde_json::from_value(args)?;
+    let ext = ext_of(&path);
+    match ext.as_deref() {
+        Some("rs") => run_command("cargo", &["check", "--all-targets"]).await,
+        Some("py") => run_command("mypy", &[&path]).await,
+        Some("ts") | Some("tsx") => run_command("tsc", &["--noEmit", &path]).await,
+        Some("go") => run_command("go", &["build", "-o", "/dev/null", &path]).await,
+        Some(other) => Err(anyhow!("no type-checker known for .{other} files")),
+        None => Err(anyhow!(
+            "no extension on {path} — can't pick a type-checker"
+        )),
+    }
 }
 
 #[cfg(test)]
