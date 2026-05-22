@@ -506,9 +506,7 @@ async fn main() -> Result<()> {
         }
     }
     if args.theme == "tokyo-night" {
-        if let Some(theme) = agent.get_pref("theme") {
-            let _ = tui::set_theme(&theme);
-        }
+        apply_theme_from_agent(&agent);
     }
     if args.auto {
         agent.set_permission_mode(telia_agent::PermissionMode::Auto);
@@ -622,7 +620,54 @@ async fn main() -> Result<()> {
         }
     }
 
+    spawn_sigusr1_theme_reload();
     tui::run(agent, mcp_summary, lsp_summary, update_check).await
+}
+
+fn spawn_sigusr1_theme_reload() {
+    tokio::spawn(async move {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sig = match signal(SignalKind::user_defined1()) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        while sig.recv().await.is_some() {
+            let Ok(store) = Store::open() else { continue };
+            apply_theme_from_store(&store);
+        }
+    });
+}
+
+fn apply_theme_from_store(store: &Store) {
+    let custom = store
+        .get_pref("grogu_palette")
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| tui::set_custom_palette_from_json(&s))
+        .unwrap_or(false);
+    if custom {
+        return;
+    }
+    tui::clear_custom_theme();
+    if let Ok(Some(name)) = store.get_pref("theme") {
+        let _ = tui::set_theme(&name);
+    }
+}
+
+fn apply_theme_from_agent(agent: &telia_agent::Agent) {
+    let custom = agent
+        .get_pref("grogu_palette")
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| tui::set_custom_palette_from_json(&s))
+        .unwrap_or(false);
+    if custom {
+        return;
+    }
+    tui::clear_custom_theme();
+    if let Some(name) = agent.get_pref("theme") {
+        let _ = tui::set_theme(&name);
+    }
 }
 
 /// Pre-flight: if Ollama can be reached and reports the model isn't

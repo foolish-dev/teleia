@@ -201,9 +201,61 @@ const THEMES: &[(&str, &Theme)] = &[
 static CURRENT_THEME: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static TRANSPARENT_BG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-fn theme() -> &'static Theme {
+static CUSTOM_THEME: std::sync::OnceLock<std::sync::RwLock<Theme>> =
+    std::sync::OnceLock::new();
+static USE_CUSTOM_THEME: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn theme() -> Theme {
+    if USE_CUSTOM_THEME.load(std::sync::atomic::Ordering::Relaxed) {
+        if let Some(lock) = CUSTOM_THEME.get() {
+            return *lock.read().unwrap();
+        }
+    }
     let idx = CURRENT_THEME.load(std::sync::atomic::Ordering::Relaxed);
-    THEMES[idx.min(THEMES.len() - 1)].1
+    *THEMES[idx.min(THEMES.len() - 1)].1
+}
+
+pub fn set_custom_palette_from_json(json: &str) -> bool {
+    match parse_hex_palette(json) {
+        Some(t) => {
+            let lock = CUSTOM_THEME.get_or_init(|| std::sync::RwLock::new(t));
+            *lock.write().unwrap() = t;
+            USE_CUSTOM_THEME.store(true, std::sync::atomic::Ordering::Relaxed);
+            true
+        }
+        None => false,
+    }
+}
+
+pub fn clear_custom_theme() {
+    USE_CUSTOM_THEME.store(false, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn parse_hex_palette(s: &str) -> Option<Theme> {
+    let v: serde_json::Value = serde_json::from_str(s).ok()?;
+    let get = |k: &str| -> Option<Color> {
+        let hex = v.get(k)?.as_str()?.trim_start_matches('#');
+        if hex.len() != 6 {
+            return None;
+        }
+        let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+        let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+        let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+        Some(Color::Rgb(r, g, b))
+    };
+    Some(Theme {
+        bg: get("bg")?,
+        bg_hl: get("bg_hl")?,
+        fg: get("fg")?,
+        dim: get("dim")?,
+        red: get("red")?,
+        green: get("green")?,
+        yellow: get("yellow")?,
+        blue: get("blue")?,
+        purple: get("purple")?,
+        cyan: get("cyan")?,
+    })
 }
 
 /// Theme background, but `Color::Reset` when the transparent toggle is on.
@@ -230,6 +282,7 @@ pub fn is_transparent() -> bool {
 pub fn set_theme(name: &str) -> Option<&'static str> {
     let (idx, &(canonical, _)) = THEMES.iter().enumerate().find(|(_, (n, _))| *n == name)?;
     CURRENT_THEME.store(idx, std::sync::atomic::Ordering::Relaxed);
+    USE_CUSTOM_THEME.store(false, std::sync::atomic::Ordering::Relaxed);
     Some(canonical)
 }
 
@@ -3288,7 +3341,7 @@ fn welcome_banner(width: u16, frame: usize) -> Vec<Line<'static>> {
     // can't fit — drop the art entirely and emit a compact text-only
     // banner.
     if (width as usize) < art_width + 4 {
-        return compact_banner(distro, th, width);
+        return compact_banner(distro, &th, width);
     }
 
     let art_pad = (width as usize).saturating_sub(art_width) / 2;

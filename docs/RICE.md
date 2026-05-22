@@ -194,6 +194,64 @@ and the whole effect only lands when all three are on:
 Selection highlight, status chips, and mode badges keep their solid
 colours so they stay readable on top of the wallpaper.
 
+## Autotheme — fan telia's palette across the desktop
+
+[`grogu`](https://github.com/foolish-dev/grogu) is a standalone Rust
+binary that pushes telia's current theme out to the rest of the
+desktop. It lives in its own repo (not in this workspace) and writes
+four targets:
+
+- **Noctalia shell** — patches `colorSchemes.predefinedScheme` in
+  `~/.config/noctalia/settings.json` to the matching built-in scheme.
+- **niri** — writes `~/.config/niri/grogu.kdl`, an include-able
+  snippet with focus-ring colours; niri live-reloads.
+- **telia** — writes the `theme` pref straight into telia's sqlite
+  prefs store (so `/theme` and grogu stay in lockstep either way).
+- **vim / neovim** — drops `colors/grogu.vim` into `~/.vim/` and/or
+  `~/.config/nvim/`; activate with `:colorscheme grogu`.
+
+Install:
+
+```sh
+git clone https://github.com/foolish-dev/grogu ~/grogu
+cargo install --path ~/grogu
+```
+
+Use:
+
+```sh
+grogu list                       # tokyo-night, catppuccin, dracula
+grogu paths                      # everywhere grogu reads or writes
+grogu apply                      # pulls theme from telia's prefs
+grogu apply --theme catppuccin
+grogu apply --no-vim --dry-run
+```
+
+The default `grogu apply` reads the same `theme` row telia's
+`/theme NAME` slash command writes, so `inside telia: /theme dracula`
+→ `outside telia: grogu apply` keeps everything in sync without
+re-typing the theme name.
+
+### Trigger on Noctalia wallpaper rotation
+
+Noctalia ships a hook system. Add a `wallpaper.changed` hook that
+runs `grogu apply` — every wallpaper rotation now repaints the
+desktop. See grogu's README for the hook config.
+
+Or just bind it in your compositor — Hyprland:
+
+```hyprland
+bind = SUPER SHIFT, T, exec, grogu apply
+```
+
+…and niri (drop into `~/.config/niri/config.kdl`):
+
+```kdl
+binds {
+    Mod+Shift+T { spawn "grogu" "apply"; }
+}
+```
+
 ## Result
 
 You get a floating, centred τέλεια panel that opens with one keystroke,
