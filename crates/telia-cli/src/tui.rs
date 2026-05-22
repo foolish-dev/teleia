@@ -1667,13 +1667,20 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
     };
     let input_height = (input_content_rows as u16) + 2; // + borders
 
+    // Breathing room around the prompt. Tall terminals get a blank row
+    // above + below the input box; cramped ones (<24 rows) drop the gaps
+    // so the chat log keeps as much screen as possible. Auto, not knobs.
+    let gap = if f.area().height >= 24 { 1 } else { 0 };
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(3),
-            Constraint::Length(menu_height),
-            Constraint::Length(input_height),
-            Constraint::Length(1),
+            Constraint::Min(3),               // 0 chat log
+            Constraint::Length(menu_height),  // 1 menu
+            Constraint::Length(gap),          // 2 spacer above input
+            Constraint::Length(input_height), // 3 input box
+            Constraint::Length(gap),          // 4 spacer below input
+            Constraint::Length(1),            // 5 status bar
         ])
         .split(f.area());
     // Stash the chat-area rect so mouse handlers (which run between draws)
@@ -1756,7 +1763,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
         Mode::Command => (": ", th.yellow, &state.command_buf, state.command_cursor),
     };
 
-    let inside = chunks[2];
+    let inside = chunks[3];
     let body_style = if state.working {
         Style::default().fg(th.dim)
     } else {
@@ -1792,7 +1799,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
                     Style::default().fg(th.yellow).add_modifier(Modifier::BOLD),
                 )),
         );
-        f.render_widget(widget, chunks[2]);
+        f.render_widget(widget, chunks[3]);
         // Cursor at end of the masked input.
         let cursor_x = inside.x + 1 + 2 + ke.buf.chars().count() as u16;
         let cursor_y = inside.y + 2;
@@ -1845,7 +1852,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
                     Style::default().fg(th.yellow).add_modifier(Modifier::BOLD),
                 )),
         );
-        f.render_widget(widget, chunks[2]);
+        f.render_widget(widget, chunks[3]);
         // No cursor while waiting for approval — the prompt isn't editable.
     } else if input_content_rows == 1 {
         // Single-line: keep the horizontal-scroll behaviour so the cursor
@@ -1881,7 +1888,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(prompt_color)),
         );
-        f.render_widget(widget, chunks[2]);
+        f.render_widget(widget, chunks[3]);
         let cursor_x = inside.x + 1 + 2 + (cursor_chars - start_char) as u16;
         let cursor_y = inside.y + 1;
         f.set_cursor_position((cursor_x, cursor_y));
@@ -1908,7 +1915,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(prompt_color)),
         );
-        f.render_widget(widget, chunks[2]);
+        f.render_widget(widget, chunks[3]);
 
         let (cursor_col, cursor_row) = cursor_visual_pos(buf, buf_cursor, inner_w, prefix_w);
         // Clamp inside the visible content rows so a cursor past the cap
@@ -2009,7 +2016,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
         mode_hints(state.mode)
     };
     status_spans.push(Span::styled(hint, Style::default().fg(th.dim)));
-    f.render_widget(Paragraph::new(Line::from(status_spans)), chunks[3]);
+    f.render_widget(Paragraph::new(Line::from(status_spans)), chunks[5]);
 
     // Drag-selection highlight overlay. Applied last so it paints on top of
     // every widget; clamped to the log area's inner rect so it never bleeds
