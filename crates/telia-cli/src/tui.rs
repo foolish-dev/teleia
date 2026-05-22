@@ -1693,16 +1693,19 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
     } else {
         render_history(&state.history, frame, &state.username)
     };
-    let visible = chunks[0].height.saturating_sub(2) as usize;
-    let total = lines.len();
-    let max_offset = total.saturating_sub(visible) as u16;
-    let offset = max_offset.saturating_sub(state.scroll);
-
     // Chat log breathes: 1-char horizontal padding on terminals wide
     // enough to spare, 1-row top padding when tall enough. Auto-shrinks
     // to zero on cramped screens so the transcript keeps the space.
     let h_pad = if f.area().width >= 60 { 1 } else { 0 };
     let t_pad = if f.area().height >= 24 { 1 } else { 0 };
+    // The visible content area = block height − borders (2) − top padding.
+    // Without subtracting the padding, the auto-scroll math is off by one
+    // and new streamed deltas can land behind the padding strip, looking
+    // like the chat is frozen on the previous frame.
+    let visible = chunks[0].height.saturating_sub(2 + t_pad) as usize;
+    let total = lines.len();
+    let max_offset = total.saturating_sub(visible) as u16;
+    let offset = max_offset.saturating_sub(state.scroll);
     let log = Paragraph::new(lines)
         .block(
             Block::default()
