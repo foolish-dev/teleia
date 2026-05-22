@@ -194,15 +194,43 @@ impl Store {
     }
 }
 
+/// Where to keep the sqlite store. Honours `$XDG_DATA_HOME` if set
+/// (works for users who symlink it on macOS too); otherwise falls
+/// back to the OS-native data dir:
+///
+/// - Linux  : `$HOME/.local/share/telia/telia.sqlite`
+/// - macOS  : `$HOME/Library/Application Support/telia/telia.sqlite`
+/// - Windows: `%APPDATA%\telia\telia.sqlite`
+/// - other  : `$HOME/.telia/telia.sqlite` as a last resort
 fn data_path() -> Result<PathBuf> {
-    let base = match std::env::var_os("XDG_DATA_HOME") {
-        Some(v) if !v.is_empty() => PathBuf::from(v),
-        _ => {
-            let home = std::env::var_os("HOME").context("HOME not set")?;
-            PathBuf::from(home).join(".local").join("share")
+    if let Some(v) = std::env::var_os("XDG_DATA_HOME") {
+        if !v.is_empty() {
+            return Ok(PathBuf::from(v).join("telia").join("telia.sqlite"));
         }
-    };
-    Ok(base.join("telia").join("telia.sqlite"))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var_os("HOME").context("HOME not set")?;
+        return Ok(PathBuf::from(home)
+            .join("Library")
+            .join("Application Support")
+            .join("telia")
+            .join("telia.sqlite"));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let appdata = std::env::var_os("APPDATA").context("APPDATA not set")?;
+        return Ok(PathBuf::from(appdata).join("telia").join("telia.sqlite"));
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let home = std::env::var_os("HOME").context("HOME not set")?;
+        Ok(PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join("telia")
+            .join("telia.sqlite"))
+    }
 }
 
 fn unix_seconds() -> i64 {

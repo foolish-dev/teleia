@@ -103,14 +103,37 @@ pub fn load() -> Config {
     }
 }
 
-/// `$XDG_CONFIG_HOME/telia/config.toml`, else `$HOME/.config/telia/config.toml`.
+/// Where the optional `config.toml` lives. Same precedence as the
+/// data path: `$XDG_CONFIG_HOME` first, then OS-native:
+/// - Linux  : `$HOME/.config/telia/config.toml`
+/// - macOS  : `$HOME/Library/Application Support/telia/config.toml`
+/// - Windows: `%APPDATA%\telia\config.toml`
 pub fn config_path() -> PathBuf {
-    let base = match std::env::var_os("XDG_CONFIG_HOME") {
-        Some(v) if !v.is_empty() => PathBuf::from(v),
-        _ => {
-            let home = std::env::var_os("HOME").unwrap_or_default();
-            PathBuf::from(home).join(".config")
+    if let Some(v) = std::env::var_os("XDG_CONFIG_HOME") {
+        if !v.is_empty() {
+            return PathBuf::from(v).join("telia").join("config.toml");
         }
-    };
-    base.join("telia").join("config.toml")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var_os("HOME").unwrap_or_default();
+        return PathBuf::from(home)
+            .join("Library")
+            .join("Application Support")
+            .join("telia")
+            .join("config.toml");
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let appdata = std::env::var_os("APPDATA").unwrap_or_default();
+        return PathBuf::from(appdata).join("telia").join("config.toml");
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let home = std::env::var_os("HOME").unwrap_or_default();
+        PathBuf::from(home)
+            .join(".config")
+            .join("telia")
+            .join("config.toml")
+    }
 }

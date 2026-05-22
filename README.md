@@ -140,7 +140,7 @@ The `/model` dropdown pre-populates with ~210 named models across all twenty-one
 
 Everything important survives a restart.
 
-- **Messages** are streamed to SQLite (`$XDG_DATA_HOME/telia/telia.sqlite`) as they arrive — there's no "unsaved" state.
+- **Messages** are streamed to SQLite as they arrive — there's no "unsaved" state. Store lives at `$XDG_DATA_HOME/telia/telia.sqlite` on Linux (or `~/.local/share/telia/telia.sqlite`), `~/Library/Application Support/telia/telia.sqlite` on macOS, `%APPDATA%\telia\telia.sqlite` on Windows. `$XDG_DATA_HOME` overrides on any platform.
 - **Auto-bookmarks**: every launch is tagged `last`; `/reset` rotates the outgoing session to `prev`. So `--resume` (alias `--continue`, short `-r`) always picks up where you left off, and the run before that is recoverable with `/load prev`.
 - **Aliases**: `/save NAME` and `/load NAME` for sessions you want to keep by hand.
 - **Sticky preferences**: theme, `/notify` toggle, permission mode, **the active model**, and **per-provider API keys** persist across launches (CLI flags override). Launching `telia` with no `--model` picks up wherever you last `/model`-ed.

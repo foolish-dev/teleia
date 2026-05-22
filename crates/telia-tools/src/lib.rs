@@ -167,6 +167,40 @@ pub fn definitions() -> Vec<ToolDef> {
                 "dst": { "type": "string" }
             }, "required": ["src", "dst"] }),
         ),
+        ToolDef::new(
+            "apply_patch",
+            "Apply a unified diff to the working tree via `/usr/bin/patch -pN`. Returns patch's stdout+stderr; non-zero exit appended as `[exit N]`.",
+            json!({ "type": "object", "properties": {
+                "diff": { "type": "string", "description": "Unified diff payload, as `diff -u` or `git diff` produces" },
+                "strip": { "type": "integer", "description": "Strip level passed as -p (default 0)" }
+            }, "required": ["diff"] }),
+        ),
+        ToolDef::new(
+            "wc",
+            "Count lines / words / bytes of a file. Cheap inspection — useful before deciding whether to `read` everything.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" }
+            }, "required": ["path"] }),
+        ),
+        ToolDef::new(
+            "touch",
+            "Create an empty file (or update mtime if it already exists). Idempotent.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" }
+            }, "required": ["path"] }),
+        ),
+        ToolDef::new(
+            "sha256",
+            "SHA-256 of a file's contents, hex-encoded.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" }
+            }, "required": ["path"] }),
+        ),
+        ToolDef::new(
+            "date",
+            "Current local + UTC time. RFC3339-shaped.",
+            json!({ "type": "object", "properties": {} }),
+        ),
     ]
 }
 
@@ -192,6 +226,11 @@ pub async fn dispatch(name: &str, arguments: &str) -> Result<String> {
         "mkdir" => mkdir_tool(args).await,
         "mv" => mv_tool(args).await,
         "cp" => cp_tool(args).await,
+        "apply_patch" => apply_patch_tool(args).await,
+        "wc" => wc_tool(args).await,
+        "touch" => touch_tool(args).await,
+        "sha256" => sha256_tool(args).await,
+        "date" => date_tool(args).await,
         other => Err(anyhow!("unknown tool: {other}")),
     }
 }
@@ -666,6 +705,242 @@ async fn cp_tool(args: Value) -> Result<String> {
     }
     let bytes = std::fs::copy(&src, &dst).with_context(|| format!("cp {src} -> {dst}"))?;
     Ok(format!("copied {bytes} bytes: {src} -> {dst}"))
+}
+
+#[derive(Deserialize)]
+struct ApplyPatchArgs {
+    diff: String,
+    #[serde(default)]
+    strip: Option<u32>,
+}
+
+async fn apply_patch_tool(args: Value) -> Result<String> {
+    use tokio::io::AsyncWriteExt;
+    let ApplyPatchArgs { diff, strip } = serde_json::from_value(args)?;
+    let strip = strip.unwrap_or(0);
+    let mut child = Command::new("patch")
+        .arg(format!("-p{strip}"))
+        .arg("--no-backup-if-mismatch")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| "spawning /usr/bin/patch")?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(diff.as_bytes()).await?;
+        stdin.flush().await?;
+    }
+    drop(child.stdin.take());
+    let out = child.wait_with_output().await?;
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let err = String::from_utf8_lossy(&out.stderr);
+    if !err.is_empty() {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&err);
+    }
+    if !out.status.success() {
+        text.push_str(&format!("\n[exit {}]", out.status.code().unwrap_or(-1)));
+    }
+    Ok(text)
+}
+
+async fn wc_tool(args: Value) -> Result<String> {
+    let PathArgs { path } = serde_json::from_value(args)?;
+    let bytes = std::fs::read(&path).with_context(|| format!("read {path}"))?;
+    let lines = bytes.iter().filter(|&&b| b == b'\n').count();
+    // Word count = whitespace-separated runs (matches `wc -w` on most inputs).
+    let text = String::from_utf8_lossy(&bytes);
+    let words = text.split_whitespace().count();
+    Ok(format!(
+        "lines: {lines}\nwords: {words}\nbytes: {}",
+        bytes.len()
+    ))
+}
+
+async fn touch_tool(args: Value) -> Result<String> {
+    let PathArgs { path } = serde_json::from_value(args)?;
+    // Open with create+append so it makes the file when missing and
+    // updates mtime when it exists; close immediately.
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("touch {path}"))?;
+    // Bump mtime even when the file existed and we wrote zero bytes —
+    // a real `touch` updates the timestamp regardless.
+    let now = std::time::SystemTime::now();
+    let _ = filetime_set(&path, now);
+    Ok(format!("touched {path}"))
+}
+
+#[cfg(unix)]
+fn filetime_set(path: &str, t: std::time::SystemTime) -> std::io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let f = std::fs::OpenOptions::new()
+        .write(true)
+        .custom_flags(0)
+        .open(path)?;
+    // utimensat via libc — keep deps minimal.
+    let secs = t
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let tv = [
+        libc::timespec {
+            tv_sec: secs,
+            tv_nsec: 0,
+        },
+        libc::timespec {
+            tv_sec: secs,
+            tv_nsec: 0,
+        },
+    ];
+    use std::os::unix::io::AsRawFd;
+    let r = unsafe { libc::futimens(f.as_raw_fd(), tv.as_ptr()) };
+    if r == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(unix))]
+fn filetime_set(_path: &str, _t: std::time::SystemTime) -> std::io::Result<()> {
+    Ok(())
+}
+
+async fn sha256_tool(args: Value) -> Result<String> {
+    let PathArgs { path } = serde_json::from_value(args)?;
+    let bytes = std::fs::read(&path).with_context(|| format!("read {path}"))?;
+    // Tiny hand-rolled SHA-256 — keeps the dep tree small.
+    let digest = sha256(&bytes);
+    Ok(digest)
+}
+
+/// Minimal SHA-256 (FIPS 180-4) of `data`, returned as a 64-char hex
+/// string. Hand-rolled so we don't drag in a hash crate for one tool.
+fn sha256(data: &[u8]) -> String {
+    const K: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
+    ];
+    let mut h: [u32; 8] = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x5be0cd19,
+    ];
+    let bit_len = (data.len() as u64).wrapping_mul(8);
+    let mut padded = data.to_vec();
+    padded.push(0x80);
+    while padded.len() % 64 != 56 {
+        padded.push(0);
+    }
+    padded.extend_from_slice(&bit_len.to_be_bytes());
+    for chunk in padded.chunks_exact(64) {
+        let mut w = [0u32; 64];
+        for (i, word) in chunk.chunks_exact(4).enumerate() {
+            w[i] = u32::from_be_bytes([word[0], word[1], word[2], word[3]]);
+        }
+        for i in 16..64 {
+            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
+        }
+        let mut a = h[0];
+        let mut b = h[1];
+        let mut c = h[2];
+        let mut d = h[3];
+        let mut e = h[4];
+        let mut f = h[5];
+        let mut g = h[6];
+        let mut hh = h[7];
+        for i in 0..64 {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & f) ^ (!e & g);
+            let t1 = hh
+                .wrapping_add(s1)
+                .wrapping_add(ch)
+                .wrapping_add(K[i])
+                .wrapping_add(w[i]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let mj = (a & b) ^ (a & c) ^ (b & c);
+            let t2 = s0.wrapping_add(mj);
+            hh = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(t1);
+            d = c;
+            c = b;
+            b = a;
+            a = t1.wrapping_add(t2);
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+        h[5] = h[5].wrapping_add(f);
+        h[6] = h[6].wrapping_add(g);
+        h[7] = h[7].wrapping_add(hh);
+    }
+    let mut out = String::with_capacity(64);
+    for word in h {
+        out.push_str(&format!("{word:08x}"));
+    }
+    out
+}
+
+async fn date_tool(_args: Value) -> Result<String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // Convert via libc::localtime for a quick local-time render — no
+    // chrono dep needed.
+    Ok(format!(
+        "unix:  {now}\nutc:   {}\nlocal: {}",
+        format_unix(now, false),
+        format_unix(now, true)
+    ))
+}
+
+#[cfg(unix)]
+fn format_unix(t: u64, local: bool) -> String {
+    use std::ffi::CStr;
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    let tt = t as libc::time_t;
+    unsafe {
+        if local {
+            libc::localtime_r(&tt, &mut tm);
+        } else {
+            libc::gmtime_r(&tt, &mut tm);
+        }
+    }
+    let mut buf = [0u8; 64];
+    let fmt = c"%Y-%m-%d %H:%M:%S %Z";
+    let n = unsafe { libc::strftime(buf.as_mut_ptr().cast(), buf.len(), fmt.as_ptr(), &tm) };
+    if n == 0 {
+        return format!("{t}");
+    }
+    let cstr = unsafe { CStr::from_ptr(buf.as_ptr().cast()) };
+    cstr.to_string_lossy().into_owned()
+}
+
+#[cfg(not(unix))]
+fn format_unix(t: u64, _local: bool) -> String {
+    format!("{t}")
 }
 
 #[cfg(test)]

@@ -1,5 +1,6 @@
 mod config;
 mod highlight;
+mod lsp;
 mod mcp;
 mod tui;
 
@@ -388,13 +389,22 @@ async fn main() -> Result<()> {
 
     // Optional user config — register custom LLM endpoints + MCP / LSP servers.
     let cfg = config::load();
-    if !cfg.lsps.is_empty() {
-        eprintln!(
-            "note: {} LSP entr{} loaded from config (LSP runtime not yet wired)",
-            cfg.lsps.len(),
-            if cfg.lsps.len() == 1 { "y" } else { "ies" }
-        );
-    }
+    // LSP servers boot here too — initialize handshake only; no tool
+    // exposure yet. The registry stays alive for the rest of the
+    // process so the children don't get reaped early.
+    let _lsp_registry: Option<lsp::LspRegistry> = if cfg.lsps.is_empty() {
+        None
+    } else {
+        let reg = lsp::LspRegistry::spawn_all(cfg.lsps.iter()).await;
+        let n = reg.server_count();
+        if n > 0 {
+            eprintln!(
+                "· {n} LSP server{} initialized (no tools exposed yet)",
+                if n == 1 { "" } else { "s" }
+            );
+        }
+        Some(reg)
+    };
 
     // Open the store early so saved prefs (current model, API keys) can
     // feed into the rest of startup before LlmClient is built.
@@ -526,40 +536,56 @@ async fn main() -> Result<()> {
         let tools = registry.tool_count();
         let servers = registry.server_count();
         if servers > 0 {
+            let resources = registry.resource_count();
             eprintln!(
-                "· {servers} MCP server{} connected ({tools} tool{})",
+                "· {servers} MCP server{} connected ({tools} tool{}, {resources} resource{})",
                 if servers == 1 { "" } else { "s" },
-                if tools == 1 { "" } else { "s" }
+                if tools == 1 { "" } else { "s" },
+                if resources == 1 { "" } else { "s" }
             );
             // Pre-format the /mcps panel: one row per server with its
-            // command line and how many tools it contributed.
-            let mut text = format!("{servers} MCP server(s), {tools} tool(s):");
-            let counts: std::collections::HashMap<String, usize> =
-                registry.server_summaries().into_iter().collect();
+            // command line plus tool + resource counts.
+            let mut text =
+                format!("{servers} MCP server(s), {tools} tool(s), {resources} resource(s):");
+            let summaries: std::collections::HashMap<String, (usize, usize)> = registry
+                .server_summaries()
+                .into_iter()
+                .map(|(n, t, r)| (n, (t, r)))
+                .collect();
             for (name, entry) in &cfg.mcps {
                 let cmd = if entry.args.is_empty() {
                     entry.command.clone()
                 } else {
                     format!("{} {}", entry.command, entry.args.join(" "))
                 };
-                let n = counts.get(name).copied().unwrap_or(0);
-                text.push_str(&format!("\n  {name}  ·  {cmd}  ·  {n} tools"));
+                let (t, r) = summaries.get(name).copied().unwrap_or((0, 0));
+                text.push_str(&format!(
+                    "\n  {name}  ·  {cmd}  ·  {t} tool(s), {r} resource(s)"
+                ));
             }
             mcp_summary = Some(text);
             agent.set_tool_router(Box::new(registry));
         }
     }
 
-    // LSP runtime isn't wired yet, but pre-format the /lsps panel so
-    // configured entries are at least introspectable.
+    // /lsps panel — pulls live serverInfo from the registry when a
+    // server came up; otherwise just lists the config row.
     let lsp_summary = if cfg.lsps.is_empty() {
         None
     } else {
-        let mut text = format!(
-            "{} LSP entr{} (runtime stub — tools coming):",
-            cfg.lsps.len(),
-            if cfg.lsps.len() == 1 { "y" } else { "ies" }
-        );
+        let live: std::collections::HashMap<String, (Option<String>, Option<String>)> =
+            _lsp_registry
+                .as_ref()
+                .map(|r| {
+                    r.server_summaries()
+                        .into_iter()
+                        .map(|(n, s, v)| (n, (s, v)))
+                        .collect()
+                })
+                .unwrap_or_default();
+        let running = live.len();
+        let total = cfg.lsps.len();
+        let mut text = format!("{running}/{total} LSP server(s) running (no tools exposed yet):");
         for (name, entry) in &cfg.lsps {
             let cmd = if entry.args.is_empty() {
                 entry.command.clone()
@@ -571,7 +597,13 @@ async fn main() -> Result<()> {
             } else {
                 entry.root_patterns.join(", ")
             };
-            text.push_str(&format!("\n  {name}  ·  {cmd}  ·  roots: {roots}"));
+            let status = match live.get(name) {
+                Some((Some(sname), Some(ver))) => format!("  ·  {sname} {ver}"),
+                Some((Some(sname), None)) => format!("  ·  {sname}"),
+                Some(_) => "  ·  running".to_string(),
+                None => "  ·  not running".to_string(),
+            };
+            text.push_str(&format!("\n  {name}  ·  {cmd}  ·  roots: {roots}{status}"));
         }
         Some(text)
     };

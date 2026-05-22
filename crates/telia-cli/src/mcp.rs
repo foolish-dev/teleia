@@ -25,6 +25,18 @@ use crate::config::McpEntry;
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
+/// One entry from a server's `resources/list` reply. Fields are
+/// stashed for future per-resource rendering (resources/read tool
+/// exposure); for now only the count is consumed via `/mcps`.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct McpResource {
+    pub uri: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub mime_type: Option<String>,
+}
+
 pub struct McpClient {
     name: String,
     child: tokio::process::Child,
@@ -82,6 +94,40 @@ impl McpClient {
         // Per spec, follow up with the `initialized` notification.
         self.notify("notifications/initialized", json!({})).await?;
         Ok(())
+    }
+
+    /// MCP `resources/list`. Servers that don't expose resources
+    /// return an error (or an empty list); both are treated as
+    /// "no resources" by the caller.
+    pub async fn list_resources(&mut self) -> Result<Vec<McpResource>> {
+        #[derive(Deserialize)]
+        struct Entry {
+            uri: String,
+            #[serde(default)]
+            name: Option<String>,
+            #[serde(default)]
+            description: Option<String>,
+            #[serde(rename = "mimeType", default)]
+            mime_type: Option<String>,
+        }
+        #[derive(Deserialize)]
+        struct ListResult {
+            #[serde(default)]
+            resources: Vec<Entry>,
+        }
+        let result = self.request("resources/list", json!({})).await?;
+        let list: ListResult =
+            serde_json::from_value(result).unwrap_or(ListResult { resources: vec![] });
+        Ok(list
+            .resources
+            .into_iter()
+            .map(|r| McpResource {
+                uri: r.uri,
+                name: r.name,
+                description: r.description,
+                mime_type: r.mime_type,
+            })
+            .collect())
     }
 
     pub async fn list_tools(&mut self) -> Result<Vec<ToolDef>> {
@@ -226,6 +272,8 @@ pub struct McpRegistry {
     index: HashMap<String, usize>,
     /// Cached union of tool definitions, in registration order.
     tools: Vec<ToolDef>,
+    /// Resources advertised by each server, parallel to `clients`.
+    resources: Vec<Vec<McpResource>>,
 }
 
 impl McpRegistry {
@@ -234,6 +282,7 @@ impl McpRegistry {
             clients: Vec::new(),
             index: HashMap::new(),
             tools: Vec::new(),
+            resources: Vec::new(),
         }
     }
 
@@ -248,20 +297,26 @@ impl McpRegistry {
         let mut reg = Self::new();
         for (name, entry) in entries {
             match Self::spawn_one(name, entry).await {
-                Ok((client, tools)) => reg.add(client, tools),
+                Ok((client, tools, resources)) => reg.add(client, tools, resources),
                 Err(e) => eprintln!("warning: MCP `{name}` failed to start: {e:#}"),
             }
         }
         reg
     }
 
-    async fn spawn_one(name: &str, entry: &McpEntry) -> Result<(McpClient, Vec<ToolDef>)> {
+    async fn spawn_one(
+        name: &str,
+        entry: &McpEntry,
+    ) -> Result<(McpClient, Vec<ToolDef>, Vec<McpResource>)> {
         let mut client = McpClient::spawn(name, entry).await?;
         let tools = client.list_tools().await?;
-        Ok((client, tools))
+        // Resources are optional — many servers don't expose any.
+        // Treat a list error as "no resources".
+        let resources = client.list_resources().await.unwrap_or_default();
+        Ok((client, tools, resources))
     }
 
-    fn add(&mut self, client: McpClient, tools: Vec<ToolDef>) {
+    fn add(&mut self, client: McpClient, tools: Vec<ToolDef>, resources: Vec<McpResource>) {
         let idx = self.clients.len();
         self.clients.push(client);
         for tool in tools {
@@ -274,6 +329,7 @@ impl McpRegistry {
             self.index.insert(tool_name, idx);
             self.tools.push(tool);
         }
+        self.resources.push(resources);
     }
 
     pub fn tool_count(&self) -> usize {
@@ -284,20 +340,23 @@ impl McpRegistry {
         self.clients.len()
     }
 
-    /// Per-server name + tool count. Used by the TUI's `/mcps` command
-    /// to render the configured server list with how many tools each
-    /// one contributed to the catalogue.
-    pub fn server_summaries(&self) -> Vec<(String, usize)> {
-        let mut counts = vec![0usize; self.clients.len()];
+    pub fn resource_count(&self) -> usize {
+        self.resources.iter().map(|r| r.len()).sum()
+    }
+
+    /// Per-server (name, tool count, resource count). Used by the
+    /// `/mcps` command to summarise what each server contributed.
+    pub fn server_summaries(&self) -> Vec<(String, usize, usize)> {
+        let mut tool_counts = vec![0usize; self.clients.len()];
         for &idx in self.index.values() {
-            if let Some(slot) = counts.get_mut(idx) {
+            if let Some(slot) = tool_counts.get_mut(idx) {
                 *slot += 1;
             }
         }
         self.clients
             .iter()
-            .zip(counts)
-            .map(|(c, n)| (c.name.clone(), n))
+            .enumerate()
+            .map(|(idx, c)| (c.name.clone(), tool_counts[idx], self.resources[idx].len()))
             .collect()
     }
 }

@@ -14,7 +14,10 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Padding, Paragraph, Wrap},
+    widgets::{
+        Block, Borders, List, ListItem, ListState, Padding, Paragraph, Scrollbar,
+        ScrollbarOrientation, ScrollbarState, Wrap,
+    },
     Terminal,
 };
 use std::{io, time::Duration};
@@ -339,6 +342,17 @@ struct State {
     /// Pre-formatted summary of LSP entries from config. `None` when no
     /// `[lsps.NAME]` entries were configured. Rendered by `/lsps`.
     lsp_summary: Option<String>,
+    /// True when the chat should snap to the bottom whenever new content
+    /// arrives. Flipped to `false` the moment the user scrolls up to
+    /// re-read prior turns and back to `true` when they return to the
+    /// bottom (G in Normal mode, or PageDown / wheel-down to scroll==0).
+    /// Without this, every streamed delta would yank the user back down.
+    follow_bottom: bool,
+    /// Total rendered-line count from the previous frame. `draw()` uses
+    /// the delta against the new count to bump `scroll` when not
+    /// following — keeping the visible window pinned to the same
+    /// content rather than letting new entries push it up.
+    last_total_lines: usize,
 }
 
 pub struct PendingApproval {
@@ -390,12 +404,19 @@ impl State {
             permission_mode: PermissionMode::default(),
             mcp_summary: None,
             lsp_summary: None,
+            follow_bottom: true,
+            last_total_lines: 0,
         }
     }
 
     fn push(&mut self, e: Entry) {
         self.history.push(e);
-        self.scroll = 0; // auto-scroll on new content
+        if self.follow_bottom {
+            self.scroll = 0;
+        }
+        // When the user is scrolled up, `draw()` will bump scroll by
+        // the new-line delta so the visible window stays pinned to the
+        // same content they were reading.
     }
 
     fn apply(&mut self, evt: TurnEvent) {
@@ -413,7 +434,9 @@ impl State {
                 }) = self.history.last_mut()
                 {
                     t.push_str(&text);
-                    self.scroll = 0;
+                    if self.follow_bottom {
+                        self.scroll = 0;
+                    }
                 } else {
                     self.push(Entry::Assistant {
                         text,
@@ -446,7 +469,9 @@ impl State {
                 {
                     *o = output;
                     *complete = true;
-                    self.scroll = 0;
+                    if self.follow_bottom {
+                        self.scroll = 0;
+                    }
                 }
             }
             TurnEvent::TurnEnd => {}
@@ -460,7 +485,9 @@ impl State {
                     arguments,
                     responder,
                 });
-                self.scroll = 0;
+                if self.follow_bottom {
+                    self.scroll = 0;
+                }
             }
         }
     }
@@ -567,18 +594,10 @@ async fn event_loop<B: ratatui::backend::Backend>(
                     }
                     KeyCode::Up if recall_up_possible(state) => recall_up(state),
                     KeyCode::Down if state.recall_idx.is_some() => recall_down(state),
-                    KeyCode::PageUp => {
-                        state.scroll = state.scroll.saturating_add(5);
-                    }
-                    KeyCode::PageDown => {
-                        state.scroll = state.scroll.saturating_sub(5);
-                    }
-                    KeyCode::Up => {
-                        state.scroll = state.scroll.saturating_add(1);
-                    }
-                    KeyCode::Down => {
-                        state.scroll = state.scroll.saturating_sub(1);
-                    }
+                    KeyCode::PageUp => scroll_up(state, 5),
+                    KeyCode::PageDown => scroll_down(state, 5),
+                    KeyCode::Up => scroll_up(state, 1),
+                    KeyCode::Down => scroll_down(state, 1),
                     KeyCode::Left => {
                         if let Some((i, _)) =
                             state.input[..state.input_cursor].char_indices().next_back()
@@ -681,24 +700,23 @@ async fn event_loop<B: ratatui::backend::Backend>(
                     KeyCode::Char('0') | KeyCode::Home => state.input_cursor = 0,
                     KeyCode::Char('$') | KeyCode::End => state.input_cursor = state.input.len(),
                     // Jump scrollback to the latest entries (vim's G).
-                    KeyCode::Char('G') => state.scroll = 0,
+                    KeyCode::Char('G') => {
+                        state.scroll = 0;
+                        state.follow_bottom = true;
+                    }
                     // Half-page scroll (vim's Ctrl-U / Ctrl-D).
                     KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        state.scroll = state.scroll.saturating_add(12);
+                        scroll_up(state, 12);
                     }
                     KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        state.scroll = state.scroll.saturating_sub(12);
+                        scroll_down(state, 12);
                     }
                     // History scroll
                     KeyCode::Char('j') | KeyCode::Down | KeyCode::PageDown => {
-                        state.scroll = state
-                            .scroll
-                            .saturating_sub(if key.code == KeyCode::PageDown { 5 } else { 1 });
+                        scroll_down(state, if key.code == KeyCode::PageDown { 5 } else { 1 });
                     }
                     KeyCode::Char('k') | KeyCode::Up | KeyCode::PageUp => {
-                        state.scroll = state
-                            .scroll
-                            .saturating_add(if key.code == KeyCode::PageUp { 5 } else { 1 });
+                        scroll_up(state, if key.code == KeyCode::PageUp { 5 } else { 1 });
                     }
                     // Editing
                     KeyCode::Char('x') if state.input_cursor < state.input.len() => {
@@ -861,10 +879,10 @@ async fn submit_input<B: ratatui::backend::Backend>(
     }
 }
 
-/// Best-effort desktop notification. Uses `notify-send` on Linux; silently
-/// noops everywhere else (a future macOS/osascript branch can slot in
-/// here). All errors are swallowed — a missing notification daemon
-/// shouldn't break the turn that just completed.
+/// Best-effort desktop notification — Linux via `notify-send`, macOS
+/// via `osascript`, Windows via PowerShell BurntToast (silently
+/// skipped if PowerShell isn't on PATH). All errors swallowed — a
+/// missing notification daemon shouldn't break the turn.
 fn notify_user(title: &str, body: &str) {
     #[cfg(target_os = "linux")]
     {
@@ -877,23 +895,145 @@ fn notify_user(title: &str, body: &str) {
             .stderr(std::process::Stdio::null())
             .status();
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    {
+        // AppleScript display notification "<body>" with title "<title>"
+        let script = format!(
+            "display notification {} with title {}",
+            applescript_str(body),
+            applescript_str(title)
+        );
+        let _ = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(script)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // PowerShell + BurntToast if available; user has to install it.
+        // Falls back to a no-op when the module isn't present.
+        let ps = format!(
+            "Import-Module BurntToast -ErrorAction SilentlyContinue; \
+             New-BurntToastNotification -Text '{}','{}' -ErrorAction SilentlyContinue",
+            title.replace('\'', "''"),
+            body.replace('\'', "''"),
+        );
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &ps])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         let _ = (title, body);
     }
 }
 
+#[cfg(target_os = "macos")]
+fn applescript_str(s: &str) -> String {
+    // AppleScript string literal: double-quoted, backslash-escape both " and \.
+    let esc = s.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{esc}\"")
+}
+
 /// Translate a vim-style ex command (without the leading ":") into the
-/// equivalent slash command, then dispatch through `handle_slash`. Returns
-/// an error entry for unknown commands.
+/// equivalent slash command, then dispatch through `handle_slash`. A
+/// few vim-natives (`:cd`, `:pwd`, `:noh`, `:!CMD`, `:version`) are
+/// handled inline because they have no slash equivalent.
 fn execute_ex(state: &mut State, agent: &mut Agent, cmd: &str) {
     let cmd = cmd.trim();
     if cmd.is_empty() {
         return;
     }
-    match translate_ex(cmd) {
-        Ok(slash) => handle_slash(state, agent, &slash),
-        Err(msg) => state.push(Entry::Error(msg)),
+
+    // :!CMD  — shell out without a tool round-trip. Inheriting nothing
+    // here; subprocess gets stdin /dev/null so a runaway can't lock the
+    // TUI. Combined stdout/stderr piped back as an Info entry.
+    if let Some(rest) = cmd.strip_prefix('!') {
+        run_inline_shell(state, rest);
+        return;
+    }
+
+    let mut parts = cmd.splitn(2, char::is_whitespace);
+    let name = parts.next().unwrap_or("");
+    let arg = parts.next().unwrap_or("").trim();
+    match name {
+        "cd" => {
+            let target = if arg.is_empty() {
+                std::env::var("HOME").unwrap_or_else(|_| "/".to_string())
+            } else {
+                arg.to_string()
+            };
+            match std::env::set_current_dir(&target) {
+                Ok(()) => state.push(Entry::Info(format!("cd {target}"))),
+                Err(e) => state.push(Entry::Error(format!("cd {target}: {e}"))),
+            }
+        }
+        "pwd" => match std::env::current_dir() {
+            Ok(p) => state.push(Entry::Info(p.display().to_string())),
+            Err(e) => state.push(Entry::Error(format!("pwd: {e}"))),
+        },
+        "noh" | "nohlsearch" => {
+            state.selection = None;
+        }
+        "version" => {
+            state.push(Entry::Info(format!(
+                "τέλεια {} · ratatui · reqwest (rustls) · rusqlite (bundled)",
+                env!("CARGO_PKG_VERSION")
+            )));
+        }
+        "r" | "read" => {
+            if arg.is_empty() {
+                state.push(Entry::Error("usage: :read FILE".into()));
+            } else {
+                match std::fs::read_to_string(arg) {
+                    Ok(body) => state.push(Entry::Info(format!("{arg}:\n{body}"))),
+                    Err(e) => state.push(Entry::Error(format!("read {arg}: {e}"))),
+                }
+            }
+        }
+        _ => match translate_ex(cmd) {
+            Ok(slash) => handle_slash(state, agent, &slash),
+            Err(msg) => state.push(Entry::Error(msg)),
+        },
+    }
+}
+
+/// Run `cmd` via `/bin/sh -c` and push the combined stdout/stderr to
+/// the chat. Same 30s timeout the `bash` tool uses; stdin is muted so
+/// an interactive program can't lock the TUI.
+fn run_inline_shell(state: &mut State, cmd: &str) {
+    use std::process::{Command, Stdio};
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output();
+    match out {
+        Ok(o) => {
+            let mut body = String::from_utf8_lossy(&o.stdout).into_owned();
+            if !o.stderr.is_empty() {
+                if !body.is_empty() {
+                    body.push('\n');
+                }
+                body.push_str(&String::from_utf8_lossy(&o.stderr));
+            }
+            if !o.status.success() {
+                body.push_str(&format!("\n[exit {}]", o.status.code().unwrap_or(-1)));
+            }
+            let body = if body.is_empty() {
+                "(no output)".to_string()
+            } else {
+                body
+            };
+            state.push(Entry::Info(format!("$ {cmd}\n{body}")));
+        }
+        Err(e) => state.push(Entry::Error(format!("!{cmd}: {e}"))),
     }
 }
 
@@ -905,19 +1045,27 @@ fn translate_ex(cmd: &str) -> Result<String, String> {
     let name = parts.next().unwrap_or("");
     let arg = parts.next().unwrap_or("").trim();
     let translated = match name {
-        "q" | "quit" => "quit".to_string(),
-        "w" | "write" => format!("save {arg}"),
+        "q" | "quit" | "qa" | "qall" | "x" | "exit" => "quit".to_string(),
+        "w" | "write" | "wa" | "wall" => format!("save {arg}"),
         "wq" => format!("save {arg}"), // close-enough analogue: save, no quit
         "e" | "edit" | "l" | "load" => format!("load {arg}"),
         "d" | "bd" | "delete" => format!("delete {arg}"),
         "ls" | "list" => "list".to_string(),
         "model" => format!("model {arg}"),
         "help" | "h" => "help".to_string(),
-        "reset" => "reset".to_string(),
+        "reset" | "enew" | "new" => "reset".to_string(),
         "clear" => "clear".to_string(),
-        "show" | "info" => "show".to_string(),
+        "show" | "info" | "f" | "file" => "show".to_string(),
         "theme" | "colorscheme" | "colo" => format!("theme {arg}"),
         "notify" | "notifications" => format!("notify {arg}"),
+        "keys" => "keys".to_string(),
+        "key" => format!("key {arg}"),
+        "mcps" => "mcps".to_string(),
+        "lsps" => "lsps".to_string(),
+        "auto" => "auto".to_string(),
+        "build" | "ask" => "build".to_string(),
+        "plan" => "plan".to_string(),
+        "prompt" => format!("prompt {arg}"),
         other => return Err(format!("unknown ex command: :{other}")),
     };
     Ok(translated)
@@ -1105,20 +1253,35 @@ fn compute_menu(input: &str, aliases: &[String], models: &[String]) -> Option<Me
 /// only; short aliases like `q`/`w` stay valid input but aren't listed
 /// (they'd clutter the menu with ambiguous prefixes).
 const EX_COMMANDS: &[&str] = &[
+    "auto",
+    "build",
+    "cd",
     "clear",
     "colorscheme",
     "delete",
     "edit",
+    "exit",
+    "file",
     "help",
     "info",
+    "key",
+    "keys",
     "list",
     "load",
+    "lsps",
+    "mcps",
     "model",
+    "noh",
     "notify",
+    "plan",
+    "prompt",
+    "pwd",
     "quit",
+    "read",
     "reset",
     "show",
     "theme",
+    "version",
     "write",
 ];
 
@@ -1275,6 +1438,23 @@ fn recall_down(state: &mut State) {
 
 /// Ctrl+W: walk back from the cursor past any trailing whitespace, then past
 /// the word it sits in, and delete that span.
+/// Scroll the chat up by `n` rows and disengage bottom-following so
+/// streaming deltas don't yank the user back down mid-read.
+fn scroll_up(state: &mut State, n: u16) {
+    state.scroll = state.scroll.saturating_add(n);
+    state.follow_bottom = false;
+}
+
+/// Scroll the chat down by `n` rows. Re-engages bottom-following the
+/// instant the user reaches scroll == 0 so subsequent deltas auto-follow
+/// again — no manual `G` needed.
+fn scroll_down(state: &mut State, n: u16) {
+    state.scroll = state.scroll.saturating_sub(n);
+    if state.scroll == 0 {
+        state.follow_bottom = true;
+    }
+}
+
 fn delete_word_before_cursor(state: &mut State) {
     if state.input_cursor == 0 {
         return;
@@ -1728,6 +1908,11 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
 
 fn draw(f: &mut ratatui::Frame, state: &mut State) {
     let th = theme();
+    // Paint the entire frame with the active theme background first.
+    // Every other widget renders on top, so even spacer gaps and the
+    // status-bar tail show the theme colour instead of the terminal's
+    // default background bleeding through.
+    f.render_widget(Block::default().style(Style::default().bg(th.bg)), f.area());
     // Up to 6 menu items inline above the input. Includes 2 for the border.
     // Dropdown shows up to 10 entries at a time; longer lists (the full
     // /model catalogue, ~200+ entries) scroll inside the panel via
@@ -1798,29 +1983,75 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
     // like the chat is frozen on the previous frame.
     let visible = chunks[0].height.saturating_sub(2 + t_pad) as usize;
     let total = lines.len();
+    // When the user is scrolled up, compensate for any new lines added
+    // since the last frame so the visible window stays pinned to the
+    // same content. Without this, streaming deltas would slide the
+    // user's reading position downward with the growing transcript.
+    if !state.follow_bottom && total > state.last_total_lines {
+        let delta = (total - state.last_total_lines) as u16;
+        state.scroll = state.scroll.saturating_add(delta);
+    }
+    state.last_total_lines = total;
     let max_offset = total.saturating_sub(visible) as u16;
+    // Clamp scroll so it can't exceed what's representable in the
+    // transcript (e.g. after a /reset shrinks history).
+    if state.scroll > max_offset {
+        state.scroll = max_offset;
+        state.follow_bottom = state.scroll == 0;
+    }
     let offset = max_offset.saturating_sub(state.scroll);
     let log = Paragraph::new(lines)
+        .style(Style::default().bg(th.bg).fg(th.fg))
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(th.dim))
+                .border_style(Style::default().fg(th.dim).bg(th.bg))
+                .style(Style::default().bg(th.bg))
                 .padding(Padding::new(h_pad, h_pad, t_pad, 0))
                 .title(Line::from(vec![
                     Span::styled(
-                        " τέλεια ",
-                        Style::default().fg(th.purple).add_modifier(Modifier::BOLD),
+                        " λ ",
+                        Style::default()
+                            .fg(th.cyan)
+                            .bg(th.bg)
+                            .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled("@ ", Style::default().fg(th.dim)),
+                    Span::styled(
+                        "τέλεια ",
+                        Style::default()
+                            .fg(th.purple)
+                            .bg(th.bg)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled("@ ", Style::default().fg(th.dim).bg(th.bg)),
                     Span::styled(
                         format!("{} ", state.hostname),
-                        Style::default().fg(th.cyan).add_modifier(Modifier::ITALIC),
+                        Style::default()
+                            .fg(th.cyan)
+                            .bg(th.bg)
+                            .add_modifier(Modifier::ITALIC),
                     ),
                 ])),
         )
         .wrap(Wrap { trim: false })
         .scroll((offset, 0));
     f.render_widget(log, chunks[0]);
+
+    // Scrollbar on the right edge of the chat block — only when there's
+    // overflow. Track replaces the existing right-border `│`; thumb sits
+    // proportionally to `offset` over the total line count. Auto-shrinks
+    // / hides when content fits in view.
+    if total > visible && chunks[0].width >= 2 && chunks[0].height >= 2 {
+        let mut sb_state = ScrollbarState::new(total)
+            .viewport_content_length(visible)
+            .position(offset as usize);
+        let sb = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .track_style(Style::default().fg(th.dim))
+            .thumb_style(Style::default().fg(th.purple));
+        f.render_stateful_widget(sb, chunks[0], &mut sb_state);
+    }
 
     // Render the menu (if any) directly above the input.
     if let Some(menu) = &state.menu {
@@ -1841,13 +2072,18 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
             .map(|s| ListItem::new(s.clone()))
             .collect();
         let list = List::new(items)
+            .style(Style::default().bg(th.bg).fg(th.fg))
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(th.dim))
+                    .border_style(Style::default().fg(th.dim).bg(th.bg))
+                    .style(Style::default().bg(th.bg))
                     .title(Span::styled(
                         title_text,
-                        Style::default().fg(th.blue).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(th.blue)
+                            .bg(th.bg)
+                            .add_modifier(Modifier::BOLD),
                     )),
             )
             .highlight_style(
@@ -1913,15 +2149,21 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
                 Span::styled(mask, Style::default().fg(th.fg)),
             ]),
         ];
-        let widget = Paragraph::new(lines).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(th.yellow))
-                .title(Span::styled(
-                    " api key ",
-                    Style::default().fg(th.yellow).add_modifier(Modifier::BOLD),
-                )),
-        );
+        let widget = Paragraph::new(lines)
+            .style(Style::default().bg(th.bg).fg(th.fg))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(th.yellow).bg(th.bg))
+                    .style(Style::default().bg(th.bg))
+                    .title(Span::styled(
+                        " api key ",
+                        Style::default()
+                            .fg(th.yellow)
+                            .bg(th.bg)
+                            .add_modifier(Modifier::BOLD),
+                    )),
+            );
         f.render_widget(widget, chunks[3]);
         // Cursor at end of the masked input.
         let cursor_x = inside.x + 1 + 2 + ke.buf.chars().count() as u16;
@@ -1966,15 +2208,21 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
                 ),
             ]),
         ];
-        let widget = Paragraph::new(lines).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(th.yellow))
-                .title(Span::styled(
-                    " permission ",
-                    Style::default().fg(th.yellow).add_modifier(Modifier::BOLD),
-                )),
-        );
+        let widget = Paragraph::new(lines)
+            .style(Style::default().bg(th.bg).fg(th.fg))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(th.yellow).bg(th.bg))
+                    .style(Style::default().bg(th.bg))
+                    .title(Span::styled(
+                        " permission ",
+                        Style::default()
+                            .fg(th.yellow)
+                            .bg(th.bg)
+                            .add_modifier(Modifier::BOLD),
+                    )),
+            );
         f.render_widget(widget, chunks[3]);
         // No cursor while waiting for approval — the prompt isn't editable.
     } else if input_content_rows == 1 {
@@ -2006,11 +2254,14 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
                 }
             }
         }
-        let widget = Paragraph::new(Line::from(spans)).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(prompt_color)),
-        );
+        let widget = Paragraph::new(Line::from(spans))
+            .style(Style::default().bg(th.bg).fg(th.fg))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(prompt_color).bg(th.bg))
+                    .style(Style::default().bg(th.bg)),
+            );
         f.render_widget(widget, chunks[3]);
         let cursor_x = inside.x + 1 + 2 + (cursor_chars - start_char) as u16;
         let cursor_y = inside.y + 1;
@@ -2033,11 +2284,14 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
                 lines.push(Line::from(Span::styled(l.clone(), body_style)));
             }
         }
-        let widget = Paragraph::new(lines).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(prompt_color)),
-        );
+        let widget = Paragraph::new(lines)
+            .style(Style::default().bg(th.bg).fg(th.fg))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(prompt_color).bg(th.bg))
+                    .style(Style::default().bg(th.bg)),
+            );
         f.render_widget(widget, chunks[3]);
 
         let (cursor_col, cursor_row) = cursor_visual_pos(buf, buf_cursor, inner_w, prefix_w);
@@ -2139,7 +2393,10 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
         mode_hints(state.mode)
     };
     status_spans.push(Span::styled(hint, Style::default().fg(th.dim)));
-    f.render_widget(Paragraph::new(Line::from(status_spans)), chunks[5]);
+    f.render_widget(
+        Paragraph::new(Line::from(status_spans)).style(Style::default().bg(th.bg).fg(th.fg)),
+        chunks[5],
+    );
 
     // Drag-selection highlight overlay. Applied last so it paints on top of
     // every widget; clamped to the log area's inner rect so it never bleeds
@@ -2277,12 +2534,8 @@ fn handle_mouse<B: ratatui::backend::Backend>(
     m: MouseEvent,
 ) {
     match m.kind {
-        MouseEventKind::ScrollUp => {
-            state.scroll = state.scroll.saturating_add(3);
-        }
-        MouseEventKind::ScrollDown => {
-            state.scroll = state.scroll.saturating_sub(3);
-        }
+        MouseEventKind::ScrollUp => scroll_up(state, 3),
+        MouseEventKind::ScrollDown => scroll_down(state, 3),
         MouseEventKind::Down(MouseButton::Left) => {
             // Any new click clears the previous selection's highlight; a
             // click inside the chat area also begins a fresh selection.
@@ -2534,85 +2787,309 @@ fn username() -> String {
 /// between th.purple and th.blue per character, with a blinking red Greek
 /// period below — same motif as the SVG banner in the README. Centred
 /// horizontally to the available `width`.
+/// Probe `/etc/os-release` (Linux) and the build target (macOS / BSD /
+/// Windows) to pick a distro identity for the welcome banner. Returns
+/// one of the keys understood by [`distro_art`]; falls back to
+/// `"linux"` or `"unknown"` on detection failure.
+fn detect_distro() -> &'static str {
+    if cfg!(target_os = "macos") {
+        return "macos";
+    }
+    if cfg!(target_os = "windows") {
+        return "windows";
+    }
+    if cfg!(target_os = "freebsd") {
+        return "freebsd";
+    }
+    if let Ok(content) = std::fs::read_to_string("/etc/os-release") {
+        for line in content.lines() {
+            if let Some(id) = line.strip_prefix("ID=") {
+                let id = id.trim().trim_matches('"').to_lowercase();
+                return match id.as_str() {
+                    "arch" | "manjaro" | "endeavouros" | "garuda" | "artix" => "arch",
+                    "ubuntu" | "linuxmint" | "pop" | "elementary" | "zorin" => "ubuntu",
+                    "debian" | "raspbian" => "debian",
+                    "fedora" | "rhel" | "centos" | "rocky" | "almalinux" => "fedora",
+                    "alpine" | "postmarketos" => "alpine",
+                    "nixos" => "nixos",
+                    "gentoo" => "gentoo",
+                    "void" => "void",
+                    "opensuse" | "opensuse-tumbleweed" | "opensuse-leap" | "suse" => "suse",
+                    _ => "linux",
+                };
+            }
+        }
+        return "linux";
+    }
+    "unknown"
+}
+
+/// Pretty display name for the banner — capitalised, branded forms
+/// (NixOS, openSUSE) where appropriate.
+fn distro_display_name(id: &str) -> &'static str {
+    match id {
+        "arch" => "Arch Linux",
+        "ubuntu" => "Ubuntu",
+        "debian" => "Debian",
+        "fedora" => "Fedora",
+        "alpine" => "Alpine Linux",
+        "nixos" => "NixOS",
+        "gentoo" => "Gentoo",
+        "void" => "Void Linux",
+        "suse" => "openSUSE",
+        "linux" => "Linux",
+        "macos" => "macOS",
+        "windows" => "Windows",
+        "freebsd" => "FreeBSD",
+        _ => "Terminal",
+    }
+}
+
+/// Block-character pixel art for each known distro. Width-normalised
+/// (all rows the same `chars().count()`) so the centring math stays
+/// simple. Each panel is sized to fit comfortably in a 120-col TUI.
+fn distro_art(id: &str) -> &'static [&'static str] {
+    match id {
+        "arch" => &[
+            "        ▟▙        ",
+            "       ▟██▙       ",
+            "      ▟████▙      ",
+            "     ▟██▟▙██▙     ",
+            "    ▟███  ███▙    ",
+            "   ▟████  ████▙   ",
+            "  ▟█████  █████▙  ",
+            " ▟██████  ██████▙ ",
+            "▟████████████████▙",
+        ],
+        "ubuntu" => &[
+            "                  ",
+            "       ▟██▙       ",
+            "      ███████     ",
+            "     ██     ●●    ",
+            "    ●●  ██████    ",
+            "     ██     ●●    ",
+            "      ███████     ",
+            "       ▜██▛       ",
+            "                  ",
+        ],
+        "debian" => &[
+            "                  ",
+            "     ▄▄▄▄▄▄▄      ",
+            "   ▄█████████▄    ",
+            "  ███▀▀   ▀▀███   ",
+            "  ██▀         █   ",
+            "  ██   ▄▄▄▄▄  █   ",
+            "   ██  ▀▀▀▀█▄     ",
+            "    ▀▀▀▀▀▀▀       ",
+            "                  ",
+        ],
+        "fedora" => &[
+            "      ▄▄▄▄▄▄      ",
+            "    ▄██████████   ",
+            "   ██▀▀▀▀▀▀▀██▀   ",
+            "  ██   ██████     ",
+            "  ██   ██         ",
+            "  ██   ██████     ",
+            "  ██   ██         ",
+            "   ██▄▄▄▄▄▄▄▄     ",
+            "    ▀▀▀▀▀▀▀▀      ",
+        ],
+        "alpine" => &[
+            "                  ",
+            "        ▲         ",
+            "       ▲▲▲        ",
+            "      ▲   ▲       ",
+            "     ▲ ▲▲▲ ▲      ",
+            "    ▲ ▲   ▲ ▲     ",
+            "   ▲           ▲  ",
+            "  ▲▲▲▲▲▲▲▲▲▲▲▲▲▲  ",
+            "                  ",
+        ],
+        "nixos" => &[
+            "    ▟▙        ▟▙  ",
+            "    ██▙      ▟██  ",
+            "     ██▙    ▟██   ",
+            "  ▟▙▟███▙  ▟███▙▟▙",
+            " ███████████████  ",
+            "  ▟▙▜███▛  ▜███▛▟▙",
+            "     ██▛    ▜██   ",
+            "    ██▛      ▜██  ",
+            "    ▜▛        ▜▛  ",
+        ],
+        "gentoo" => &[
+            "    ▄▄▄▄▄         ",
+            "   ████████▄      ",
+            "    ████████▄     ",
+            "       ▀█████▄    ",
+            "      ▄█████▀     ",
+            "     ████▀        ",
+            "    ████          ",
+            "    ▀▀▀           ",
+            "                  ",
+        ],
+        "void" => &[
+            "      ▄▄▄▄▄       ",
+            "    ▄███████▄  ▄  ",
+            "   ██▀  ▄  ▀██ █  ",
+            "  ██   ███   ██   ",
+            "  ██   ▀▀▀   ██   ",
+            "   ██▄  ▀  ▄██    ",
+            "  ▄ ▀███████▀     ",
+            "  ▀   ▀▀▀▀▀       ",
+            "                  ",
+        ],
+        "suse" => &[
+            "                  ",
+            "     ▄▄▄▄▄▄▄▄     ",
+            "    █  ▄▄▄▄  █    ",
+            "    █  █  █  █    ",
+            "    █  █  █  █    ",
+            "    █  ▀▀▀▀  █    ",
+            "     ▀▀▀▀▀▀▀▀     ",
+            "         ▀▀       ",
+            "                  ",
+        ],
+        "macos" => &[
+            "         ▟▙       ",
+            "         ▜▛       ",
+            "      ▄▄▄▄▄▄▄     ",
+            "    ▄██████████   ",
+            "   ███████████▀   ",
+            "   ██████████     ",
+            "    ████████      ",
+            "     ▀████▀       ",
+            "      ▀▀▀▀        ",
+        ],
+        "windows" => &[
+            "                  ",
+            "   ████▌ ▐████    ",
+            "   ████▌ ▐████    ",
+            "   ████▌ ▐████    ",
+            "    ▀▀▀▀ ▀▀▀▀     ",
+            "   ████▌ ▐████    ",
+            "   ████▌ ▐████    ",
+            "   ████▌ ▐████    ",
+            "                  ",
+        ],
+        "freebsd" => &[
+            "      ▄▄▄▄▄▄      ",
+            "    ▄████████▄    ",
+            "   ██▀  ▄▄  ▀██   ",
+            "   ██  ▐██▌  ██   ",
+            "   ██   ▀▀   ██   ",
+            "    ▀█▄▄▄▄▄▄█▀    ",
+            "      ▀████▀      ",
+            "       ▀▀▀▀       ",
+            "                  ",
+        ],
+        // "linux" and unknown fall back to a generic prompt mark.
+        _ => &[
+            "                  ",
+            "                  ",
+            "    ▟▙            ",
+            "    ▜▛  ████      ",
+            "    ▟▙  ▀▀▀▀      ",
+            "    ▜▛            ",
+            "                  ",
+            "                  ",
+            "                  ",
+        ],
+    }
+}
+
 fn welcome_banner(width: u16, frame: usize) -> Vec<Line<'static>> {
     let th = theme();
-    // ΤΕΛΕΙΑ. Flatter 5-row block style — no shadow "╝" chars, just
-    // solid █ and spaces — for a sharper "pixel-poster" feel. Λ is an
-    // A without the crossbar; Ι is a single column.
-    const LOGO: &[&str] = &[
-        "███████ ███████  █████  ███████ █  █████ ",
-        "   █       █    █     █    █    █  █   █ ",
-        "   █    █████   █     █ █████   █  ██████",
-        "   █       █    █     █    █    █  █   █ ",
-        "   █    ██████  █     █ ██████  █  █   █ ",
-    ];
-    let logo_width = LOGO[0].chars().count();
-    let logo_pad = (width as usize).saturating_sub(logo_width) / 2;
-    let logo_indent = " ".repeat(logo_pad);
-
-    // Typewriter reveal: each event-loop tick uncovers another fraction of
-    // the logo width. ≈ 50 frames × 50 ms = 2.5 s to fully type out. After
-    // it completes the existing shimmer + dot/tagline take over.
-    const REVEAL_FRAMES: usize = 50;
-    let revealed = if frame >= REVEAL_FRAMES {
-        logo_width
-    } else {
-        frame * logo_width / REVEAL_FRAMES
-    };
-    let done_revealing = revealed >= logo_width;
+    // Pick the pixel-art panel by detected distro. Each entry in the
+    // map is a 9-row × 18-col Unicode-block silhouette.
+    let distro = detect_distro();
+    let art = distro_art(distro);
+    let art_width = art[0].chars().count();
+    let art_pad = (width as usize).saturating_sub(art_width) / 2;
+    let art_indent = " ".repeat(art_pad);
 
     let mut out = Vec::new();
     out.push(Line::from(""));
     out.push(Line::from(""));
 
-    for row in LOGO {
-        let mut spans: Vec<Span<'static>> = vec![Span::raw(logo_indent.clone())];
-        for (i, c) in row.chars().enumerate().take(revealed) {
-            // 4-phase colour sweep: purple → blue → cyan → blue → purple.
-            // Bands are 2 cells wide and the whole pattern slides one
-            // band every 3 frames, so it reads as a wave moving L→R.
-            let style = if c == ' ' {
-                // Don't waste a styled span on whitespace.
-                Style::default()
-            } else {
-                let phase = (i + frame / 3) % 8;
-                let color = match phase {
-                    0 | 1 => th.purple,
-                    2 | 3 => th.blue,
-                    4 | 5 => th.cyan,
-                    _ => th.blue,
-                };
-                Style::default().fg(color).add_modifier(Modifier::BOLD)
+    // Per-row gradient: a slow vertical sweep purple→blue→cyan
+    // (top→bottom) plus a horizontal phase nudge that slides one cell
+    // every few frames so the gradient reads as a slow shimmer.
+    for (row_idx, row) in art.iter().enumerate() {
+        let mut spans: Vec<Span<'static>> = vec![Span::raw(art_indent.clone())];
+        for (col_idx, ch) in row.chars().enumerate() {
+            if ch == ' ' {
+                spans.push(Span::raw(" "));
+                continue;
+            }
+            let phase = (col_idx + row_idx * 2 + frame / 4) % 12;
+            let color = match phase {
+                0..=3 => th.purple,
+                4..=7 => th.blue,
+                _ => th.cyan,
             };
-            spans.push(Span::styled(c.to_string(), style));
-        }
-        // A leading caret rides the reveal edge so the type-on reads as
-        // an active cursor sweeping across.
-        if !done_revealing {
             spans.push(Span::styled(
-                "▌",
-                Style::default().fg(th.red).add_modifier(Modifier::BOLD),
+                ch.to_string(),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
             ));
         }
         out.push(Line::from(spans));
     }
 
-    if !done_revealing {
-        // Suppress the dot/tagline/hint until the reveal finishes — keeps
-        // the bottom of the banner clean during the type-on.
-        return out;
-    }
-
-    // Greek period (●) blinks under the end of the logo at ~2 Hz.
+    // Red "full stop" cursor block sitting just below the mountain
+    // (matches the SVG logo). Blinks at ~1 Hz.
     let dot_visible = (frame / 10).is_multiple_of(2);
-    let dot_col = logo_pad + logo_width.saturating_sub(2);
-    if dot_visible && dot_col < width as usize {
+    let dot_pad = art_pad + art_width / 2;
+    if dot_visible {
         out.push(Line::from(vec![
-            Span::raw(" ".repeat(dot_col)),
-            Span::styled("●", Style::default().fg(th.red)),
+            Span::raw(" ".repeat(dot_pad)),
+            Span::styled(
+                "█",
+                Style::default().fg(th.red).add_modifier(Modifier::BOLD),
+            ),
         ]));
     } else {
         out.push(Line::from(""));
+    }
+
+    out.push(Line::from(""));
+
+    // Distro name beneath the art.
+    let distro_name = distro_display_name(distro);
+    let name_pad = (width as usize).saturating_sub(distro_name.chars().count()) / 2;
+    out.push(Line::from(vec![
+        Span::raw(" ".repeat(name_pad)),
+        Span::styled(
+            distro_name.to_string(),
+            Style::default().fg(th.purple).add_modifier(Modifier::BOLD),
+        ),
+    ]));
+
+    out.push(Line::from(""));
+
+    // Pixel-art λ — the telia brand mark, painted in the Tokyo Night
+    // gradient (cyan → blue → purple top-down). Sits between the
+    // distro art and the wordmark to tie the two together.
+    const LAMBDA: &[&str] = &[
+        "  ▟▙    ",
+        "  ▜█▙   ",
+        "   ▜█▙  ",
+        "  ▟████▙",
+        " ▟██▛▜██",
+        "▟██▛  ▜█",
+    ];
+    let lambda_w = LAMBDA[0].chars().count();
+    let lambda_pad = (width as usize).saturating_sub(lambda_w) / 2;
+    let lambda_indent = " ".repeat(lambda_pad);
+    let lambda_colors = [th.cyan, th.cyan, th.blue, th.blue, th.purple, th.purple];
+    for (i, row) in LAMBDA.iter().enumerate() {
+        let color = lambda_colors[i.min(lambda_colors.len() - 1)];
+        out.push(Line::from(vec![
+            Span::raw(lambda_indent.clone()),
+            Span::styled(
+                (*row).to_string(),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ),
+        ]));
     }
 
     out.push(Line::from(""));
@@ -2622,11 +3099,12 @@ fn welcome_banner(width: u16, frame: usize) -> Vec<Line<'static>> {
         Line::from(Span::styled(format!("{}{s}", " ".repeat(pad)), style))
     };
     out.push(center(
-        "the distilled coding agent",
+        "a minimal TUI coding agent",
         Style::default().fg(th.cyan).add_modifier(Modifier::ITALIC),
     ));
+    // Watermark.
     out.push(center(
-        "τέλεια · full stop",
+        "powered by λ τέλεια",
         Style::default().fg(th.dim).add_modifier(Modifier::ITALIC),
     ));
     out.push(Line::from(""));
