@@ -200,6 +200,13 @@ crates/
 
 Built on `ratatui` + `crossterm`, `reqwest` (rustls), `rusqlite` (bundled), `syntect` (no C deps), `arboard`, `rpassword`.
 
+## Rice
+
+Hyprland / niri starter configs for floating τέλεια in a Tokyo
+Night-palette terminal with matching borders, rounded corners, and a
+purple→cyan accent gradient: [`docs/RICE.md`](docs/RICE.md). Foot /
+alacritty / kitty palette + JetBrains Mono Nerd Font included.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

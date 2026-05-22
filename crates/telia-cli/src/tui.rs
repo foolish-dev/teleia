@@ -2047,16 +2047,24 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
     // and new streamed deltas can land behind the padding strip, looking
     // like the chat is frozen on the previous frame.
     let visible = chunks[0].height.saturating_sub(2 + t_pad) as usize;
-    // Count *visual* rows after wrapping, not raw logical lines —
-    // otherwise `max_offset` under-counts and the chat stops scrolling
-    // before the latest content reaches the bottom of the view. We
-    // build a measurement Paragraph (same wrap semantics, no block /
-    // padding so ratatui's word-wrapper sees the actual content width
-    // it'll render at) and ask it for the visual row count.
+    // Count *visual* rows after wrapping when the chat looks like it
+    // might overflow; otherwise the cheap `lines.len()` is exact
+    // enough (no wrap → no max_offset). `Paragraph::line_count` runs
+    // ratatui's WordWrapper across every line, which is O(N) per
+    // frame for long transcripts — skipping it when content trivially
+    // fits keeps short chats / startup banners cheap. The factor of 2
+    // gates the upgrade: even if every logical line wrapped to 2
+    // visual rows, we'd still fit and the exact count wouldn't move
+    // max_offset off 0.
     let wrap_width = chunks[0].width.saturating_sub(2 + h_pad * 2);
-    let total = Paragraph::new(lines.clone())
-        .wrap(Wrap { trim: false })
-        .line_count(wrap_width);
+    let raw_lines = lines.len();
+    let total = if raw_lines * 2 <= visible {
+        raw_lines
+    } else {
+        Paragraph::new(lines.clone())
+            .wrap(Wrap { trim: false })
+            .line_count(wrap_width)
+    };
     // Belt-and-braces: when bottom-following, `scroll` is meant to be
     // 0. apply() and push() set it, but a stale value from an earlier
     // state transition shouldn't strand the user away from the latest
@@ -3089,13 +3097,49 @@ fn distro_art(id: &str) -> &'static [&'static str] {
     }
 }
 
+/// Narrow-terminal fallback for the welcome banner: no pixel art,
+/// no λ block, just a compact text-only stack that fits inside
+/// whatever width the chat block has.
+fn compact_banner(distro: &str, th: &Theme, width: u16) -> Vec<Line<'static>> {
+    let center = |s: &str, style: Style| -> Line<'static> {
+        let pad = (width as usize).saturating_sub(s.chars().count()) / 2;
+        Line::from(Span::styled(format!("{}{s}", " ".repeat(pad)), style))
+    };
+    let mut out = Vec::new();
+    out.push(Line::from(""));
+    out.push(center(
+        &format!("λ τέλεια · {}", distro_display_name(distro)),
+        Style::default().fg(th.purple).add_modifier(Modifier::BOLD),
+    ));
+    out.push(center(
+        "a minimal TUI coding agent",
+        Style::default().fg(th.cyan).add_modifier(Modifier::ITALIC),
+    ));
+    out.push(center(
+        "powered by λ τέλεια",
+        Style::default().fg(th.dim).add_modifier(Modifier::ITALIC),
+    ));
+    out.push(Line::from(""));
+    out.push(center(
+        "Type to start · /help · esc normal",
+        Style::default().fg(th.dim),
+    ));
+    out
+}
+
 fn welcome_banner(width: u16, frame: usize) -> Vec<Line<'static>> {
     let th = theme();
-    // Pick the pixel-art panel by detected distro. Each entry in the
-    // map is a 9-row × 18-col Unicode-block silhouette.
     let distro = detect_distro();
     let art = distro_art(distro);
     let art_width = art[0].chars().count();
+
+    // Below this threshold the pixel-art panels (18 cols + indent)
+    // can't fit — drop the art entirely and emit a compact text-only
+    // banner.
+    if (width as usize) < art_width + 4 {
+        return compact_banner(distro, th, width);
+    }
+
     let art_pad = (width as usize).saturating_sub(art_width) / 2;
     let art_indent = " ".repeat(art_pad);
 
@@ -3230,21 +3274,45 @@ fn highlight_palette() -> highlight::Palette {
 }
 
 fn render_assistant_lines(text: &str) -> Vec<Line<'static>> {
+    let th = theme();
     let mut out = Vec::new();
     let mut in_code = false;
     let mut code_lang = String::new();
     let mut code_buf = String::new();
 
+    // Indent applied to every highlighted code line so blocks visually
+    // float off the left margin of the surrounding prose.
+    const CODE_INDENT: &str = "  ";
+
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("```") {
             if in_code {
-                for hl in highlight::highlight(&code_buf, &code_lang, "", highlight_palette()) {
+                // Closing fence: flush the buffer with a leading dim
+                // language label (when the open fence supplied one)
+                // and a trailing blank row so prose after the block
+                // gets a breath of space.
+                if !code_lang.is_empty() {
+                    out.push(Line::from(Span::styled(
+                        format!("{CODE_INDENT} {code_lang}"),
+                        Style::default().fg(th.dim).add_modifier(Modifier::ITALIC),
+                    )));
+                }
+                for hl in highlight::highlight(
+                    code_buf.trim_end_matches('\n'),
+                    &code_lang,
+                    CODE_INDENT,
+                    highlight_palette(),
+                ) {
                     out.push(hl);
                 }
+                out.push(Line::from(""));
                 code_buf.clear();
                 code_lang.clear();
                 in_code = false;
             } else {
+                // Opening fence: blank row before the block so it
+                // doesn't crash into the preceding prose line.
+                out.push(Line::from(""));
                 code_lang = rest.trim().to_string();
                 in_code = true;
             }
@@ -3254,15 +3322,27 @@ fn render_assistant_lines(text: &str) -> Vec<Line<'static>> {
         } else {
             out.push(Line::from(Span::styled(
                 line.to_string(),
-                Style::default().fg(theme().fg),
+                Style::default().fg(th.fg),
             )));
         }
     }
 
-    // If the message ended mid-fence (mid-stream), flush what we have so the
-    // user sees the partial code rather than nothing.
+    // If the message ended mid-fence (mid-stream), flush what we have
+    // so the user sees the partial code rather than nothing. No
+    // trailing blank since more content is coming.
     if in_code && !code_buf.is_empty() {
-        for hl in highlight::highlight(&code_buf, &code_lang, "", highlight_palette()) {
+        if !code_lang.is_empty() {
+            out.push(Line::from(Span::styled(
+                format!("{CODE_INDENT} {code_lang}"),
+                Style::default().fg(th.dim).add_modifier(Modifier::ITALIC),
+            )));
+        }
+        for hl in highlight::highlight(
+            code_buf.trim_end_matches('\n'),
+            &code_lang,
+            CODE_INDENT,
+            highlight_palette(),
+        ) {
             out.push(hl);
         }
     }
@@ -3416,24 +3496,26 @@ mod tests {
 
     #[test]
     fn fence_markers_are_stripped() {
-        // The ``` lines are consumed; only the code content survives.
+        // ```rust opens; the fence markers themselves don't survive.
+        // What we get: blank before · lang label · 1 code line · blank after.
         let lines = render_assistant_lines("```rust\nfn x() {}\n```");
-        assert_eq!(lines.len(), 1);
+        assert_eq!(lines.len(), 4);
     }
 
     #[test]
     fn prose_and_code_alternate() {
+        // prose · blank-before · label · code · blank-after · prose.
         let lines = render_assistant_lines("before\n```rust\ncode\n```\nafter");
-        assert_eq!(lines.len(), 3);
+        assert_eq!(lines.len(), 6);
     }
 
     #[test]
     fn unclosed_fence_still_flushes() {
-        // Mid-stream: the assistant hasn't emitted the closing ``` yet, so
-        // we still render what we have rather than dropping the code on the
-        // floor.
+        // Mid-stream: the assistant hasn't emitted the closing ```
+        // yet. We open the block (blank-before · label) and flush
+        // what we have — no trailing blank since more is coming.
         let lines = render_assistant_lines("```rust\nfn x() {}\n");
-        assert_eq!(lines.len(), 1);
+        assert_eq!(lines.len(), 3);
     }
 
     #[test]
@@ -3443,10 +3525,10 @@ mod tests {
 
     #[test]
     fn unlabeled_fence_falls_back_to_plain() {
-        // ``` without a language token should still be highlighted (as
-        // plain text) and the fence markers removed.
+        // ``` without a language token: blank-before · code · blank-after
+        // (no label row because the language is empty).
         let lines = render_assistant_lines("```\nsome code\n```");
-        assert_eq!(lines.len(), 1);
+        assert_eq!(lines.len(), 3);
     }
 
     fn state_with(input: &str, cursor: usize) -> State {
