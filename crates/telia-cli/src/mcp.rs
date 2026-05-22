@@ -48,14 +48,16 @@ pub struct McpClient {
 impl McpClient {
     /// Spawn the server, do the JSON-RPC handshake, and return a
     /// client ready for `list_tools` / `call_tool`. The server's
-    /// stderr is left attached to telia's stderr so any startup errors
-    /// surface in the user's terminal.
+    /// stderr is discarded so npx install spam and runtime warnings
+    /// don't paint over the live TUI; spawn / handshake failures still
+    /// surface via the `Result` and the boot-time warning in
+    /// [`McpRegistry::spawn_all`].
     pub async fn spawn(name: &str, entry: &McpEntry) -> Result<Self> {
         let mut cmd = Command::new(&entry.command);
         cmd.args(&entry.args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::null())
             .kill_on_drop(true);
         for (k, v) in &entry.env {
             cmd.env(k, v);
@@ -179,6 +181,15 @@ impl McpClient {
         Ok(flatten_content(&result))
     }
 
+    /// MCP `resources/read`. Returns the resource body as text — for
+    /// binary blobs we drop a `[binary resource <uri>]` placeholder so
+    /// the agent at least sees they exist.
+    pub async fn read_resource(&mut self, uri: &str) -> Result<String> {
+        let params = json!({ "uri": uri });
+        let result = self.request("resources/read", params).await?;
+        Ok(flatten_resource_contents(&result))
+    }
+
     async fn request(&mut self, method: &str, params: Value) -> Result<Value> {
         let id = self.next_id;
         self.next_id += 1;
@@ -263,9 +274,37 @@ fn flatten_content(result: &Value) -> String {
     parts.join("\n\n")
 }
 
+/// Flatten an MCP `resources/read` result's `contents` array into a
+/// plain string. Text resources concatenate; binary blobs collapse to a
+/// `[binary resource <uri>]` marker.
+fn flatten_resource_contents(result: &Value) -> String {
+    let Some(items) = result.get("contents").and_then(Value::as_array) else {
+        return result.to_string();
+    };
+    let mut parts: Vec<String> = Vec::with_capacity(items.len());
+    for item in items {
+        if let Some(t) = item.get("text").and_then(Value::as_str) {
+            parts.push(t.to_string());
+        } else if item.get("blob").is_some() {
+            let uri = item.get("uri").and_then(Value::as_str).unwrap_or("?");
+            parts.push(format!("[binary resource {uri}]"));
+        }
+    }
+    if parts.is_empty() {
+        result.to_string()
+    } else {
+        parts.join("\n\n")
+    }
+}
+
+/// Synthetic tool name surfaced by [`McpRegistry`] when at least one
+/// server advertised resources via `resources/list`.
+pub const READ_RESOURCE_TOOL: &str = "mcp_read_resource";
+
 /// Wraps a set of [`McpClient`]s and routes each tool call to the
 /// server that exposes that tool. Names must be unique across servers
-/// (later registrations shadow earlier ones, with a stderr warning).
+/// (later registrations shadow earlier ones; the dup is recorded in
+/// `warnings`).
 pub struct McpRegistry {
     clients: Vec<McpClient>,
     /// tool name → index into `clients`
@@ -274,6 +313,10 @@ pub struct McpRegistry {
     tools: Vec<ToolDef>,
     /// Resources advertised by each server, parallel to `clients`.
     resources: Vec<Vec<McpResource>>,
+    /// Boot-time warnings (spawn failures, shadowed tool names).
+    /// Surfaced via the `/mcps` panel instead of stderr so loading
+    /// stays silent at the terminal level.
+    warnings: Vec<String>,
 }
 
 impl McpRegistry {
@@ -283,22 +326,33 @@ impl McpRegistry {
             index: HashMap::new(),
             tools: Vec::new(),
             resources: Vec::new(),
+            warnings: Vec::new(),
         }
     }
 
     /// Spawn every configured MCP server, list their tools, and merge
-    /// them into the registry. Failures are surfaced as stderr lines
-    /// but don't abort startup — telia keeps booting with whatever
-    /// servers did come up.
-    pub async fn spawn_all<'a, I>(entries: I) -> Self
+    /// them into the registry. Failures don't abort startup — telia
+    /// keeps booting with whatever servers did come up, and the error
+    /// is stashed in `warnings()` for the `/mcps` panel.
+    ///
+    /// `on_step` is invoked once per entry with `(name, index, total)`
+    /// (1-based index) before that entry's spawn begins, so the boot
+    /// splash can report which server is currently being contacted.
+    pub async fn spawn_all<'a, I, F>(entries: I, mut on_step: F) -> Self
     where
         I: IntoIterator<Item = (&'a String, &'a McpEntry)>,
+        F: FnMut(&str, usize, usize),
     {
+        let entries: Vec<(&'a String, &'a McpEntry)> = entries.into_iter().collect();
+        let total = entries.len();
         let mut reg = Self::new();
-        for (name, entry) in entries {
+        for (i, (name, entry)) in entries.into_iter().enumerate() {
+            on_step(name, i + 1, total);
             match Self::spawn_one(name, entry).await {
                 Ok((client, tools, resources)) => reg.add(client, tools, resources),
-                Err(e) => eprintln!("warning: MCP `{name}` failed to start: {e:#}"),
+                Err(e) => reg
+                    .warnings
+                    .push(format!("MCP `{name}` failed to start: {e:#}")),
             }
         }
         reg
@@ -322,14 +376,20 @@ impl McpRegistry {
         for tool in tools {
             let tool_name = tool.function.name.clone();
             if self.index.contains_key(&tool_name) {
-                eprintln!(
-                    "warning: MCP tool `{tool_name}` already registered; shadowing earlier server"
-                );
+                self.warnings.push(format!(
+                    "MCP tool `{tool_name}` already registered; shadowing earlier server"
+                ));
             }
             self.index.insert(tool_name, idx);
             self.tools.push(tool);
         }
         self.resources.push(resources);
+    }
+
+    /// Boot-time warnings collected by `spawn_all` (spawn failures,
+    /// shadowed tool names). Empty on a clean boot.
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
     }
 
     pub fn tool_count(&self) -> usize {
@@ -361,20 +421,128 @@ impl McpRegistry {
     }
 }
 
+impl McpRegistry {
+    /// Build the synthetic `mcp_read_resource` tool def, or `None` if
+    /// no server advertised any resources. The description embeds the
+    /// full URI list so the model can pick one without a separate
+    /// listing call.
+    fn read_resource_def(&self) -> Option<ToolDef> {
+        let uris: Vec<&str> = self
+            .resources
+            .iter()
+            .flat_map(|rs| rs.iter().map(|r| r.uri.as_str()))
+            .collect();
+        if uris.is_empty() {
+            return None;
+        }
+        let description = format!(
+            "Read an MCP resource by URI. Available URIs: {}",
+            uris.join(", ")
+        );
+        Some(ToolDef::new(
+            READ_RESOURCE_TOOL,
+            description,
+            json!({
+                "type": "object",
+                "properties": {
+                    "uri": {
+                        "type": "string",
+                        "description": "URI of the resource to read (must be one of the advertised URIs)"
+                    }
+                },
+                "required": ["uri"]
+            }),
+        ))
+    }
+}
+
 impl ToolRouter for McpRegistry {
     fn definitions(&self) -> Vec<ToolDef> {
-        self.tools.clone()
+        let mut defs = self.tools.clone();
+        if let Some(d) = self.read_resource_def() {
+            defs.push(d);
+        }
+        defs
     }
     fn handles(&self, name: &str) -> bool {
+        if name == READ_RESOURCE_TOOL {
+            return self.resources.iter().any(|rs| !rs.is_empty());
+        }
         self.index.contains_key(name)
     }
     fn dispatch<'a>(&'a mut self, name: &'a str, args: &'a str) -> BoxFuture<'a, Result<String>> {
         Box::pin(async move {
+            if name == READ_RESOURCE_TOOL {
+                let v: Value = serde_json::from_str(args)
+                    .with_context(|| format!("invalid JSON args for `{name}`"))?;
+                let uri = v
+                    .get("uri")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow!("`{name}` requires a string `uri` argument"))?;
+                // Locate the server that advertised this URI and route
+                // the read through that client.
+                let idx = self
+                    .resources
+                    .iter()
+                    .position(|rs| rs.iter().any(|r| r.uri == uri))
+                    .ok_or_else(|| anyhow!("no MCP server advertises resource `{uri}`"))?;
+                return self.clients[idx].read_resource(uri).await;
+            }
             let idx = *self
                 .index
                 .get(name)
                 .ok_or_else(|| anyhow!("MCP tool `{name}` not registered"))?;
             self.clients[idx].call_tool(name, args).await
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flatten_resource_text_joins_with_blank_lines() {
+        let v = json!({
+            "contents": [
+                { "uri": "file:///a", "text": "first" },
+                { "uri": "file:///a", "text": "second" }
+            ]
+        });
+        assert_eq!(flatten_resource_contents(&v), "first\n\nsecond");
+    }
+
+    #[test]
+    fn flatten_resource_blob_renders_placeholder() {
+        let v = json!({
+            "contents": [
+                { "uri": "file:///pic.png", "blob": "ZGF0YQ==" }
+            ]
+        });
+        assert_eq!(
+            flatten_resource_contents(&v),
+            "[binary resource file:///pic.png]"
+        );
+    }
+
+    #[test]
+    fn flatten_resource_unknown_shape_falls_back_to_raw_json() {
+        // No `contents` array → echo the raw JSON so the agent can
+        // still inspect whatever the server actually returned.
+        let v = json!({ "unexpected": true });
+        let out = flatten_resource_contents(&v);
+        assert!(out.contains("unexpected"));
+    }
+
+    #[test]
+    fn read_resource_def_absent_when_no_resources() {
+        let reg = McpRegistry::new();
+        assert!(reg.read_resource_def().is_none());
+        // `mcp_read_resource` must NOT appear in definitions either.
+        assert!(reg
+            .definitions()
+            .iter()
+            .all(|d| d.function.name != READ_RESOURCE_TOOL));
+        assert!(!reg.handles(READ_RESOURCE_TOOL));
     }
 }

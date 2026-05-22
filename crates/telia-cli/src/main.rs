@@ -1,7 +1,9 @@
+mod boot;
 mod config;
 mod highlight;
 mod lsp;
 mod mcp;
+mod router;
 mod tui;
 mod update;
 
@@ -390,22 +392,6 @@ async fn main() -> Result<()> {
 
     // Optional user config — register custom LLM endpoints + MCP / LSP servers.
     let cfg = config::load();
-    // LSP servers boot here too — initialize handshake only; no tool
-    // exposure yet. The registry stays alive for the rest of the
-    // process so the children don't get reaped early.
-    let _lsp_registry: Option<lsp::LspRegistry> = if cfg.lsps.is_empty() {
-        None
-    } else {
-        let reg = lsp::LspRegistry::spawn_all(cfg.lsps.iter()).await;
-        let n = reg.server_count();
-        if n > 0 {
-            eprintln!(
-                "· {n} LSP server{} initialized (no tools exposed yet)",
-                if n == 1 { "" } else { "s" }
-            );
-        }
-        Some(reg)
-    };
 
     // Open the store early so saved prefs (current model, API keys) can
     // feed into the rest of startup before LlmClient is built.
@@ -482,15 +468,10 @@ async fn main() -> Result<()> {
     let _ = store.set_pref("current_model", &model);
 
     let llm = LlmClient::with_api_key(base_url, model, api_key);
+    // The TUI status bar reports resumed-session info on first paint;
+    // no need to announce it here on stderr.
     let mut agent = if args.resume {
-        let resumed = Agent::resume(llm, store)?;
-        let n = resumed.session_id().len().min(12);
-        eprintln!(
-            "· resumed session {} ({} messages)",
-            &resumed.session_id()[..n],
-            resumed.message_count()
-        );
-        resumed
+        Agent::resume(llm, store)?
     } else {
         Agent::new(llm, store)?
     };
@@ -508,16 +489,39 @@ async fn main() -> Result<()> {
     if args.theme == "tokyo-night" {
         apply_theme_from_agent(&agent);
     }
+    // --auto / --plan flag → permission mode. The TUI status bar
+    // already surfaces the active mode, so no boot-line announcement
+    // is needed here.
     if args.auto {
         agent.set_permission_mode(telia_agent::PermissionMode::Auto);
-        eprintln!("· auto mode ON (--auto). Tool calls will dispatch without prompting.");
     } else if args.plan {
         agent.set_permission_mode(telia_agent::PermissionMode::Plan);
-        eprintln!("· plan mode ON (--plan). write/edit/bash are blocked.");
     }
+
+    // Boot splash: single-line stderr indicator that updates as each
+    // phase starts. Created here — after the interactive section
+    // (API-key prompt, Ollama pull) — so the splash line never gets
+    // stranded by multi-line interactive output. Wiped before
+    // `tui::run` takes over the screen.
+    let mut boot = boot::Boot::new();
+
+    // LSP servers: initialize handshake + expose `lsp_diagnostics`
+    // tool. The registry is folded into the agent's tool router below
+    // (alongside MCP) so the children stay alive for the whole run.
+    let lsp_registry: Option<lsp::LspRegistry> = if cfg.lsps.is_empty() {
+        None
+    } else {
+        let reg = lsp::LspRegistry::spawn_all(cfg.lsps.iter(), |name, i, n| {
+            boot.step(&format!("starting LSP server {i}/{n}: {name}"));
+        })
+        .await;
+        Some(reg)
+    };
+
     // Best-effort: cache the installed-model list once so the /model
     // dropdown has something to show without hitting the network on
     // every keypress.
+    boot.step("refreshing models");
     agent.refresh_models().await;
     // Surface the two FoolDev HF GGUFs in the dropdown even when Ollama
     // hasn't pulled them yet — they're telia's headline local picks.
@@ -527,21 +531,23 @@ async fn main() -> Result<()> {
     agent.extend_models(cfg.llms.keys().cloned());
 
     // Boot MCP servers (if any). Each surfaces its tool catalogue,
-    // which is merged into the agent's tool list. Spawn failures are
-    // already reported on stderr by the registry; we keep booting.
+    // which is merged into the agent's tool list. Loading is silent at
+    // the terminal level: spawn failures and tool-name collisions are
+    // captured in `registry.warnings()` and folded into the `/mcps`
+    // panel below. The registry itself is held aside and combined with
+    // the LSP registry into a single tool router further down.
+    let mut mcp_registry: Option<mcp::McpRegistry> = None;
     let mut mcp_summary: Option<String> = None;
     if !cfg.mcps.is_empty() {
-        let registry = mcp::McpRegistry::spawn_all(cfg.mcps.iter()).await;
+        let registry = mcp::McpRegistry::spawn_all(cfg.mcps.iter(), |name, i, n| {
+            boot.step(&format!("starting MCP server {i}/{n}: {name}"));
+        })
+        .await;
         let tools = registry.tool_count();
         let servers = registry.server_count();
+        let warnings: Vec<String> = registry.warnings().to_vec();
         if servers > 0 {
             let resources = registry.resource_count();
-            eprintln!(
-                "· {servers} MCP server{} connected ({tools} tool{}, {resources} resource{})",
-                if servers == 1 { "" } else { "s" },
-                if tools == 1 { "" } else { "s" },
-                if resources == 1 { "" } else { "s" }
-            );
             // Pre-format the /mcps panel: one row per server with its
             // command line plus tool + resource counts.
             let mut text =
@@ -562,8 +568,19 @@ async fn main() -> Result<()> {
                     "\n  {name}  ·  {cmd}  ·  {t} tool(s), {r} resource(s)"
                 ));
             }
+            for w in &warnings {
+                text.push_str(&format!("\n  ⚠ {w}"));
+            }
             mcp_summary = Some(text);
-            agent.set_tool_router(Box::new(registry));
+            mcp_registry = Some(registry);
+        } else if !warnings.is_empty() {
+            // No servers came up at all — keep the warnings visible in
+            // /mcps instead of dropping them on the floor.
+            let mut text = String::from("no MCP servers connected:");
+            for w in &warnings {
+                text.push_str(&format!("\n  ⚠ {w}"));
+            }
+            mcp_summary = Some(text);
         }
     }
 
@@ -573,7 +590,7 @@ async fn main() -> Result<()> {
         None
     } else {
         let live: std::collections::HashMap<String, (Option<String>, Option<String>)> =
-            _lsp_registry
+            lsp_registry
                 .as_ref()
                 .map(|r| {
                     r.server_summaries()
@@ -582,9 +599,18 @@ async fn main() -> Result<()> {
                         .collect()
                 })
                 .unwrap_or_default();
+        let warnings: Vec<String> = lsp_registry
+            .as_ref()
+            .map(|r| r.warnings().to_vec())
+            .unwrap_or_default();
         let running = live.len();
         let total = cfg.lsps.len();
-        let mut text = format!("{running}/{total} LSP server(s) running (no tools exposed yet):");
+        let label = if running > 0 {
+            "running (lsp_diagnostics tool wired)"
+        } else {
+            "running"
+        };
+        let mut text = format!("{running}/{total} LSP server(s) {label}:");
         for (name, entry) in &cfg.lsps {
             let cmd = if entry.args.is_empty() {
                 entry.command.clone()
@@ -604,23 +630,40 @@ async fn main() -> Result<()> {
             };
             text.push_str(&format!("\n  {name}  ·  {cmd}  ·  roots: {roots}{status}"));
         }
+        for w in &warnings {
+            text.push_str(&format!("\n  ⚠ {w}"));
+        }
         Some(text)
     };
 
-    // Best-effort update check against the GitHub releases API. 5s
-    // timeout; offline / rate-limited returns None silently. The
-    // result rides into the TUI so `/update` can re-display it.
-    let update_check = update::check().await;
-    if let Some(uc) = &update_check {
-        if uc.newer {
-            eprintln!(
-                "· update available: telia v{} (you're on v{}) — {}",
-                uc.latest, uc.current, uc.url
-            );
+    // Combine MCP + LSP into a single tool router for the agent. Each
+    // registry is its own `ToolRouter` impl; the combinator routes by
+    // `handles()`. Empty router skipped so the agent's built-in tools
+    // stay the only option when neither registry has anything to add.
+    {
+        let mut routers: Vec<Box<dyn telia_agent::ToolRouter>> = Vec::new();
+        if let Some(r) = mcp_registry {
+            routers.push(Box::new(r));
+        }
+        if let Some(r) = lsp_registry {
+            routers.push(Box::new(r));
+        }
+        if !routers.is_empty() {
+            agent.set_tool_router(Box::new(router::CombinedRouter::new(routers)));
         }
     }
 
+    // Best-effort update check against the GitHub releases API. 5s
+    // timeout; offline / rate-limited returns None silently. The
+    // result rides into the TUI so `/update` can re-display it — the
+    // TUI also pushes an Info entry + desktop notification on first
+    // paint when a newer release is found, so no boot-line announce
+    // is needed here either.
+    boot.step("checking for updates");
+    let update_check = update::check().await;
+
     spawn_sigusr1_theme_reload();
+    boot.finish();
     tui::run(agent, mcp_summary, lsp_summary, update_check).await
 }
 

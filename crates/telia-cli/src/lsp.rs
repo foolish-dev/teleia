@@ -1,34 +1,69 @@
 //! Minimal LSP (Language Server Protocol) client. Spawns each
 //! configured server, exchanges the `initialize` handshake over the
-//! Content-Length-framed JSON-RPC the protocol mandates, and reports
-//! whether the server came up cleanly.
+//! Content-Length-framed JSON-RPC the protocol mandates, and exposes
+//! `textDocument/diagnostic` (pull diagnostics, LSP 3.17) as the
+//! `lsp_diagnostics` agent tool.
 //!
-//! Tool exposure (hover / definition / diagnostics) isn't wired yet —
-//! this just gets each server reachable so the `/lsps` panel can
-//! report `running` instead of `(runtime stub)`. Document
-//! synchronisation, cancellation, workspace updates, and capability-
-//! gated tool registration are TODO.
+//! Document synchronisation is best-effort: a file gets a one-shot
+//! `textDocument/didOpen` the first time the agent asks about it, then
+//! pull-diagnostic requests fan out to every running server so we
+//! don't have to maintain a language-id → server routing table here.
+//! Hover, definition, references, and workspace operations are still
+//! TODO.
 
 use anyhow::{anyhow, Context, Result};
+use futures_util::future::BoxFuture;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashSet;
+use std::path::Path;
+use telia_agent::ToolRouter;
+use telia_llm::ToolDef;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout, Command};
 
 use crate::config::LspEntry;
 
+/// Synthetic tool name surfaced by [`LspRegistry`] when at least one
+/// LSP server is running. Pulls diagnostics for a file via
+/// `textDocument/diagnostic`.
+pub const DIAGNOSTICS_TOOL: &str = "lsp_diagnostics";
+
+#[derive(Debug, Clone, Deserialize)]
+struct Position {
+    line: u32,
+    character: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct Range {
+    start: Position,
+    #[allow(dead_code)]
+    end: Position,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct Diagnostic {
+    range: Range,
+    #[serde(default)]
+    severity: Option<u8>,
+    #[serde(default)]
+    message: String,
+    #[serde(default)]
+    source: Option<String>,
+}
+
 pub struct LspClient {
     pub name: String,
     pub server_name: Option<String>,
     pub server_version: Option<String>,
-    #[allow(dead_code)]
     child: tokio::process::Child,
-    #[allow(dead_code)]
     stdin: ChildStdin,
-    #[allow(dead_code)]
     stdout: BufReader<ChildStdout>,
-    #[allow(dead_code)]
     next_id: u64,
+    /// URIs the agent has already pushed a `didOpen` for, so we don't
+    /// re-open the same buffer on every diagnostics pull.
+    open_docs: HashSet<String>,
 }
 
 impl LspClient {
@@ -61,6 +96,7 @@ impl LspClient {
             stdin,
             stdout: BufReader::new(stdout),
             next_id: 1,
+            open_docs: HashSet::new(),
         };
         client.initialize().await?;
         Ok(client)
@@ -71,11 +107,24 @@ impl LspClient {
             .ok()
             .and_then(|p| url_from_path(&p))
             .unwrap_or_else(|| "file:///".to_string());
+        // Advertise pull-diagnostic support so capable servers
+        // (rust-analyzer, pyright, tsserver, etc.) accept our
+        // `textDocument/diagnostic` calls. `synchronization` is the
+        // tiny capability needed to legally send `didOpen` later.
         let params = json!({
             "processId": std::process::id(),
             "rootUri": root,
             "capabilities": {
-                "textDocument": {},
+                "textDocument": {
+                    "synchronization": {
+                        "dynamicRegistration": false,
+                        "didSave": false
+                    },
+                    "diagnostic": {
+                        "dynamicRegistration": false,
+                        "relatedDocumentSupport": false
+                    }
+                },
                 "workspace": {}
             },
             "clientInfo": { "name": "telia", "version": env!("CARGO_PKG_VERSION") },
@@ -138,6 +187,53 @@ impl LspClient {
         self.write_frame(&payload).await
     }
 
+    /// Send `textDocument/didOpen` for `uri` if we haven't already.
+    /// Idempotent — subsequent calls for the same URI no-op.
+    pub async fn open_document(&mut self, uri: &str, language_id: &str, text: &str) -> Result<()> {
+        if self.open_docs.contains(uri) {
+            return Ok(());
+        }
+        let params = json!({
+            "textDocument": {
+                "uri": uri,
+                "languageId": language_id,
+                "version": 1,
+                "text": text,
+            }
+        });
+        self.notify("textDocument/didOpen", params).await?;
+        self.open_docs.insert(uri.to_string());
+        Ok(())
+    }
+
+    /// LSP 3.17 pull diagnostics. Returns rendered `path:line:col
+    /// severity[source]: message` rows, one per diagnostic, or an
+    /// empty string when the document is clean. Servers that don't
+    /// implement `textDocument/diagnostic` surface a method-not-found
+    /// error — the registry treats that as "no diagnostics from this
+    /// server" and moves on.
+    pub async fn pull_diagnostics(&mut self, uri: &str) -> Result<Vec<String>> {
+        let params = json!({
+            "textDocument": { "uri": uri }
+        });
+        let result = self.request("textDocument/diagnostic", params).await?;
+        // Full report: { kind: "full", items: [Diagnostic...] }.
+        // Unchanged report: { kind: "unchanged", resultId: "..." } — no items.
+        let items = result
+            .get("items")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let mut lines = Vec::with_capacity(items.len());
+        for item in items {
+            let Ok(d) = serde_json::from_value::<Diagnostic>(item) else {
+                continue;
+            };
+            lines.push(format_diagnostic(uri, &d));
+        }
+        Ok(lines)
+    }
+
     /// LSP framing: `Content-Length: N\r\n\r\n<N bytes of JSON>`.
     async fn write_frame(&mut self, payload: &Value) -> Result<()> {
         let body = serde_json::to_vec(payload)?;
@@ -186,12 +282,56 @@ impl Drop for LspClient {
 
 /// Convert an absolute path to a `file://` URI. Returns None on
 /// non-absolute paths or non-utf8 segments.
-fn url_from_path(p: &std::path::Path) -> Option<String> {
+fn url_from_path(p: &Path) -> Option<String> {
     let p = p.to_str()?;
     if p.starts_with('/') {
         Some(format!("file://{p}"))
     } else {
         None
+    }
+}
+
+/// Render one LSP diagnostic as `path:line:col severity[source]: msg`.
+/// LSP line/column are 0-based; we add 1 to match how editors display
+/// positions. `path` is derived from the URI by stripping `file://`.
+fn format_diagnostic(uri: &str, d: &Diagnostic) -> String {
+    let path = uri.strip_prefix("file://").unwrap_or(uri);
+    let line = d.range.start.line + 1;
+    let col = d.range.start.character + 1;
+    let sev = match d.severity {
+        Some(1) => "error",
+        Some(2) => "warning",
+        Some(3) => "info",
+        Some(4) => "hint",
+        _ => "diag",
+    };
+    match d.source.as_deref() {
+        Some(s) if !s.is_empty() => format!("{path}:{line}:{col} {sev} [{s}]: {}", d.message),
+        _ => format!("{path}:{line}:{col} {sev}: {}", d.message),
+    }
+}
+
+/// Guess an LSP language id from a file extension. Falls through to
+/// the extension itself for anything we don't have a canonical id for —
+/// modern language servers tend to accept the extension as the id.
+fn guess_language_id(p: &Path) -> String {
+    let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+    match ext {
+        "rs" => "rust".into(),
+        "ts" => "typescript".into(),
+        "tsx" => "typescriptreact".into(),
+        "js" => "javascript".into(),
+        "jsx" => "javascriptreact".into(),
+        "py" => "python".into(),
+        "go" => "go".into(),
+        "lua" => "lua".into(),
+        "c" | "h" => "c".into(),
+        "cpp" | "cxx" | "cc" | "hpp" => "cpp".into(),
+        "java" => "java".into(),
+        "rb" => "ruby".into(),
+        "sh" | "bash" => "shellscript".into(),
+        "" => "plaintext".into(),
+        other => other.into(),
     }
 }
 
@@ -201,25 +341,42 @@ fn url_from_path(p: &std::path::Path) -> Option<String> {
 /// formatted summary.
 pub struct LspRegistry {
     clients: Vec<LspClient>,
+    /// Boot-time warnings (spawn failures). Surfaced via the `/lsps`
+    /// panel instead of stderr so loading stays silent at the
+    /// terminal level.
+    warnings: Vec<String>,
 }
 
 impl LspRegistry {
-    pub async fn spawn_all<'a, I>(entries: I) -> Self
+    /// Spawn every configured LSP server. Failures don't abort
+    /// startup — telia keeps booting and the error is stashed in
+    /// `warnings()` for the `/lsps` panel.
+    ///
+    /// `on_step` is invoked once per entry with `(name, index, total)`
+    /// (1-based index) before that entry's spawn begins, so the boot
+    /// splash can report which server is currently being contacted.
+    pub async fn spawn_all<'a, I, F>(entries: I, mut on_step: F) -> Self
     where
         I: IntoIterator<Item = (&'a String, &'a LspEntry)>,
+        F: FnMut(&str, usize, usize),
     {
+        let entries: Vec<(&'a String, &'a LspEntry)> = entries.into_iter().collect();
+        let total = entries.len();
         let mut clients = Vec::new();
-        for (name, entry) in entries {
+        let mut warnings = Vec::new();
+        for (i, (name, entry)) in entries.into_iter().enumerate() {
+            on_step(name, i + 1, total);
             match LspClient::spawn(name, entry).await {
                 Ok(c) => clients.push(c),
-                Err(e) => eprintln!("warning: LSP `{name}` failed to start: {e:#}"),
+                Err(e) => warnings.push(format!("LSP `{name}` failed to start: {e:#}")),
             }
         }
-        Self { clients }
+        Self { clients, warnings }
     }
 
-    pub fn server_count(&self) -> usize {
-        self.clients.len()
+    /// Boot-time warnings collected by `spawn_all`. Empty on a clean boot.
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
     }
 
     /// Per-server (name, serverInfo, version) — drives the `/lsps`
@@ -235,5 +392,159 @@ impl LspRegistry {
                 )
             })
             .collect()
+    }
+
+    /// Fan a pull-diagnostic request across every running server.
+    /// Each client gets a `didOpen` on first sight, then the pull.
+    /// Per-server failures (method-not-found, connection drops) are
+    /// swallowed — they just mean "no diagnostics from that server".
+    pub async fn diagnostics_for(&mut self, path: &str) -> Result<String> {
+        let raw = Path::new(path);
+        let abs = raw
+            .canonicalize()
+            .with_context(|| format!("resolving `{path}`"))?;
+        let uri = url_from_path(&abs)
+            .ok_or_else(|| anyhow!("could not form file:// URI for `{path}`"))?;
+        let text = std::fs::read_to_string(&abs).with_context(|| format!("reading `{path}`"))?;
+        let language_id = guess_language_id(&abs);
+
+        let mut all: Vec<String> = Vec::new();
+        for client in self.clients.iter_mut() {
+            // Best-effort per server: ignore didOpen failures (some
+            // servers refuse languages they don't recognise).
+            if client
+                .open_document(&uri, &language_id, &text)
+                .await
+                .is_err()
+            {
+                continue;
+            }
+            if let Ok(lines) = client.pull_diagnostics(&uri).await {
+                all.extend(lines);
+            }
+        }
+        if all.is_empty() {
+            Ok(format!("no diagnostics for {}", abs.display()))
+        } else {
+            Ok(all.join("\n"))
+        }
+    }
+}
+
+impl ToolRouter for LspRegistry {
+    fn definitions(&self) -> Vec<ToolDef> {
+        if self.clients.is_empty() {
+            return Vec::new();
+        }
+        let description = format!(
+            "Get diagnostics (errors, warnings) for a source file from the \
+             {} configured language server(s). Sends textDocument/didOpen \
+             on first use, then issues a pull-diagnostic request. Returns \
+             one `<path>:<line>:<col> <severity>[<source>]: <message>` row \
+             per diagnostic, or `no diagnostics for <path>` when clean.",
+            self.clients.len(),
+        );
+        vec![ToolDef::new(
+            DIAGNOSTICS_TOOL,
+            description,
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the file to diagnose (absolute or relative to telia's cwd)"
+                    }
+                },
+                "required": ["path"]
+            }),
+        )]
+    }
+    fn handles(&self, name: &str) -> bool {
+        name == DIAGNOSTICS_TOOL && !self.clients.is_empty()
+    }
+    fn dispatch<'a>(&'a mut self, name: &'a str, args: &'a str) -> BoxFuture<'a, Result<String>> {
+        Box::pin(async move {
+            if name != DIAGNOSTICS_TOOL {
+                return Err(anyhow!("LSP tool `{name}` not registered"));
+            }
+            let v: Value = serde_json::from_str(args)
+                .with_context(|| format!("invalid JSON args for `{name}`"))?;
+            let path = v
+                .get("path")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("`{name}` requires a string `path` argument"))?;
+            self.diagnostics_for(path).await
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn diag(line: u32, col: u32, sev: u8, msg: &str, source: Option<&str>) -> Diagnostic {
+        Diagnostic {
+            range: Range {
+                start: Position {
+                    line,
+                    character: col,
+                },
+                end: Position {
+                    line,
+                    character: col,
+                },
+            },
+            severity: Some(sev),
+            message: msg.into(),
+            source: source.map(String::from),
+        }
+    }
+
+    #[test]
+    fn format_diagnostic_with_source_includes_brackets() {
+        let d = diag(9, 4, 1, "no method foo", Some("rustc"));
+        let out = format_diagnostic("file:///work/src/main.rs", &d);
+        // LSP is 0-based, displayed 1-based → 10:5.
+        assert_eq!(out, "/work/src/main.rs:10:5 error [rustc]: no method foo");
+    }
+
+    #[test]
+    fn format_diagnostic_without_source_omits_brackets() {
+        let d = diag(0, 0, 2, "unused", None);
+        let out = format_diagnostic("file:///x.rs", &d);
+        assert_eq!(out, "/x.rs:1:1 warning: unused");
+    }
+
+    #[test]
+    fn format_diagnostic_severity_table() {
+        for (sev, expected) in [(1, "error"), (2, "warning"), (3, "info"), (4, "hint")] {
+            let d = diag(0, 0, sev, "x", None);
+            let out = format_diagnostic("file:///f", &d);
+            assert!(
+                out.contains(expected),
+                "severity {sev} → missing `{expected}` in `{out}`"
+            );
+        }
+    }
+
+    #[test]
+    fn guess_language_id_table() {
+        assert_eq!(guess_language_id(Path::new("a.rs")), "rust");
+        assert_eq!(guess_language_id(Path::new("a.py")), "python");
+        assert_eq!(guess_language_id(Path::new("a.tsx")), "typescriptreact");
+        assert_eq!(guess_language_id(Path::new("a.cpp")), "cpp");
+        // Unknown extension falls through to the extension itself.
+        assert_eq!(guess_language_id(Path::new("a.zig")), "zig");
+        // No extension → plaintext sentinel.
+        assert_eq!(guess_language_id(Path::new("Makefile")), "plaintext");
+    }
+
+    #[test]
+    fn url_from_path_absolute_only() {
+        assert_eq!(
+            url_from_path(Path::new("/etc/hosts")).as_deref(),
+            Some("file:///etc/hosts")
+        );
+        assert!(url_from_path(Path::new("relative/path")).is_none());
     }
 }

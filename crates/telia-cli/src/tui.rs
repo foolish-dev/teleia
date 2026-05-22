@@ -201,10 +201,8 @@ const THEMES: &[(&str, &Theme)] = &[
 static CURRENT_THEME: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static TRANSPARENT_BG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-static CUSTOM_THEME: std::sync::OnceLock<std::sync::RwLock<Theme>> =
-    std::sync::OnceLock::new();
-static USE_CUSTOM_THEME: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+static CUSTOM_THEME: std::sync::OnceLock<std::sync::RwLock<Theme>> = std::sync::OnceLock::new();
+static USE_CUSTOM_THEME: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn theme() -> Theme {
     if USE_CUSTOM_THEME.load(std::sync::atomic::Ordering::Relaxed) {
@@ -1357,6 +1355,40 @@ fn compute_menu(input: &str, aliases: &[String], models: &[String]) -> Option<Me
                 items,
                 selected: 0,
                 kind: MenuKind::Theme, // reuse arg-replacement semantics
+            });
+        }
+        if cmd == "key" {
+            // Provider names are TitleCase ("OpenAI", "OpenRouter") but
+            // resolution elsewhere in telia is case-insensitive, so the
+            // dropdown matches that — `/key open` → both providers.
+            let arg_lc = arg.to_ascii_lowercase();
+            let items: Vec<String> = telia_llm::PROVIDERS
+                .iter()
+                .map(|p| p.name.to_string())
+                .filter(|n| n.to_ascii_lowercase().starts_with(&arg_lc))
+                .collect();
+            if items.is_empty() {
+                return None;
+            }
+            return Some(Menu {
+                items,
+                selected: 0,
+                kind: MenuKind::Theme,
+            });
+        }
+        if matches!(cmd, "notify" | "transparent") {
+            let items: Vec<String> = ["on", "off"]
+                .iter()
+                .filter(|n| n.starts_with(arg))
+                .map(|s| (*s).to_string())
+                .collect();
+            if items.is_empty() {
+                return None;
+            }
+            return Some(Menu {
+                items,
+                selected: 0,
+                kind: MenuKind::Theme,
             });
         }
         return None;
@@ -4197,5 +4229,39 @@ mod tests {
     fn menu_model_none_when_no_models_cached() {
         // Empty model list (Ollama unreachable at startup) → no menu.
         assert!(compute_menu("/model anything", &[], &[]).is_none());
+    }
+
+    #[test]
+    fn menu_key_lists_providers() {
+        let m = compute_menu("/key ", &[], &[]).unwrap();
+        assert_eq!(m.kind, MenuKind::Theme);
+        assert_eq!(m.items.len(), telia_llm::PROVIDERS.len());
+    }
+
+    #[test]
+    fn menu_key_filters_by_prefix_case_insensitive() {
+        // Provider names are TitleCase but the filter is case-insensitive,
+        // so lowercase prefixes still hit them.
+        let m = compute_menu("/key open", &[], &[]).unwrap();
+        assert_eq!(m.kind, MenuKind::Theme);
+        assert!(!m.items.is_empty());
+        assert!(m
+            .items
+            .iter()
+            .all(|n| n.to_ascii_lowercase().starts_with("open")));
+    }
+
+    #[test]
+    fn menu_notify_offers_on_off() {
+        let m = compute_menu("/notify ", &[], &[]).unwrap();
+        assert_eq!(m.kind, MenuKind::Theme);
+        assert_eq!(m.items, vec!["on", "off"]);
+    }
+
+    #[test]
+    fn menu_transparent_filters_to_off() {
+        let m = compute_menu("/transparent of", &[], &[]).unwrap();
+        assert_eq!(m.kind, MenuKind::Theme);
+        assert_eq!(m.items, vec!["off"]);
     }
 }
