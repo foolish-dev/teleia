@@ -1,19 +1,19 @@
 // τέλεια niri rice — drop into ~/.config/niri/config.kdl or include it.
 // Pairs niri's scrollable-tiling layout with a dedicated agent
 // workspace, Tokyo Night focus ring, and a keybind that opens
-// telia in a centered floating column.
+// teleia in a centered floating column.
 
 binds {
-    // Open / focus telia on its named workspace. Same key whether
+    // Open / focus teleia on its named workspace. Same key whether
     // it's running or not — niri spawns if missing, focuses if not.
     Mod+L {
-        spawn "sh" "-c" "pgrep -f 'foot.*telia-float' >/dev/null || foot --app-id=telia-float -e telia";
+        spawn "sh" "-c" "pgrep -f 'foot.*teleia-float' >/dev/null || foot --app-id=teleia-float -e teleia";
     }
 
     // Hop to the agent workspace from anywhere.
     Mod+Apostrophe { focus-workspace "agent"; }
 
-    // Hide / show telia without killing it.
+    // Hide / show teleia without killing it.
     Mod+Shift+L {
         spawn "sh" "-c" "niri msg action focus-workspace agent || true";
     }
@@ -23,9 +23,9 @@ binds {
 // when persisted by your compositor session.
 workspace "agent" {}
 
-// Open telia floating, centered, sized for comfortable reading.
+// Open teleia floating, centered, sized for comfortable reading.
 window-rule {
-    match app-id="telia-float"
+    match app-id="teleia-float"
 
     open-on-workspace "agent"
     open-floating true
@@ -42,12 +42,12 @@ window-rule {
         off
     }
 
-    // Match telia's own rounded chat block + input box corners.
+    // Match teleia's own rounded chat block + input box corners.
     geometry-corner-radius 12 12 12 12
 
     // Slight transparency so the wallpaper bleeds through; bump
     // toward 1.0 if your terminal's bg is already opaque.
-    // Pair with `/transparent on` inside telia + foot's `alpha=0.85`
+    // Pair with `/transparent on` inside teleia + foot's `alpha=0.85`
     // so the wallpaper shows through. Niri has no native window blur
     // yet — pre-blur the wallpaper if you want the frosted look.
     opacity 0.90
@@ -71,5 +71,5 @@ layout {
     }
 }
 
-// Spawn telia at startup so the first Mod+L is instant.
-spawn-at-startup "foot" "--app-id=telia-float" "-e" "telia"
+// Spawn teleia at startup so the first Mod+L is instant.
+spawn-at-startup "foot" "--app-id=teleia-float" "-e" "teleia"

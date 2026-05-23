@@ -60,12 +60,12 @@ jobs:
         with:
           tool: cross
       - name: build
-        run: ${{ matrix.use }} build --release --locked --target ${{ matrix.target }} --bin telia
+        run: ${{ matrix.use }} build --release --locked --target ${{ matrix.target }} --bin teleia
       - name: package
         shell: bash
         run: |
-          asset="telia-${{ matrix.target }}${{ matrix.ext }}"
-          cp "target/${{ matrix.target }}/release/telia${{ matrix.ext }}" "$asset"
+          asset="teleia-${{ matrix.target }}${{ matrix.ext }}"
+          cp "target/${{ matrix.target }}/release/teleia${{ matrix.ext }}" "$asset"
           echo "ASSET=$asset" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@v4
         with:

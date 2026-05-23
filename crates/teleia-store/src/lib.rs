@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::{Path, PathBuf};
-use telia_llm::Message;
+use teleia_llm::Message;
 
 pub struct Store {
     conn: Connection,
@@ -198,14 +198,14 @@ impl Store {
 /// (works for users who symlink it on macOS too); otherwise falls
 /// back to the OS-native data dir:
 ///
-/// - Linux  : `$HOME/.local/share/telia/telia.sqlite`
-/// - macOS  : `$HOME/Library/Application Support/telia/telia.sqlite`
-/// - Windows: `%APPDATA%\telia\telia.sqlite`
-/// - other  : `$HOME/.telia/telia.sqlite` as a last resort
+/// - Linux  : `$HOME/.local/share/teleia/teleia.sqlite`
+/// - macOS  : `$HOME/Library/Application Support/teleia/teleia.sqlite`
+/// - Windows: `%APPDATA%\teleia\teleia.sqlite`
+/// - other  : `$HOME/.teleia/teleia.sqlite` as a last resort
 fn data_path() -> Result<PathBuf> {
     if let Some(v) = std::env::var_os("XDG_DATA_HOME") {
         if !v.is_empty() {
-            return Ok(PathBuf::from(v).join("telia").join("telia.sqlite"));
+            return Ok(PathBuf::from(v).join("teleia").join("teleia.sqlite"));
         }
     }
     #[cfg(target_os = "macos")]
@@ -214,13 +214,13 @@ fn data_path() -> Result<PathBuf> {
         return Ok(PathBuf::from(home)
             .join("Library")
             .join("Application Support")
-            .join("telia")
-            .join("telia.sqlite"));
+            .join("teleia")
+            .join("teleia.sqlite"));
     }
     #[cfg(target_os = "windows")]
     {
         let appdata = std::env::var_os("APPDATA").context("APPDATA not set")?;
-        return Ok(PathBuf::from(appdata).join("telia").join("telia.sqlite"));
+        return Ok(PathBuf::from(appdata).join("teleia").join("teleia.sqlite"));
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
@@ -228,8 +228,8 @@ fn data_path() -> Result<PathBuf> {
         Ok(PathBuf::from(home)
             .join(".local")
             .join("share")
-            .join("telia")
-            .join("telia.sqlite"))
+            .join("teleia")
+            .join("teleia.sqlite"))
     }
 }
 
@@ -244,12 +244,12 @@ fn unix_seconds() -> i64 {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use telia_llm::Message;
+    use teleia_llm::Message;
 
     fn tmp_db() -> PathBuf {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!("telia-test-{}-{}.sqlite", std::process::id(), n))
+        std::env::temp_dir().join(format!("teleia-test-{}-{}.sqlite", std::process::id(), n))
     }
 
     struct Cleanup(PathBuf);

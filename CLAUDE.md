@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Behavioral guidelines for working on the telia codebase. Bias toward caution
+Behavioral guidelines for working on the teleia codebase. Bias toward caution
 over speed. For trivial tasks, use judgment.
 
 ## 1. Think before coding
@@ -51,6 +51,6 @@ reproduces the bug first.
 
 ---
 
-The same four principles are baked into telia's own agent system prompt at
-`crates/telia-agent/src/karpathy.rs` — keep the two in sync when editing
+The same four principles are baked into teleia's own agent system prompt at
+`crates/teleia-agent/src/karpathy.rs` — keep the two in sync when editing
 either.

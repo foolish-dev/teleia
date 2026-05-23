@@ -1,12 +1,12 @@
-//! Chain multiple [`ToolRouter`]s under a single agent. Telia uses one
-//! for MCP tools and one for LSP tools, but [`telia_agent::Agent`]
+//! Chain multiple [`ToolRouter`]s under a single agent. Teleia uses one
+//! for MCP tools and one for LSP tools, but [`teleia_agent::Agent`]
 //! only accepts a single router — this collapses N routers into one
 //! by name-routing through each child's `handles()` predicate.
 
 use anyhow::{anyhow, Result};
 use futures_util::future::BoxFuture;
-use telia_agent::ToolRouter;
-use telia_llm::ToolDef;
+use teleia_agent::ToolRouter;
+use teleia_llm::ToolDef;
 
 pub struct CombinedRouter {
     routers: Vec<Box<dyn ToolRouter>>,

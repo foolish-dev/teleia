@@ -1836,7 +1836,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "telia-agent"
+name = "teleia-agent"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1844,15 +1844,15 @@ dependencies = [
  "futures-util",
  "serde",
  "serde_json",
- "telia-llm",
- "telia-store",
- "telia-tools",
+ "teleia-llm",
+ "teleia-store",
+ "teleia-tools",
  "tokio",
  "tracing",
 ]
 
 [[package]]
-name = "telia-cli"
+name = "teleia-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1866,10 +1866,10 @@ dependencies = [
  "serde",
  "serde_json",
  "syntect",
- "telia-agent",
- "telia-llm",
- "telia-store",
- "telia-tools",
+ "teleia-agent",
+ "teleia-llm",
+ "teleia-store",
+ "teleia-tools",
  "tokio",
  "toml",
  "tracing",
@@ -1877,7 +1877,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "telia-llm"
+name = "teleia-llm"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1891,19 +1891,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "telia-store"
+name = "teleia-store"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "rusqlite",
  "serde",
  "serde_json",
- "telia-llm",
+ "teleia-llm",
  "ulid",
 ]
 
 [[package]]
-name = "telia-tools"
+name = "teleia-tools"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1913,18 +1913,18 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "telia-llm",
+ "teleia-llm",
  "tokio",
  "tracing",
 ]
 
 [[package]]
-name = "telia-tools-bin"
+name = "teleia-tools-bin"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "serde_json",
- "telia-tools",
+ "teleia-tools",
  "tokio",
 ]
 

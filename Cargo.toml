@@ -1,12 +1,12 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/telia-cli",
-    "crates/telia-llm",
-    "crates/telia-tools",
-    "crates/telia-tools-bin",
-    "crates/telia-store",
-    "crates/telia-agent",
+    "crates/teleia-cli",
+    "crates/teleia-llm",
+    "crates/teleia-tools",
+    "crates/teleia-tools-bin",
+    "crates/teleia-store",
+    "crates/teleia-agent",
 ]
 
 [workspace.package]
@@ -14,7 +14,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 authors = ["foolish-dev"]
-repository = "https://github.com/foolish-dev/telia"
+repository = "https://github.com/foolish-dev/teleia"
 
 [workspace.dependencies]
 anyhow = "1"
@@ -39,10 +39,10 @@ glob = "0.3"
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 rpassword = "7"
 
-telia-llm = { path = "crates/telia-llm" }
-telia-tools = { path = "crates/telia-tools" }
-telia-store = { path = "crates/telia-store" }
-telia-agent = { path = "crates/telia-agent" }
+teleia-llm = { path = "crates/teleia-llm" }
+teleia-tools = { path = "crates/teleia-tools" }
+teleia-store = { path = "crates/teleia-store" }
+teleia-agent = { path = "crates/teleia-agent" }
 
 [profile.release]
 lto = "thin"

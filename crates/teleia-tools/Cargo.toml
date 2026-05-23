@@ -1,16 +1,18 @@
 [package]
-name = "telia-tools-bin"
+name = "teleia-tools"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
-[[bin]]
-name = "telia-tools-bin"
-path = "src/main.rs"
-
 [dependencies]
 anyhow.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-telia-tools.workspace = true
+tracing.workspace = true
+libc.workspace = true
+regex.workspace = true
+glob.workspace = true
+reqwest.workspace = true
+teleia-llm.workspace = true

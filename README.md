@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/foolish-dev/telia/actions/workflows/ci.yml"><img alt="ci" src="https://github.com/foolish-dev/telia/actions/workflows/ci.yml/badge.svg?branch=dev"></a>
+  <a href="https://github.com/foolish-dev/teleia/actions/workflows/ci.yml"><img alt="ci" src="https://github.com/foolish-dev/teleia/actions/workflows/ci.yml/badge.svg?branch=dev"></a>
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
   <a href="https://buymeacoffee.com/cardoffoolm"><img alt="Buy me a coffee" src="https://img.shields.io/badge/buy%20me%20a%20coffee-cardoffoolm-FFDD00?logo=buymeacoffee&logoColor=1a1b26"></a>
 </p>
@@ -24,18 +24,18 @@
 Auto-detects your platform, downloads the latest prebuilt binary from GitHub Releases, falls back to a cargo source build if no prebuilt exists. Prebuilts cover Linux (x86_64 · aarch64 · armv7 · i686 · riscv64 · ppc64le · s390x), macOS (Intel + Apple Silicon), Windows (x86_64 · ARM64 · i686, MSVC + MinGW), FreeBSD, NetBSD, and illumos.
 
 ```sh
-# Linux / macOS — drops `telia` into ~/.local/bin
-curl -fsSL https://raw.githubusercontent.com/foolish-dev/telia/dev/install.sh | sh
+# Linux / macOS — drops `teleia` into ~/.local/bin
+curl -fsSL https://raw.githubusercontent.com/foolish-dev/teleia/dev/install.sh | sh
 ```
 
 ```powershell
-# Windows (PowerShell) — drops `telia.exe` into %USERPROFILE%\.local\bin
-irm https://raw.githubusercontent.com/foolish-dev/telia/dev/install.ps1 | iex
+# Windows (PowerShell) — drops `teleia.exe` into %USERPROFILE%\.local\bin
+irm https://raw.githubusercontent.com/foolish-dev/teleia/dev/install.ps1 | iex
 ```
 
 ```sh
 # any platform with Rust installed
-cargo install --git https://github.com/foolish-dev/telia telia-cli
+cargo install --git https://github.com/foolish-dev/teleia teleia-cli
 ```
 
 Overrides (env vars before the pipe on Unix, `$env:NAME = 'value'` on Windows):
@@ -50,17 +50,17 @@ Overrides (env vars before the pipe on Unix, `$env:NAME = 'value'` on Windows):
 
 ```sh
 # default: local Ollama with hf.co/FoolDev/Thanatos-27B
-telia
+teleia
 
 # cloud — uses $ANTHROPIC_API_KEY, or prompts and saves the key
-telia --model claude-opus-4-7
+teleia --model claude-opus-4-7
 
 # resume the last session
-telia --resume     # alias: --continue, -r
+teleia --resume     # alias: --continue, -r
 
 # start in plan mode (read-only tools) or auto (no prompts)
-telia --plan
-telia --auto
+teleia --plan
+teleia --auto
 ```
 
 Inside the TUI, switch models live with `/model NAME`; switch providers by changing the prefix. `Shift+Tab` cycles permission modes. Type `/help` to list every slash command.
@@ -138,7 +138,7 @@ The model name picks the provider. Use `provider:NAME` to disambiguate names tha
 
 The `/model` dropdown pre-populates with ~210 named models across all twenty providers. `Tab` accepts, type to filter; any name is accepted including ones not in the catalog.
 
-**Keys.** `--api-key KEY` overrides the env-var fallback. Missing a key at startup or after `/model NAME`? telia prompts with hidden input (`rpassword` at startup, in-TUI masked prompt mid-session) and saves the entered key under `prefs.api_key:<ENV_VAR>` so the next launch picks it up. `/keys` lists every provider + status; `/key PROVIDER` opens the prompt on demand. Env-var values win when set, so exporting overrides the saved one.
+**Keys.** `--api-key KEY` overrides the env-var fallback. Missing a key at startup or after `/model NAME`? teleia prompts with hidden input (`rpassword` at startup, in-TUI masked prompt mid-session) and saves the entered key under `prefs.api_key:<ENV_VAR>` so the next launch picks it up. `/keys` lists every provider + status; `/key PROVIDER` opens the prompt on demand. Env-var values win when set, so exporting overrides the saved one.
 
 **Ollama pre-flight.** When the resolved endpoint is local Ollama, missing models trigger an interactive `pull from Ollama now? [Y/n]` with an animated progress bar. `--pull-yes` auto-confirms; `--no-pull` skips. Non-TTY stdin (scripts, CI, pipes) auto-confirms.
 
@@ -155,8 +155,8 @@ The `/model` dropdown pre-populates with ~210 named models across all twenty pro
 - **Scrollbar** — right-edge thumb in `th.purple` over a `th.dim` track; only renders when there's overflow.
 - **Drag-select** — left-click + drag in the chat area highlights cells; release copies via [`arboard`](https://crates.io/crates/arboard) (Wayland / X11 / macOS / Windows). Works during streaming.
 - **Themes** — `tokyo-night` (default), `catppuccin`, `dracula`. Code highlighting follows the active theme (scope-aware mapping via syntect).
-- **Blur & transparency** — `/transparent on` (or `TELIA_TRANSPARENT=1`) swaps the theme background for `Color::Reset`, letting the terminal's alpha and the compositor's blur bleed through. Pair with `alpha=0.85` in foot/alacritty + Hyprland's blur decoration; selection highlight, status chips, and mode badges stay opaque so they remain legible. See [`docs/RICE.md`](docs/RICE.md).
-- **Desktop autotheme** — pair telia with the external [`grogu`](https://github.com/foolish-dev/grogu) binary to fan the active theme out to Noctalia shell, niri, vim/neovim, and back into telia's own prefs. `grogu apply` (no args) reads the `theme` row telia writes to its sqlite store, so `/theme dracula` → `grogu apply` repaints the desktop without typing the theme name twice. Designed to run as a Noctalia post-wallpaper-change hook so wallpaper rotation re-themes the system.
+- **Blur & transparency** — `/transparent on` (or `TELEIA_TRANSPARENT=1`) swaps the theme background for `Color::Reset`, letting the terminal's alpha and the compositor's blur bleed through. Pair with `alpha=0.85` in foot/alacritty + Hyprland's blur decoration; selection highlight, status chips, and mode badges stay opaque so they remain legible. See [`docs/RICE.md`](docs/RICE.md).
+- **Desktop autotheme** — pair teleia with the external [`grogu`](https://github.com/foolish-dev/grogu) binary to fan the active theme out to Noctalia shell, niri, vim/neovim, and back into teleia's own prefs. `grogu apply` (no args) reads the `theme` row teleia writes to its sqlite store, so `/theme dracula` → `grogu apply` repaints the desktop without typing the theme name twice. Designed to run as a Noctalia post-wallpaper-change hook so wallpaper rotation re-themes the system.
 - **Token tracker** — status bar shows `↑prompt ↓completion` totals for the session.
 - **Desktop notifications** — Linux `notify-send`, macOS `osascript`, Windows BurntToast (silently no-op if not installed). Toggle with `/notify on|off`.
 - **Streaming** — tokens render live via SSE with a blinking caret, braille spinners on tool calls, and a running-dot "thinking" indicator. `Esc` / `Ctrl+C` mid-turn aborts.
@@ -165,15 +165,15 @@ The `/model` dropdown pre-populates with ~210 named models across all twenty pro
 
 Everything important survives a restart.
 
-- **Messages** stream to SQLite as they arrive — no "unsaved" state. Store lives at `$XDG_DATA_HOME/telia/telia.sqlite` (Linux), `~/Library/Application Support/telia/telia.sqlite` (macOS), `%APPDATA%\telia\telia.sqlite` (Windows). `$XDG_DATA_HOME` wins on any platform when set.
-- **Auto-bookmarks** — every launch is tagged `last`; `/reset` rotates the outgoing session to `prev`. So `telia --resume` always picks up where you left off, and the run before that is recoverable with `/load prev`.
+- **Messages** stream to SQLite as they arrive — no "unsaved" state. Store lives at `$XDG_DATA_HOME/teleia/teleia.sqlite` (Linux), `~/Library/Application Support/teleia/teleia.sqlite` (macOS), `%APPDATA%\teleia\teleia.sqlite` (Windows). `$XDG_DATA_HOME` wins on any platform when set.
+- **Auto-bookmarks** — every launch is tagged `last`; `/reset` rotates the outgoing session to `prev`. So `teleia --resume` always picks up where you left off, and the run before that is recoverable with `/load prev`.
 - **Aliases** — `/save NAME` + `/load NAME` for sessions you want to keep by hand.
-- **Sticky preferences** — theme, `/notify` toggle, `/transparent` toggle, permission mode, active model, and per-provider API keys all persist (CLI flags override). Launching `telia` with no `--model` picks up wherever you last `/model`-ed.
+- **Sticky preferences** — theme, `/notify` toggle, `/transparent` toggle, permission mode, active model, and per-provider API keys all persist (CLI flags override). Launching `teleia` with no `--model` picks up wherever you last `/model`-ed.
 - **Input history** — last 500 submissions reload into the `Up`/`Down` recall buffer at startup, deduped against the most recent entry.
 
 ## Configuration
 
-Optional TOML at `$XDG_CONFIG_HOME/telia/config.toml` (Linux), or the OS-native config dir on macOS / Windows.
+Optional TOML at `$XDG_CONFIG_HOME/teleia/config.toml` (Linux), or the OS-native config dir on macOS / Windows.
 
 ```toml
 # Custom LLM endpoint. The name shows up in /model alongside the
@@ -202,7 +202,7 @@ command       = "rust-analyzer"
 root_patterns = ["Cargo.toml"]
 ```
 
-**MCP**: telia speaks newline-delimited JSON-RPC over stdio — `initialize` + `notifications/initialized` + `tools/list` + `tools/call` + `resources/list`. Spawn failures stderr-warn but don't abort boot. `/mcps` lists running servers with tool + resource counts.
+**MCP**: teleia speaks newline-delimited JSON-RPC over stdio — `initialize` + `notifications/initialized` + `tools/list` + `tools/call` + `resources/list`. Spawn failures stderr-warn but don't abort boot. `/mcps` lists running servers with tool + resource counts.
 
 **LSP**: real Content-Length-framed JSON-RPC client. Each configured server gets `initialize` + `initialized`. `/lsps` shows live status + advertised `serverInfo`. Document sync + hover/definition/diagnostics tools are not wired yet.
 
@@ -210,12 +210,12 @@ root_patterns = ["Cargo.toml"]
 
 ```
 crates/
-  telia-cli       # `telia` binary + TUI + MCP client + LSP client
-  telia-agent     # turn loop, 16-hop cap, permission gate, event stream
-  telia-llm       # chat / pull / tags streaming, provider detection
-  telia-tools     # 22 built-in tools
-  telia-tools-bin # same dispatch as a stdin/stdout CLI
-  telia-store     # sqlite session + prefs + input-history persistence
+  teleia-cli       # `teleia` binary + TUI + MCP client + LSP client
+  teleia-agent     # turn loop, 16-hop cap, permission gate, event stream
+  teleia-llm       # chat / pull / tags streaming, provider detection
+  teleia-tools     # 22 built-in tools
+  teleia-tools-bin # same dispatch as a stdin/stdout CLI
+  teleia-store     # sqlite session + prefs + input-history persistence
 ```
 
 Built on `ratatui` + `crossterm`, `reqwest` (rustls), `rusqlite` (bundled), `syntect` (no C deps), `arboard`, `rpassword`.

@@ -1,6 +1,6 @@
 //! Minimal MCP (Model Context Protocol) client. Spawns a server as a
 //! child process, exchanges newline-delimited JSON-RPC over its
-//! stdin/stdout, and exposes the server's tools to telia's agent.
+//! stdin/stdout, and exposes the server's tools to teleia's agent.
 //!
 //! Covers the bare minimum: `initialize` handshake, the
 //! `notifications/initialized` ack, `tools/list`, and `tools/call`.
@@ -16,8 +16,8 @@ use futures_util::future::BoxFuture;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use telia_agent::ToolRouter;
-use telia_llm::ToolDef;
+use teleia_agent::ToolRouter;
+use teleia_llm::ToolDef;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout, Command};
 
@@ -90,7 +90,7 @@ impl McpClient {
         let params = json!({
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {},
-            "clientInfo": { "name": "telia", "version": env!("CARGO_PKG_VERSION") },
+            "clientInfo": { "name": "teleia", "version": env!("CARGO_PKG_VERSION") },
         });
         let _ = self.request("initialize", params).await?;
         // Per spec, follow up with the `initialized` notification.
@@ -331,7 +331,7 @@ impl McpRegistry {
     }
 
     /// Spawn every configured MCP server, list their tools, and merge
-    /// them into the registry. Failures don't abort startup — telia
+    /// them into the registry. Failures don't abort startup — teleia
     /// keeps booting with whatever servers did come up, and the error
     /// is stashed in `warnings()` for the `/mcps` panel.
     ///

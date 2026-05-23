@@ -17,8 +17,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::path::Path;
-use telia_agent::ToolRouter;
-use telia_llm::ToolDef;
+use teleia_agent::ToolRouter;
+use teleia_llm::ToolDef;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout, Command};
 
@@ -127,7 +127,7 @@ impl LspClient {
                 },
                 "workspace": {}
             },
-            "clientInfo": { "name": "telia", "version": env!("CARGO_PKG_VERSION") },
+            "clientInfo": { "name": "teleia", "version": env!("CARGO_PKG_VERSION") },
         });
         let result = self.request("initialize", params).await?;
         // Pluck out serverInfo for the /lsps panel — purely informational.
@@ -349,7 +349,7 @@ pub struct LspRegistry {
 
 impl LspRegistry {
     /// Spawn every configured LSP server. Failures don't abort
-    /// startup — telia keeps booting and the error is stashed in
+    /// startup — teleia keeps booting and the error is stashed in
     /// `warnings()` for the `/lsps` panel.
     ///
     /// `on_step` is invoked once per entry with `(name, index, total)`
@@ -452,7 +452,7 @@ impl ToolRouter for LspRegistry {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Path to the file to diagnose (absolute or relative to telia's cwd)"
+                        "description": "Path to the file to diagnose (absolute or relative to teleia's cwd)"
                     }
                 },
                 "required": ["path"]

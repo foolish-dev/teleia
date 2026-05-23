@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
-use telia_llm::ToolDef;
+use teleia_llm::ToolDef;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
@@ -1078,7 +1078,7 @@ mod tests {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir().join(format!(
-            "telia-tools-test-{}-{}-{}",
+            "teleia-tools-test-{}-{}-{}",
             std::process::id(),
             n,
             name

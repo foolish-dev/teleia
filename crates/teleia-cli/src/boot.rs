@@ -1,5 +1,5 @@
 //! Pre-TUI loading splash. Renders a single line to stderr with the
-//! telia wordmark and the current boot phase, redrawing in place as
+//! teleia wordmark and the current boot phase, redrawing in place as
 //! the phase label changes. The line is wiped on `finish` (and on
 //! `Drop`) so nothing leaks into the terminal scrollback before
 //! [`crate::tui::run`] enters its alt-screen.

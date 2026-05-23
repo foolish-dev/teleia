@@ -1,9 +1,9 @@
-// Optional user-config file at $XDG_CONFIG_HOME/telia/config.toml
-// (falls back to ~/.config/telia/config.toml). Schema:
+// Optional user-config file at $XDG_CONFIG_HOME/teleia/config.toml
+// (falls back to ~/.config/teleia/config.toml). Schema:
 //
 //   # Register a custom LLM under the name "groq-llama".
 //   # When --model groq-llama is passed (or /model groq-llama is selected),
-//   # telia will use the configured base_url and pick up the API key from
+//   # teleia will use the configured base_url and pick up the API key from
 //   # `api_key_env` (env var name) or `api_key` (inline string).
 //   [llms.groq-llama]
 //   base_url    = "https://api.groq.com/openai/v1"
@@ -30,7 +30,7 @@ pub struct Config {
     pub mcps: BTreeMap<String, McpEntry>,
 }
 
-/// MCP (Model Context Protocol) server. telia spawns the command on
+/// MCP (Model Context Protocol) server. teleia spawns the command on
 /// startup, exchanges an `initialize` handshake, lists the server's
 /// tools, and merges them into the agent's tool catalogue. `env`
 /// values override the parent process for the spawned child only.
@@ -105,13 +105,13 @@ pub fn load() -> Config {
 
 /// Where the optional `config.toml` lives. Same precedence as the
 /// data path: `$XDG_CONFIG_HOME` first, then OS-native:
-/// - Linux  : `$HOME/.config/telia/config.toml`
-/// - macOS  : `$HOME/Library/Application Support/telia/config.toml`
-/// - Windows: `%APPDATA%\telia\config.toml`
+/// - Linux  : `$HOME/.config/teleia/config.toml`
+/// - macOS  : `$HOME/Library/Application Support/teleia/config.toml`
+/// - Windows: `%APPDATA%\teleia\config.toml`
 pub fn config_path() -> PathBuf {
     if let Some(v) = std::env::var_os("XDG_CONFIG_HOME") {
         if !v.is_empty() {
-            return PathBuf::from(v).join("telia").join("config.toml");
+            return PathBuf::from(v).join("teleia").join("config.toml");
         }
     }
     #[cfg(target_os = "macos")]
@@ -120,20 +120,20 @@ pub fn config_path() -> PathBuf {
         return PathBuf::from(home)
             .join("Library")
             .join("Application Support")
-            .join("telia")
+            .join("teleia")
             .join("config.toml");
     }
     #[cfg(target_os = "windows")]
     {
         let appdata = std::env::var_os("APPDATA").unwrap_or_default();
-        return PathBuf::from(appdata).join("telia").join("config.toml");
+        return PathBuf::from(appdata).join("teleia").join("config.toml");
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let home = std::env::var_os("HOME").unwrap_or_default();
         PathBuf::from(home)
             .join(".config")
-            .join("telia")
+            .join("teleia")
             .join("config.toml")
     }
 }

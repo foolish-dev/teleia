@@ -190,7 +190,7 @@ pub struct Provider {
     pub prefixes: &'static [&'static str],
 }
 
-/// All cloud providers telia knows about out of the box. The order
+/// All cloud providers teleia knows about out of the box. The order
 /// matters: detection scans top-to-bottom and returns the first match.
 /// Anything not matched falls back to a local Ollama endpoint.
 pub const PROVIDERS: &[Provider] = &[

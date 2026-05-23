@@ -13,7 +13,7 @@ The pieces:
   palette → matches the SVGs and the new TUI accents
 - compositor keybind that spawns the terminal with a recognisable
   `app-id` → so the floating rule can target it
-- floating + sized window rule pinned around the centre → telia is a
+- floating + sized window rule pinned around the centre → teleia is a
   full-screen-feel TUI but lives inside a small floating panel here
 
 ## Terminal — foot (or alacritty / kitty)
@@ -31,7 +31,7 @@ dpi-aware=yes
 
 [colors]
 # alpha < 1 makes the terminal background translucent. Combine with
-# the compositor blur rule below + `/transparent on` inside telia and
+# the compositor blur rule below + `/transparent on` inside teleia and
 # the wallpaper bleeds through with a Tokyo Night tint.
 alpha=0.85
 background=1a1b26
@@ -56,7 +56,7 @@ bright7=c0caf5
 
 (Alacritty / kitty equivalents land the same RGB values in their own
 syntax — the palette is Tokyo Night, lifted from the values in
-`crates/telia-cli/src/tui.rs`.)
+`crates/teleia-cli/src/tui.rs`.)
 
 ## Hyprland
 
@@ -64,20 +64,20 @@ syntax — the palette is Tokyo Night, lifted from the values in
 
 ```hyprland
 # τέλεια — float in the centre, bound to SUPER+L
-bind = SUPER, L, exec, foot --app-id=telia-float -e telia
+bind = SUPER, L, exec, foot --app-id=teleia-float -e teleia
 
-windowrulev2 = float,                     class:^(telia-float)$
-windowrulev2 = size 1240 760,             class:^(telia-float)$
-windowrulev2 = center,                    class:^(telia-float)$
-windowrulev2 = opacity 0.92 0.88 override, class:^(telia-float)$
-windowrulev2 = bordersize 2,              class:^(telia-float)$
-windowrulev2 = rounding 12,               class:^(telia-float)$
-windowrulev2 = animation slide,           class:^(telia-float)$
+windowrulev2 = float,                     class:^(teleia-float)$
+windowrulev2 = size 1240 760,             class:^(teleia-float)$
+windowrulev2 = center,                    class:^(teleia-float)$
+windowrulev2 = opacity 0.92 0.88 override, class:^(teleia-float)$
+windowrulev2 = bordersize 2,              class:^(teleia-float)$
+windowrulev2 = rounding 12,               class:^(teleia-float)$
+windowrulev2 = animation slide,           class:^(teleia-float)$
 # Blur the wallpaper behind the floating panel. Paired with `alpha`
-# in foot.ini + `/transparent on` inside telia, this gives the
+# in foot.ini + `/transparent on` inside teleia, this gives the
 # frosted-glass look the SVGs are styled after.
-windowrulev2 = noblur 0,                  class:^(telia-float)$
-windowrulev2 = xray on,                   class:^(telia-float)$
+windowrulev2 = noblur 0,                  class:^(teleia-float)$
+windowrulev2 = xray on,                   class:^(teleia-float)$
 
 # Tokyo Night borders that match the TUI accents
 general {
@@ -99,7 +99,7 @@ decoration {
 }
 ```
 
-`SUPER+L` opens a 1240×760 floating telia, centred, ~90% opaque,
+`SUPER+L` opens a 1240×760 floating teleia, centred, ~90% opaque,
 rounded corners, with a purple→cyan animated border that picks up the
 same gradient as the SVG banner — the wallpaper behind it is blurred
 by Hyprland so the translucent foot background reads as frosted glass.
@@ -109,14 +109,14 @@ by Hyprland so the translucent foot background reads as frosted glass.
 A drop-in config block lives at [`assets/niri-rice.kdl`](../assets/niri-rice.kdl) —
 copy it into `~/.config/niri/config.kdl` or `include` it. What it does:
 
-- **Dedicated `agent` workspace** — telia opens on its own named
+- **Dedicated `agent` workspace** — teleia opens on its own named
   workspace so it never gets shuffled in with editor windows.
   `Mod+'` jumps to it from anywhere.
 - **Idempotent launcher** — `Mod+L` runs `pgrep` first, so it
-  either focuses the existing telia or spawns a new one. No
+  either focuses the existing teleia or spawns a new one. No
   duplicate windows on accidental double-press.
-- **Spawn at startup** — `spawn-at-startup "foot" "--app-id=telia-float" "-e" "telia"`
-  prewarms telia in the background so the first `Mod+L` is instant.
+- **Spawn at startup** — `spawn-at-startup "foot" "--app-id=teleia-float" "-e" "teleia"`
+  prewarms teleia in the background so the first `Mod+L` is instant.
 - **Tokyo Night focus ring** — purple `#bb9af7` when focused,
   dim `#414868` when not. Borders are off; the focus ring carries
   the accent.
@@ -126,7 +126,7 @@ copy it into `~/.config/niri/config.kdl` or `include` it. What it does:
 - **90% opacity** so the wallpaper bleeds through. Niri doesn't ship
   window blur as of writing — for a frosted-glass look run a blurred
   wallpaper (e.g. `swww img --transition-type=none blurred.png`) and
-  pair it with `/transparent on` inside telia.
+  pair it with `/transparent on` inside teleia.
 
 ```kdl
 // minimal — the full version is in assets/niri-rice.kdl
@@ -134,7 +134,7 @@ copy it into `~/.config/niri/config.kdl` or `include` it. What it does:
 binds {
     Mod+L {
         spawn "sh" "-c"
-            "pgrep -f 'foot.*telia-float' >/dev/null || foot --app-id=telia-float -e telia";
+            "pgrep -f 'foot.*teleia-float' >/dev/null || foot --app-id=teleia-float -e teleia";
     }
     Mod+Apostrophe { focus-workspace "agent"; }
 }
@@ -142,7 +142,7 @@ binds {
 workspace "agent" {}
 
 window-rule {
-    match app-id="telia-float"
+    match app-id="teleia-float"
     open-on-workspace "agent"
     open-floating true
     default-column-width { fixed 1280; }
@@ -157,11 +157,11 @@ window-rule {
     opacity 0.90
 }
 
-spawn-at-startup "foot" "--app-id=telia-float" "-e" "telia"
+spawn-at-startup "foot" "--app-id=teleia-float" "-e" "teleia"
 ```
 
 Niri's scrolling layout pairs nicely with the chat-log paradigm —
-the workspace scrolls horizontally past the floating telia panel
+the workspace scrolls horizontally past the floating teleia panel
 just like the chat scrolls vertically past prior turns.
 
 ## Wallpaper
@@ -184,8 +184,8 @@ and the whole effect only lands when all three are on:
 2. **Compositor blur** — Hyprland's `decoration { blur { enabled = true } }`
    blurs whatever sits behind the translucent terminal. Niri has no
    native window blur as of writing; pre-blur the wallpaper instead.
-3. **TUI transparent mode** — `/transparent on` inside telia (or
-   `:transparent on`, or set `TELIA_TRANSPARENT=1` in your shell).
+3. **TUI transparent mode** — `/transparent on` inside teleia (or
+   `:transparent on`, or set `TELEIA_TRANSPARENT=1` in your shell).
    This swaps every `bg(theme.bg)` paint for `Color::Reset`, so the
    terminal alpha actually shows through instead of being masked by
    the TUI's own opaque Tokyo Night background. The preference
@@ -194,10 +194,10 @@ and the whole effect only lands when all three are on:
 Selection highlight, status chips, and mode badges keep their solid
 colours so they stay readable on top of the wallpaper.
 
-## Autotheme — fan telia's palette across the desktop
+## Autotheme — fan teleia's palette across the desktop
 
 [`grogu`](https://github.com/foolish-dev/grogu) is a standalone Rust
-binary that pushes telia's current theme out to the rest of the
+binary that pushes teleia's current theme out to the rest of the
 desktop. It lives in its own repo (not in this workspace) and writes
 four targets:
 
@@ -205,7 +205,7 @@ four targets:
   `~/.config/noctalia/settings.json` to the matching built-in scheme.
 - **niri** — writes `~/.config/niri/grogu.kdl`, an include-able
   snippet with focus-ring colours; niri live-reloads.
-- **telia** — writes the `theme` pref straight into telia's sqlite
+- **teleia** — writes the `theme` pref straight into teleia's sqlite
   prefs store (so `/theme` and grogu stay in lockstep either way).
 - **vim / neovim** — drops `colors/grogu.vim` into `~/.vim/` and/or
   `~/.config/nvim/`; activate with `:colorscheme grogu`.
@@ -222,14 +222,14 @@ Use:
 ```sh
 grogu list                       # tokyo-night, catppuccin, dracula
 grogu paths                      # everywhere grogu reads or writes
-grogu apply                      # pulls theme from telia's prefs
+grogu apply                      # pulls theme from teleia's prefs
 grogu apply --theme catppuccin
 grogu apply --no-vim --dry-run
 ```
 
-The default `grogu apply` reads the same `theme` row telia's
-`/theme NAME` slash command writes, so `inside telia: /theme dracula`
-→ `outside telia: grogu apply` keeps everything in sync without
+The default `grogu apply` reads the same `theme` row teleia's
+`/theme NAME` slash command writes, so `inside teleia: /theme dracula`
+→ `outside teleia: grogu apply` keeps everything in sync without
 re-typing the theme name.
 
 ### Trigger on Noctalia wallpaper rotation

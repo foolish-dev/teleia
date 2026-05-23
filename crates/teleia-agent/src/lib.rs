@@ -1,13 +1,13 @@
 use anyhow::Result;
 use async_stream::try_stream;
 use futures_util::{future::BoxFuture, pin_mut, Stream, StreamExt};
-use telia_llm::{ChatEvent, LlmClient, Message, ToolDef};
-use telia_store::Store;
+use teleia_llm::{ChatEvent, LlmClient, Message, ToolDef};
+use teleia_store::Store;
 
 /// External tool source — implemented by the CLI's MCP registry (and
 /// eventually LSP). The agent advertises `definitions()` alongside its
 /// built-ins, and routes any matching tool call back through
-/// `dispatch()` instead of the static `telia_tools::dispatch`.
+/// `dispatch()` instead of the static `teleia_tools::dispatch`.
 pub trait ToolRouter: Send {
     fn definitions(&self) -> Vec<ToolDef>;
     fn handles(&self, name: &str) -> bool;
@@ -170,7 +170,7 @@ impl Agent {
         let _ = store.save_alias("last", &session_id);
         let mut agent = Self {
             llm,
-            tools: telia_tools::definitions(),
+            tools: teleia_tools::definitions(),
             store,
             session_id,
             messages: Vec::new(),
@@ -198,7 +198,7 @@ impl Agent {
                 let seq = messages.len();
                 Ok(Self {
                     llm,
-                    tools: telia_tools::definitions(),
+                    tools: teleia_tools::definitions(),
                     store,
                     session_id: id,
                     messages,
@@ -216,7 +216,7 @@ impl Agent {
     /// Plug an external tool source into the agent. Its definitions
     /// are appended to the built-in tool list immediately; subsequent
     /// dispatches check the router before falling back to
-    /// `telia_tools`.
+    /// `teleia_tools`.
     pub fn set_tool_router(&mut self, router: Box<dyn ToolRouter>) {
         for def in router.definitions() {
             // Avoid duplicates if the user registers the same MCP twice.
@@ -499,7 +499,7 @@ impl Agent {
                             Err(e) => format!("error: {e}"),
                         }
                     } else {
-                        match telia_tools::dispatch(
+                        match teleia_tools::dispatch(
                             &call.function.name,
                             &call.function.arguments,
                         )

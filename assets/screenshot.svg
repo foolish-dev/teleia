@@ -65,23 +65,23 @@
     <!-- tool call 1 — grep with scope-aware highlight -->
     <text x="68" y="244" fill="#e0af68">⚙ grep({"pattern":"TODO|FIXME","path":"crates"})</text>
     <text x="90" y="262" font-size="13">
-      <tspan fill="#7dcfff">crates/telia-llm/src/lib.rs</tspan>
+      <tspan fill="#7dcfff">crates/teleia-llm/src/lib.rs</tspan>
       <tspan fill="#565f89">:142:</tspan>
       <tspan fill="#c0caf5">// TODO: surface refusal reason</tspan>
     </text>
     <text x="90" y="278" font-size="13">
-      <tspan fill="#7dcfff">crates/telia-cli/src/tui.rs</tspan>
+      <tspan fill="#7dcfff">crates/teleia-cli/src/tui.rs</tspan>
       <tspan fill="#565f89">:881:</tspan>
       <tspan fill="#c0caf5">// FIXME: handle CJK width</tspan>
     </text>
     <text x="90" y="294" font-size="13">
-      <tspan fill="#7dcfff">crates/telia-cli/src/mcp.rs</tspan>
+      <tspan fill="#7dcfff">crates/teleia-cli/src/mcp.rs</tspan>
       <tspan fill="#565f89">:178:</tspan>
       <tspan fill="#c0caf5">// TODO: cancellation</tspan>
     </text>
 
     <!-- tool call 2 — read with syntax highlight (Rust function) -->
-    <text x="68" y="326" fill="#e0af68">⚙ read({"path":"crates/telia-cli/src/mcp.rs"})</text>
+    <text x="68" y="326" fill="#e0af68">⚙ read({"path":"crates/teleia-cli/src/mcp.rs"})</text>
     <text x="90" y="344" font-size="13">
       <tspan fill="#bb9af7" font-weight="700">async fn</tspan>
       <tspan fill="#c0caf5"> </tspan>
@@ -99,8 +99,8 @@
     <!-- assistant 2 (streaming) -->
     <text x="68" y="396" fill="#bb9af7" font-weight="700">τέλεια ▌</text>
     <text x="68" y="418" fill="#c0caf5">three TODOs total, one per crate:</text>
-    <text x="68" y="436" fill="#c0caf5">  · telia-llm  · refusal surfacing</text>
-    <text x="68" y="454" fill="#c0caf5">  · telia-cli  · CJK width + MCP cancellation</text>
+    <text x="68" y="436" fill="#c0caf5">  · teleia-llm  · refusal surfacing</text>
+    <text x="68" y="454" fill="#c0caf5">  · teleia-cli  · CJK width + MCP cancellation</text>
 
     <!-- info line -->
     <text x="68" y="490" fill="#7aa2f7">· copied 124 chars to clipboard</text>
@@ -120,7 +120,7 @@
       <tspan fill="#565f89">approve </tspan>
       <tspan fill="#bb9af7" font-weight="700">edit</tspan>
       <tspan fill="#565f89">(</tspan>
-      <tspan fill="#c0caf5">crates/telia-llm/src/lib.rs, "// TODO:…", "// done:…"</tspan>
+      <tspan fill="#c0caf5">crates/teleia-llm/src/lib.rs, "// TODO:…", "// done:…"</tspan>
       <tspan fill="#565f89">) ?</tspan>
     </text>
     <text x="72" y="562" font-family="'JetBrainsMonoNF-Regular', 'JetBrains Mono Nerd Font', 'JetBrains Mono', Iosevka, monospace" font-size="13">
@@ -155,6 +155,6 @@
   <!-- footer hint -->
   <text x="550" y="708" text-anchor="middle"
         font-family="'JetBrainsMonoNF-Regular', 'JetBrains Mono Nerd Font', 'JetBrains Mono', Iosevka, monospace" font-size="11" fill="#414868" font-style="italic">
-    Shift+Tab cycles PLAN · BUILD · AUTO · telia --resume picks up where you left off · powered by λ τέλεια
+    Shift+Tab cycles PLAN · BUILD · AUTO · teleia --resume picks up where you left off · powered by λ τέλεια
   </text>
 </svg>

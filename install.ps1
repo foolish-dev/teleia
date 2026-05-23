@@ -1,8 +1,8 @@
-# Telia (τέλεια) installer for Windows — auto-detects platform, downloads
+# Teleia (τέλεια) installer for Windows — auto-detects platform, downloads
 # the latest prebuilt binary from GitHub Releases, falls back to a cargo
 # source build if no release exists for this platform.
 # Usage:
-#   irm https://raw.githubusercontent.com/foolish-dev/telia/dev/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/foolish-dev/teleia/dev/install.ps1 | iex
 # Overrides:
 #   $env:PREFIX = "C:\Tools"      # default: $env:USERPROFILE\.local\bin
 #   $env:TAG = "v0.2.0"           # pin a release tag (default: latest)
@@ -14,9 +14,9 @@ $ErrorActionPreference = 'Stop'
 $Prefix = if ($env:PREFIX) { $env:PREFIX } else { Join-Path $env:USERPROFILE '.local\bin' }
 $Branch = if ($env:BRANCH) { $env:BRANCH } else { 'dev' }
 $Tag    = if ($env:TAG)    { $env:TAG }    else { 'latest' }
-$Repo   = 'https://github.com/foolish-dev/telia'
+$Repo   = 'https://github.com/foolish-dev/teleia'
 
-$Tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("telia-" + [System.Guid]::NewGuid().ToString('N'))
+$Tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("teleia-" + [System.Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $Tmp | Out-Null
 
 function Need($cmd, $hint) {
@@ -37,13 +37,13 @@ function Detect-Target {
 
 function Try-Prebuilt($target) {
     $url = if ($Tag -eq 'latest') {
-        "$Repo/releases/latest/download/telia-$target.exe"
+        "$Repo/releases/latest/download/teleia-$target.exe"
     } else {
-        "$Repo/releases/download/$Tag/telia-$target.exe"
+        "$Repo/releases/download/$Tag/teleia-$target.exe"
     }
     Write-Host "fetching τέλεια binary ($target)..."
     try {
-        Invoke-WebRequest -Uri $url -OutFile (Join-Path $Tmp 'telia.exe') -UseBasicParsing
+        Invoke-WebRequest -Uri $url -OutFile (Join-Path $Tmp 'teleia.exe') -UseBasicParsing
         return $true
     } catch {
         return $false
@@ -61,12 +61,12 @@ function From-Source {
     Write-Host "building..."
     Push-Location (Join-Path $Tmp 'src')
     try {
-        cargo build --release --bin telia
+        cargo build --release --bin teleia
         if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
     } finally {
         Pop-Location
     }
-    Copy-Item -Force (Join-Path $Tmp 'src\target\release\telia.exe') (Join-Path $Tmp 'telia.exe')
+    Copy-Item -Force (Join-Path $Tmp 'src\target\release\teleia.exe') (Join-Path $Tmp 'teleia.exe')
 }
 
 try {
@@ -86,8 +86,8 @@ try {
     }
 
     New-Item -ItemType Directory -Force -Path $Prefix | Out-Null
-    $Dst = Join-Path $Prefix 'telia.exe'
-    Copy-Item -Force (Join-Path $Tmp 'telia.exe') $Dst
+    $Dst = Join-Path $Prefix 'teleia.exe'
+    Copy-Item -Force (Join-Path $Tmp 'teleia.exe') $Dst
     Write-Host "installed: $Dst"
 
     $UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')

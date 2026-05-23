@@ -10,7 +10,7 @@
 use serde::Deserialize;
 use std::time::Duration;
 
-const RELEASES_URL: &str = "https://api.github.com/repos/foolish-dev/telia/releases/latest";
+const RELEASES_URL: &str = "https://api.github.com/repos/foolish-dev/teleia/releases/latest";
 
 /// Cached snapshot of the update-check result. `None` means the check
 /// itself failed (offline, rate-limited, repo without releases).
@@ -39,7 +39,7 @@ struct Release {
 pub async fn check() -> Option<UpdateCheck> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
-        .user_agent(format!("telia/{}", env!("CARGO_PKG_VERSION")))
+        .user_agent(format!("teleia/{}", env!("CARGO_PKG_VERSION")))
         .build()
         .ok()?;
     let resp = client.get(RELEASES_URL).send().await.ok()?;
@@ -54,7 +54,7 @@ pub async fn check() -> Option<UpdateCheck> {
     let latest = release.tag_name.trim_start_matches('v').to_string();
     let url = release
         .html_url
-        .unwrap_or_else(|| "https://github.com/foolish-dev/telia/releases".to_string());
+        .unwrap_or_else(|| "https://github.com/foolish-dev/teleia/releases".to_string());
     let newer = version_is_newer(&latest, &current);
     Some(UpdateCheck {
         current,

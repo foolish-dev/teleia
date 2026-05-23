@@ -1,9 +1,9 @@
 #!/usr/bin/env sh
-# Telia (τέλεια) installer — auto-detects platform, downloads the latest
+# Teleia (τέλεια) installer — auto-detects platform, downloads the latest
 # prebuilt binary from GitHub Releases, falls back to a cargo source
 # build if no release exists for this platform.
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/foolish-dev/telia/dev/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/foolish-dev/teleia/dev/install.sh | sh
 # Overrides:
 #   PREFIX=/usr/local/bin   # default: $HOME/.local/bin
 #   TAG=v0.2.0              # pin a release tag (default: latest)
@@ -15,7 +15,7 @@ set -eu
 PREFIX="${PREFIX:-$HOME/.local/bin}"
 BRANCH="${BRANCH:-dev}"
 TAG="${TAG:-latest}"
-REPO="https://github.com/foolish-dev/telia"
+REPO="https://github.com/foolish-dev/teleia"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT INT TERM
@@ -66,12 +66,12 @@ try_prebuilt() {
     target="$1"
     command -v curl >/dev/null 2>&1 || return 1
     if [ "$TAG" = "latest" ]; then
-        url="$REPO/releases/latest/download/telia-$target"
+        url="$REPO/releases/latest/download/teleia-$target"
     else
-        url="$REPO/releases/download/$TAG/telia-$target"
+        url="$REPO/releases/download/$TAG/teleia-$target"
     fi
     echo "fetching τέλεια binary ($target)..."
-    curl -fsSL --output "$TMP/telia" "$url"
+    curl -fsSL --output "$TMP/teleia" "$url"
 }
 
 from_source() {
@@ -80,8 +80,8 @@ from_source() {
     echo "fetching τέλεια source ($BRANCH)..."
     git clone --depth 1 --branch "$BRANCH" "$REPO.git" "$TMP/src"
     echo "building..."
-    (cd "$TMP/src" && cargo build --release --bin telia)
-    cp "$TMP/src/target/release/telia" "$TMP/telia"
+    (cd "$TMP/src" && cargo build --release --bin teleia)
+    cp "$TMP/src/target/release/teleia" "$TMP/teleia"
 }
 
 if [ "${FROM_SOURCE:-0}" = "1" ]; then
@@ -94,9 +94,9 @@ else
 fi
 
 mkdir -p "$PREFIX"
-chmod +x "$TMP/telia"
-mv "$TMP/telia" "$PREFIX/telia"
-echo "installed: $PREFIX/telia"
+chmod +x "$TMP/teleia"
+mv "$TMP/teleia" "$PREFIX/teleia"
+echo "installed: $PREFIX/teleia"
 
 case ":$PATH:" in
     *":$PREFIX:"*) ;;

@@ -21,7 +21,7 @@ use ratatui::{
     Terminal,
 };
 use std::{io, time::Duration};
-use telia_agent::{Agent, PermissionMode, TokenCounts, ToolApproval, TurnEvent};
+use teleia_agent::{Agent, PermissionMode, TokenCounts, ToolApproval, TurnEvent};
 
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -403,7 +403,7 @@ struct State {
     /// Index into `input_history` when the user is browsing past inputs via
     /// Up/Down. `None` means "not currently recalling".
     recall_idx: Option<usize>,
-    /// Host this telia process is running on — surfaced in the log block
+    /// Host this teleia process is running on — surfaced in the log block
     /// title so remote sessions are visually distinct from local ones.
     hostname: String,
     /// Login name of the user driving the session — used as the header on
@@ -604,7 +604,7 @@ pub async fn run(
 ) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    // Mouse capture forwards wheel events to telia so the log can scroll
+    // Mouse capture forwards wheel events to teleia so the log can scroll
     // with the wheel. The cost is that drag-to-select in the terminal
     // stops working as-is — most emulators expose Shift+drag (or a
     // similar modifier) as "send to terminal, ignore app capture" so
@@ -624,11 +624,11 @@ pub async fn run(
         state.notify = v == "on";
     }
     // Transparent background: stored pref wins; otherwise honour
-    // `TELIA_TRANSPARENT=1` so users can opt in via their shell env.
+    // `TELEIA_TRANSPARENT=1` so users can opt in via their shell env.
     if let Some(v) = agent.get_pref("transparent") {
         set_transparent(v == "on");
     } else if matches!(
-        std::env::var("TELIA_TRANSPARENT").as_deref(),
+        std::env::var("TELEIA_TRANSPARENT").as_deref(),
         Ok("1") | Ok("on") | Ok("true")
     ) {
         set_transparent(true);
@@ -644,7 +644,7 @@ pub async fn run(
         .map(|u| (u.latest.clone(), u.current.clone(), u.url.clone()));
     if let Some((latest, current, url)) = new_release {
         let msg = format!(
-            "update available: telia v{latest} (you're on v{current})\n  {url}\n  run /update for the upgrade command"
+            "update available: teleia v{latest} (you're on v{current})\n  {url}\n  run /update for the upgrade command"
         );
         state.push(Entry::Info(msg));
         if state.notify {
@@ -1359,10 +1359,10 @@ fn compute_menu(input: &str, aliases: &[String], models: &[String]) -> Option<Me
         }
         if cmd == "key" {
             // Provider names are TitleCase ("OpenAI", "OpenRouter") but
-            // resolution elsewhere in telia is case-insensitive, so the
+            // resolution elsewhere in teleia is case-insensitive, so the
             // dropdown matches that — `/key open` → both providers.
             let arg_lc = arg.to_ascii_lowercase();
-            let items: Vec<String> = telia_llm::PROVIDERS
+            let items: Vec<String> = teleia_llm::PROVIDERS
                 .iter()
                 .map(|p| p.name.to_string())
                 .filter(|n| n.to_ascii_lowercase().starts_with(&arg_lc))
@@ -1897,7 +1897,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                 // saved, Enter with an empty buffer keeps it; Esc
                 // dismisses without touching it. Ollama models skip
                 // this — no provider, no key needed.
-                if let Some(prov) = telia_llm::provider_for_model(arg) {
+                if let Some(prov) = teleia_llm::provider_for_model(arg) {
                     state.pending_key_entry = Some(KeyEntry {
                         provider: prov.name.to_string(),
                         env_var: prov.env_var.to_string(),
@@ -1916,11 +1916,11 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
             // check would block the event loop.
             let body = match &state.update_check {
                 Some(uc) if uc.newer => format!(
-                    "update available: telia v{} (you're on v{})\n  {}\n\n  cargo install --git https://github.com/foolish-dev/telia telia-cli --force\n  # or re-run the install.sh one-liner",
+                    "update available: teleia v{} (you're on v{})\n  {}\n\n  cargo install --git https://github.com/foolish-dev/teleia teleia-cli --force\n  # or re-run the install.sh one-liner",
                     uc.latest, uc.current, uc.url
                 ),
                 Some(uc) => format!(
-                    "telia v{} is the latest release · you're on v{}",
+                    "teleia v{} is the latest release · you're on v{}",
                     uc.latest, uc.current
                 ),
                 None => "update check unavailable (offline, rate-limited, or no releases yet)"
@@ -1930,13 +1930,13 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
         }
         "mcps" => {
             let text = state.mcp_summary.clone().unwrap_or_else(|| {
-                "no MCP servers configured. Add `[mcps.NAME]` entries to ~/.config/telia/config.toml.".to_string()
+                "no MCP servers configured. Add `[mcps.NAME]` entries to ~/.config/teleia/config.toml.".to_string()
             });
             state.push(Entry::Info(text));
         }
         "lsps" => {
             let text = state.lsp_summary.clone().unwrap_or_else(|| {
-                "no LSP servers configured. Add `[lsps.NAME]` entries to ~/.config/telia/config.toml.".to_string()
+                "no LSP servers configured. Add `[lsps.NAME]` entries to ~/.config/teleia/config.toml.".to_string()
             });
             state.push(Entry::Info(text));
         }
@@ -1966,12 +1966,12 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
             // /key PROVIDER  →  open the hidden-input prompt for that provider
             // /key           →  short usage hint pointing at /keys
             if arg.is_empty() {
-                let names: Vec<&str> = telia_llm::PROVIDERS.iter().map(|p| p.name).collect();
+                let names: Vec<&str> = teleia_llm::PROVIDERS.iter().map(|p| p.name).collect();
                 state.push(Entry::Info(format!(
                     "usage: /key PROVIDER  (one of: {})\n  or /keys to list status",
                     names.join(", ")
                 )));
-            } else if let Some(prov) = telia_llm::PROVIDERS
+            } else if let Some(prov) = teleia_llm::PROVIDERS
                 .iter()
                 .find(|p| p.name.eq_ignore_ascii_case(arg))
             {
@@ -1989,7 +1989,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                     existing,
                 });
             } else {
-                let names: Vec<&str> = telia_llm::PROVIDERS.iter().map(|p| p.name).collect();
+                let names: Vec<&str> = teleia_llm::PROVIDERS.iter().map(|p| p.name).collect();
                 state.push(Entry::Error(format!(
                     "unknown provider '{arg}'. known: {}",
                     names.join(", ")
@@ -1997,9 +1997,9 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
             }
         }
         "keys" => {
-            let active = telia_llm::provider_for_model(&state.model);
+            let active = teleia_llm::provider_for_model(&state.model);
             let mut text = String::from("api keys (env var → status)");
-            for p in telia_llm::PROVIDERS {
+            for p in teleia_llm::PROVIDERS {
                 let set = std::env::var(p.env_var)
                     .map(|v| !v.is_empty())
                     .unwrap_or(false);
@@ -2097,14 +2097,14 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
         }
         "tools" => {
             let defs = agent.tools();
-            let builtin_names: std::collections::HashSet<String> = telia_tools::definitions()
+            let builtin_names: std::collections::HashSet<String> = teleia_tools::definitions()
                 .into_iter()
                 .map(|d| d.function.name)
                 .collect();
             let (builtin, mcp): (Vec<_>, Vec<_>) = defs
                 .iter()
                 .partition(|d| builtin_names.contains(&d.function.name));
-            let summarise = |d: &telia_llm::ToolDef| {
+            let summarise = |d: &teleia_llm::ToolDef| {
                 let first_line = d
                     .function
                     .description
@@ -3079,7 +3079,7 @@ fn cursor_visual_pos(
 /// after the last '/', then drop the Ollama quant tag from the first ':'.
 /// Leaves short names like "llama3" alone.
 fn short_model(model: &str) -> &str {
-    let resolved = telia_llm::resolve_model_name(model);
+    let resolved = teleia_llm::resolve_model_name(model);
     let tail = resolved.rsplit('/').next().unwrap_or(resolved);
     tail.split(':').next().unwrap_or(tail)
 }
@@ -3438,7 +3438,7 @@ fn welcome_banner(width: u16, frame: usize) -> Vec<Line<'static>> {
     // stacked thing.
     out.push(Line::from(""));
 
-    // Pixel-art λ — the telia brand mark, painted in the Tokyo Night
+    // Pixel-art λ — the teleia brand mark, painted in the Tokyo Night
     // gradient (cyan → blue → purple top-down). Sits between the
     // distro art and the wordmark to tie the two together.
     const LAMBDA: &[&str] = &[
@@ -4235,7 +4235,7 @@ mod tests {
     fn menu_key_lists_providers() {
         let m = compute_menu("/key ", &[], &[]).unwrap();
         assert_eq!(m.kind, MenuKind::Theme);
-        assert_eq!(m.items.len(), telia_llm::PROVIDERS.len());
+        assert_eq!(m.items.len(), teleia_llm::PROVIDERS.len());
     }
 
     #[test]

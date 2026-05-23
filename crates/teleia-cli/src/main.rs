@@ -11,11 +11,11 @@ use anyhow::Result;
 use clap::Parser;
 use futures_util::{pin_mut, StreamExt};
 use std::io::{BufRead, IsTerminal, Write};
-use telia_agent::Agent;
-use telia_llm::{detect_endpoint, looks_like_ollama, LlmClient, PullProgress};
-use telia_store::Store;
+use teleia_agent::Agent;
+use teleia_llm::{detect_endpoint, looks_like_ollama, LlmClient, PullProgress};
+use teleia_store::Store;
 
-/// Local Ollama models telia tries to keep cached on startup so `/model`
+/// Local Ollama models teleia tries to keep cached on startup so `/model`
 /// can switch between them without a fresh download. The active `--model`
 /// is added to this set automatically if it isn't already in it. Only
 /// pulled when the resolved base URL looks like Ollama.
@@ -30,7 +30,7 @@ const DEFAULT_OLLAMA_MODELS: &[&str] = &[
 
 /// Cloud models surfaced in the `/model` dropdown even though they
 /// aren't backed by anything that can be `ollama pull`-ed. Selecting
-/// one of these effectively routes telia's chat requests through that
+/// one of these effectively routes teleia's chat requests through that
 /// provider; the API key comes from `--api-key` or the env-var fallback
 /// inside `detect_endpoint`. `provider:model` form is used for entries
 /// whose bare name would collide with an Ollama-hosted local model
@@ -39,7 +39,7 @@ const DEFAULT_OLLAMA_MODELS: &[&str] = &[
 /// Best-effort snapshot of the major providers' public chat-completions
 /// catalogs as of early 2026. Names that 404 at request time are easy
 /// to spot in the error log and easy to override via the config file
-/// (see `crates/telia-cli/src/config.rs`).
+/// (see `crates/teleia-cli/src/config.rs`).
 #[rustfmt::skip]
 const KNOWN_CLOUD_MODELS: &[&str] = &[
     // ---------- Anthropic ----------
@@ -310,7 +310,7 @@ const KNOWN_CLOUD_MODELS: &[&str] = &[
                   menus for slash commands and saved aliases, ghost-text suggestions, readline-style input \
                   history (Up/Down), Tokyo Night / Catppuccin / Dracula themes, a token tracker, and \
                   desktop notifications when a turn completes. Sessions live in SQLite at \
-                  $XDG_DATA_HOME/telia/telia.sqlite and can be saved or loaded by alias across runs.\n\
+                  $XDG_DATA_HOME/teleia/teleia.sqlite and can be saved or loaded by alias across runs.\n\
                   \n\
                   When the resolved endpoint looks like Ollama, missing models trigger an interactive \
                   pull prompt with an animated progress bar; pass --pull-yes to auto-confirm or --no-pull \
@@ -337,7 +337,7 @@ struct Args {
     /// $FIREWORKS_API_KEY, $CEREBRAS_API_KEY, $HYPERBOLIC_API_KEY,
     /// $NVIDIA_API_KEY, $AI21_API_KEY, $ANYSCALE_API_KEY,
     /// $LEPTON_API_KEY, $DEEPINFRA_API_KEY, $SAMBANOVA_API_KEY. Run
-    /// /keys inside telia to see which are set. Ignored for Ollama.
+    /// /keys inside teleia to see which are set. Ignored for Ollama.
     #[arg(long)]
     api_key: Option<String>,
     /// Colour theme. Known: tokyo-night (default), catppuccin, dracula.
@@ -349,7 +349,7 @@ struct Args {
     #[arg(long)]
     no_pull: bool,
     /// Auto-confirm every "pull this model?" prompt during the
-    /// pre-flight. Without this flag, telia asks interactively for
+    /// pre-flight. Without this flag, teleia asks interactively for
     /// each missing model (non-interactive runs default to yes so
     /// scripts don't hang on stdin).
     #[arg(long, alias = "yes", short = 'y')]
@@ -424,7 +424,7 @@ async fn main() -> Result<()> {
         detect_endpoint(&model)
     };
     let base_url = args.base_url.unwrap_or(auto_url);
-    let stored_key = telia_llm::provider_for_model(&model).and_then(|p| {
+    let stored_key = teleia_llm::provider_for_model(&model).and_then(|p| {
         store
             .get_pref(&pref_key_for(p.env_var))
             .ok()
@@ -438,7 +438,7 @@ async fn main() -> Result<()> {
     // isn't a TTY (scripts, pipes, CI) so unattended runs keep working
     // with whatever the env said. On success, persist for next launch.
     if api_key.is_none() {
-        if let Some(prov) = telia_llm::provider_for_model(&model) {
+        if let Some(prov) = teleia_llm::provider_for_model(&model) {
             if let Some(key) = prompt_api_key(prov) {
                 let _ = store.set_pref(&pref_key_for(prov.env_var), &key);
                 api_key = Some(key);
@@ -480,9 +480,9 @@ async fn main() -> Result<()> {
     // get_pref returns None.
     if let Some(mode) = agent.get_pref("permission_mode") {
         match mode.as_str() {
-            "Plan" => agent.set_permission_mode(telia_agent::PermissionMode::Plan),
-            "Build" => agent.set_permission_mode(telia_agent::PermissionMode::Build),
-            "Auto" => agent.set_permission_mode(telia_agent::PermissionMode::Auto),
+            "Plan" => agent.set_permission_mode(teleia_agent::PermissionMode::Plan),
+            "Build" => agent.set_permission_mode(teleia_agent::PermissionMode::Build),
+            "Auto" => agent.set_permission_mode(teleia_agent::PermissionMode::Auto),
             _ => {}
         }
     }
@@ -493,9 +493,9 @@ async fn main() -> Result<()> {
     // already surfaces the active mode, so no boot-line announcement
     // is needed here.
     if args.auto {
-        agent.set_permission_mode(telia_agent::PermissionMode::Auto);
+        agent.set_permission_mode(teleia_agent::PermissionMode::Auto);
     } else if args.plan {
-        agent.set_permission_mode(telia_agent::PermissionMode::Plan);
+        agent.set_permission_mode(teleia_agent::PermissionMode::Plan);
     }
 
     // Boot splash: single-line stderr indicator that updates as each
@@ -524,7 +524,7 @@ async fn main() -> Result<()> {
     boot.step("refreshing models");
     agent.refresh_models().await;
     // Surface the two FoolDev HF GGUFs in the dropdown even when Ollama
-    // hasn't pulled them yet — they're telia's headline local picks.
+    // hasn't pulled them yet — they're teleia's headline local picks.
     agent.extend_models(DEFAULT_OLLAMA_MODELS.iter().copied());
     agent.extend_models(KNOWN_CLOUD_MODELS.iter().copied());
     // Custom LLM names from config become first-class /model targets too.
@@ -641,7 +641,7 @@ async fn main() -> Result<()> {
     // `handles()`. Empty router skipped so the agent's built-in tools
     // stay the only option when neither registry has anything to add.
     {
-        let mut routers: Vec<Box<dyn telia_agent::ToolRouter>> = Vec::new();
+        let mut routers: Vec<Box<dyn teleia_agent::ToolRouter>> = Vec::new();
         if let Some(r) = mcp_registry {
             routers.push(Box::new(r));
         }
@@ -698,7 +698,7 @@ fn apply_theme_from_store(store: &Store) {
     }
 }
 
-fn apply_theme_from_agent(agent: &telia_agent::Agent) {
+fn apply_theme_from_agent(agent: &teleia_agent::Agent) {
     let custom = agent
         .get_pref("grogu_palette")
         .filter(|s| !s.trim().is_empty())
@@ -795,7 +795,7 @@ pub fn pref_key_for(env_var: &str) -> String {
 /// the user declines, or the typed string is empty. The key lives in
 /// process memory only — persistence is up to the user (env var or the
 /// `[llms.NAME]` config entry).
-fn prompt_api_key(prov: &telia_llm::Provider) -> Option<String> {
+fn prompt_api_key(prov: &teleia_llm::Provider) -> Option<String> {
     if !std::io::stdin().is_terminal() {
         return None;
     }
