@@ -211,16 +211,16 @@ fn data_path() -> Result<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         let home = std::env::var_os("HOME").context("HOME not set")?;
-        return Ok(PathBuf::from(home)
+        Ok(PathBuf::from(home)
             .join("Library")
             .join("Application Support")
             .join("teleia")
-            .join("teleia.sqlite"));
+            .join("teleia.sqlite"))
     }
     #[cfg(target_os = "windows")]
     {
         let appdata = std::env::var_os("APPDATA").context("APPDATA not set")?;
-        return Ok(PathBuf::from(appdata).join("teleia").join("teleia.sqlite"));
+        Ok(PathBuf::from(appdata).join("teleia").join("teleia.sqlite"))
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
