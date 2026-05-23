@@ -1172,6 +1172,7 @@ mod tests {
         assert!(dispatch("nonsense", "{}").await.is_err());
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn bash_returns_stdout() {
         let args = json!({ "command": "echo hello" }).to_string();
@@ -1179,6 +1180,7 @@ mod tests {
         assert!(result.contains("hello"));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn bash_reports_nonzero_exit() {
         let args = json!({ "command": "exit 7" }).to_string();
@@ -1186,6 +1188,7 @@ mod tests {
         assert!(result.contains("[exit 7]"));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn bash_merges_stderr_into_stdout() {
         let args = json!({ "command": "echo out; echo err >&2" }).to_string();
@@ -1330,6 +1333,7 @@ mod tests {
         assert!(out.contains("size:  5 bytes"));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn which_finds_sh_on_path() {
         // Every Unix-like host has /bin/sh on $PATH.
