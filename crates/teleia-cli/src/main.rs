@@ -21,10 +21,10 @@ use teleia_store::Store;
 /// pulled when the resolved base URL looks like Ollama.
 /// Active model on first launch — also used to detect "user didn't
 /// supply --model" so a saved `current_model` pref can take over.
-const DEFAULT_MODEL: &str = "hf.co/FoolDev/Thanatos-27B:Q4_K_M";
+const DEFAULT_MODEL: &str = "hf.co/FoolDev/Thanatos-27B-Heretic:Q4_K_M";
 
 const DEFAULT_OLLAMA_MODELS: &[&str] = &[
-    "hf.co/FoolDev/Thanatos-27B:Q4_K_M",
+    "hf.co/FoolDev/Thanatos-27B-Heretic:Q4_K_M",
     "hf.co/FoolDev/Janus-35B:Q4_K_M",
 ];
 
@@ -722,7 +722,7 @@ fn apply_theme_from_agent(agent: &teleia_agent::Agent) {
 /// cached, prompt the user (or auto-confirm when `pull_yes` is set or
 /// stdin isn't a TTY) and on a "yes" stream `/api/pull` with an
 /// animated progress bar. Models like the default
-/// `hf.co/FoolDev/Thanatos-27B:Q4_K_M` resolve to a HuggingFace pull
+/// `hf.co/FoolDev/Thanatos-27B-Heretic:Q4_K_M` resolve to a HuggingFace pull
 /// automatically via Ollama's bridge.
 ///
 /// If `/api/show` is unreachable (non-Ollama backend, or Ollama not
