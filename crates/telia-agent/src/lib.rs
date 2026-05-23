@@ -14,7 +14,7 @@ pub trait ToolRouter: Send {
     fn dispatch<'a>(&'a mut self, name: &'a str, args: &'a str) -> BoxFuture<'a, Result<String>>;
 }
 
-mod kaparthy;
+mod karpathy;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TokenCounts {
@@ -29,9 +29,9 @@ format, typecheck (plus any MCP tools the user has configured). After any code c
 `lint`/`typecheck` to confirm the edit before claiming done. Default to brief replies. When \
 you finish a turn, stop — do not narrate.";
 
-/// Base prompt + the kaparthy-derived guidelines, joined once at startup.
+/// Base prompt + the karpathy-derived guidelines, joined once at startup.
 fn system_prompt() -> String {
-    format!("{SYSTEM_PROMPT_BASE}\n\n{}", kaparthy::GUIDELINES)
+    format!("{SYSTEM_PROMPT_BASE}\n\n{}", karpathy::GUIDELINES)
 }
 
 pub const MAX_TOOL_HOPS: usize = 16;

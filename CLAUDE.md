@@ -52,5 +52,5 @@ reproduces the bug first.
 ---
 
 The same four principles are baked into telia's own agent system prompt at
-`crates/telia-agent/src/kaparthy.rs` — keep the two in sync when editing
+`crates/telia-agent/src/karpathy.rs` — keep the two in sync when editing
 either.
