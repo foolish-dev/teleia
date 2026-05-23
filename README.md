@@ -22,14 +22,21 @@
 ## Install
 
 ```sh
-# one-liner: clones, builds, drops `telia` into ~/.local/bin
+# Linux / macOS — clones, builds, drops `telia` into ~/.local/bin
 curl -fsSL https://raw.githubusercontent.com/foolish-dev/telia/dev/install.sh | sh
+```
 
-# or via cargo
+```powershell
+# Windows (PowerShell) — drops `telia.exe` into %USERPROFILE%\.local\bin
+irm https://raw.githubusercontent.com/foolish-dev/telia/dev/install.ps1 | iex
+```
+
+```sh
+# any platform with Rust installed
 cargo install --git https://github.com/foolish-dev/telia telia-cli
 ```
 
-`PREFIX=/usr/local/bin sh` overrides the install location. `cargo run --release` works from a workspace clone.
+Override the install location with `PREFIX=/usr/local/bin sh` (Unix) or `$env:PREFIX = 'C:\Tools'` before `iex` (Windows). `cargo run --release` works from a workspace clone.
 
 ## Run
 
