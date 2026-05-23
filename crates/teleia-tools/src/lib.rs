@@ -334,7 +334,9 @@ async fn bash_tool(args: Value) -> Result<String> {
     cmd.arg("-lc").arg(&command).stdout(Stdio::piped());
     // SAFETY: pre_exec runs in the forked child before exec. dup2(1, 2)
     // routes the child's stderr fd onto stdout's pipe, so writes from
-    // both streams land in one buffer in emit order.
+    // both streams land in one buffer in emit order. Unix-only; on
+    // other platforms stderr stays on the inherited fd.
+    #[cfg(unix)]
     unsafe {
         cmd.pre_exec(|| {
             if libc::dup2(1, 2) == -1 {
@@ -806,10 +808,11 @@ fn filetime_set(path: &str, t: std::time::SystemTime) -> std::io::Result<()> {
         .write(true)
         .custom_flags(0)
         .open(path)?;
-    // utimensat via libc — keep deps minimal.
+    // utimensat via libc — keep deps minimal. `time_t` is i32 on 32-bit
+    // unix targets and i64 elsewhere; cast through the platform alias.
     let secs = t
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
+        .map(|d| d.as_secs() as libc::time_t)
         .unwrap_or(0);
     let tv = [
         libc::timespec {

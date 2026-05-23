@@ -21,7 +21,7 @@
 
 ## Install
 
-Auto-detects your platform, downloads the latest prebuilt binary from GitHub Releases, falls back to a cargo source build if no prebuilt exists. Prebuilts cover Linux (x86_64 · aarch64 · armv7 · i686 · riscv64 · ppc64le · s390x), macOS (Intel + Apple Silicon), Windows (x86_64 · ARM64 · i686, MSVC + MinGW), FreeBSD, NetBSD, and illumos.
+Auto-detects your platform, downloads the latest prebuilt binary from GitHub Releases, falls back to a cargo source build if no prebuilt exists. Prebuilts cover Linux (x86_64 · aarch64 · armv7 · i686 · riscv64 · ppc64le · s390x), macOS (Intel + Apple Silicon), Windows (x86_64 · ARM64 · i686, MSVC + MinGW), and FreeBSD.
 
 ```sh
 # Linux / macOS — drops `teleia` into ~/.local/bin
@@ -38,11 +38,15 @@ irm https://raw.githubusercontent.com/foolish-dev/teleia/dev/install.ps1 | iex
 cargo install --git https://github.com/foolish-dev/teleia teleia-cli
 ```
 
+After install it verifies the binary, appends the install dir to your shell rc / Windows user PATH if needed (idempotent), and hints at the next step for either an Ollama or a cloud-provider session.
+
 Overrides (env vars before the pipe on Unix, `$env:NAME = 'value'` on Windows):
 `PREFIX` install location (default `~/.local/bin`) ·
 `TAG` pin a release tag (default `latest`) ·
 `FROM_SOURCE=1` skip the prebuilt download and cargo-build from source ·
-`BRANCH` source-build branch (default `dev`).
+`BRANCH` source-build branch (default `dev`) ·
+`NO_PATH=1` skip the PATH edit ·
+`NO_OLLAMA_HINT=1` skip the post-install nudge.
 
 `cargo run --release` works from a workspace clone.
 

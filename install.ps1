@@ -8,6 +8,8 @@
 #   $env:TAG = "v0.2.0"           # pin a release tag (default: latest)
 #   $env:FROM_SOURCE = "1"        # skip prebuilt download; cargo build instead
 #   $env:BRANCH = "main"          # source-build branch (default: dev)
+#   $env:NO_PATH = "1"            # don't touch your user PATH
+#   $env:NO_OLLAMA_HINT = "1"     # suppress the post-install Ollama nudge
 
 $ErrorActionPreference = 'Stop'
 
@@ -90,10 +92,30 @@ try {
     Copy-Item -Force (Join-Path $Tmp 'teleia.exe') $Dst
     Write-Host "installed: $Dst"
 
+    # --- automatic setup -------------------------------------------------
+
+    # verify: catch arch mismatches / broken artifacts early.
+    & $Dst --version *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "'$Dst --version' didn't run cleanly; binary may not match this platform"
+    }
+
+    # PATH setup: update User-scope PATH, idempotent. $env:NO_PATH=1 opts out.
     $UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $OnPath = $UserPath -and (($UserPath -split ';') -contains $Prefix)
-    if (-not $OnPath) {
-        Write-Host "note: $Prefix is not on your PATH"
+    $Parts = if ($UserPath) { $UserPath -split ';' } else { @() }
+    $OnPath = $Parts -contains $Prefix
+    if (-not $OnPath -and $env:NO_PATH -ne '1') {
+        [Environment]::SetEnvironmentVariable('Path', (($Parts + $Prefix) -join ';'), 'User')
+        Write-Host "added $Prefix to your user PATH — open a new shell to pick it up"
+    }
+
+    # Ollama hint.
+    if ($env:NO_OLLAMA_HINT -ne '1') {
+        if (Get-Command ollama -ErrorAction SilentlyContinue) {
+            Write-Host "next: 'ollama pull hf.co/FoolDev/Thanatos-27B:Q4_K_M' to grab the default local model, or run 'teleia --model claude-opus-4-7'"
+        } else {
+            Write-Host "next: install Ollama (https://ollama.com) for local models, or run 'teleia --model claude-opus-4-7'"
+        }
     }
 } finally {
     Remove-Item -Recurse -Force $Tmp -ErrorAction SilentlyContinue

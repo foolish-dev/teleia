@@ -9,6 +9,8 @@
 #   TAG=v0.2.0              # pin a release tag (default: latest)
 #   FROM_SOURCE=1           # skip prebuilt download; cargo build instead
 #   BRANCH=main             # source-build branch (default: dev)
+#   NO_PATH=1               # don't touch the shell rc
+#   NO_OLLAMA_HINT=1        # suppress the post-install Ollama nudge
 
 set -eu
 
@@ -50,14 +52,6 @@ detect_target() {
             case "$arch" in
                 x86_64|amd64)       echo "x86_64-unknown-freebsd";           return 0 ;;
             esac ;;
-        NetBSD)
-            case "$arch" in
-                x86_64|amd64)       echo "x86_64-unknown-netbsd";            return 0 ;;
-            esac ;;
-        SunOS)
-            case "$arch" in
-                i86pc|x86_64|amd64) echo "x86_64-unknown-illumos";           return 0 ;;
-            esac ;;
     esac
     return 1
 }
@@ -98,7 +92,48 @@ chmod +x "$TMP/teleia"
 mv "$TMP/teleia" "$PREFIX/teleia"
 echo "installed: $PREFIX/teleia"
 
-case ":$PATH:" in
-    *":$PREFIX:"*) ;;
-    *) printf 'note: %s is not on your PATH\n' "$PREFIX" ;;
-esac
+# --- automatic setup -----------------------------------------------------
+
+# verify: catch arch / libc / linker mismatches early.
+if ! "$PREFIX/teleia" --version >/dev/null 2>&1; then
+    echo "warn: '$PREFIX/teleia --version' didn't run cleanly; binary may not match this platform" >&2
+fi
+
+# PATH setup: append a sourceable line to the user's shell rc, idempotent
+# via a marker comment. NO_PATH=1 to opt out.
+shell_rc() {
+    case "${SHELL##*/}" in
+        bash) [ "$(uname -s)" = "Darwin" ] && [ -f "$HOME/.bash_profile" ] \
+                && echo "$HOME/.bash_profile" || echo "$HOME/.bashrc" ;;
+        zsh)  echo "$HOME/.zshrc" ;;
+        fish) echo "${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish" ;;
+        *)    echo "" ;;
+    esac
+}
+
+case ":$PATH:" in *":$PREFIX:"*) on_path=1 ;; *) on_path=0 ;; esac
+if [ "$on_path" = "0" ] && [ "${NO_PATH:-0}" != "1" ]; then
+    rc="$(shell_rc)"
+    if [ -z "$rc" ]; then
+        printf 'note: %s is not on your PATH and your shell is unrecognized; add it manually\n' "$PREFIX"
+    elif [ -f "$rc" ] && grep -Fq 'teleia install: added to PATH' "$rc"; then
+        echo "PATH already set in $rc — restart your shell or 'source $rc'"
+    else
+        mkdir -p "$(dirname "$rc")"
+        case "${SHELL##*/}" in
+            fish) line="set -gx PATH \"$PREFIX\" \$PATH" ;;
+            *)    line="export PATH=\"$PREFIX:\$PATH\"" ;;
+        esac
+        printf '\n# teleia install: added to PATH\n%s\n' "$line" >> "$rc"
+        echo "added $PREFIX to PATH in $rc — restart your shell or 'source $rc'"
+    fi
+fi
+
+# Ollama hint: teleia's default model is local; nudge toward setup.
+if [ "${NO_OLLAMA_HINT:-0}" != "1" ]; then
+    if command -v ollama >/dev/null 2>&1; then
+        echo "next: 'ollama pull hf.co/FoolDev/Thanatos-27B:Q4_K_M' to grab the default local model, or run 'teleia --model claude-opus-4-7'"
+    else
+        echo "next: install Ollama (https://ollama.com) for local models, or run 'teleia --model claude-opus-4-7'"
+    fi
+fi

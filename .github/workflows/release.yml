@@ -38,11 +38,10 @@ jobs:
           - { target: i686-pc-windows-msvc,           os: windows-latest, use: cargo, ext: .exe }
           # Windows — GNU (MinGW)
           - { target: x86_64-pc-windows-gnu,          os: windows-latest, use: cargo, ext: .exe }
-          # BSD — cross-compiled via cross
+          # FreeBSD — cross-compiled via cross
+          # (NetBSD: dropped — cross sysroot lacks -lexecinfo;
+          #  illumos: dropped — arboard's wayland-backend dep doesn't build on it)
           - { target: x86_64-unknown-freebsd,         os: ubuntu-latest,  use: cross }
-          - { target: x86_64-unknown-netbsd,          os: ubuntu-latest,  use: cross }
-          # illumos — cross
-          - { target: x86_64-unknown-illumos,         os: ubuntu-latest,  use: cross }
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -74,6 +73,9 @@ jobs:
 
   release:
     needs: build
+    # Run if at least one matrix entry produced an artifact, even when
+    # others failed; only skip on actual workflow cancellation.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -85,6 +87,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [ -z "$(ls -A dist 2>/dev/null)" ]; then
+            echo "no artifacts to release — every build target failed" >&2
+            exit 1
+          fi
           gh release create "${GITHUB_REF_NAME}" \
             --title "${GITHUB_REF_NAME}" \
             --generate-notes \
