@@ -1,0 +1,91 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux — native cargo (host triple + musl static)
+          - { target: x86_64-unknown-linux-musl,      os: ubuntu-latest,  use: cargo, deps: musl-tools }
+          - { target: x86_64-unknown-linux-gnu,       os: ubuntu-latest,  use: cargo }
+          # Linux — cross-compiled (uses cross-rs/cross Docker images)
+          - { target: aarch64-unknown-linux-musl,     os: ubuntu-latest,  use: cross }
+          - { target: aarch64-unknown-linux-gnu,      os: ubuntu-latest,  use: cross }
+          - { target: armv7-unknown-linux-musleabihf, os: ubuntu-latest,  use: cross }
+          - { target: i686-unknown-linux-musl,        os: ubuntu-latest,  use: cross }
+          - { target: riscv64gc-unknown-linux-gnu,    os: ubuntu-latest,  use: cross }
+          - { target: powerpc64le-unknown-linux-gnu,  os: ubuntu-latest,  use: cross }
+          - { target: s390x-unknown-linux-gnu,        os: ubuntu-latest,  use: cross }
+          # macOS — Intel + Apple Silicon
+          - { target: x86_64-apple-darwin,            os: macos-latest,   use: cargo }
+          - { target: aarch64-apple-darwin,           os: macos-latest,   use: cargo }
+          # Windows — MSVC (x64, ARM64, x86)
+          - { target: x86_64-pc-windows-msvc,         os: windows-latest, use: cargo, ext: .exe }
+          - { target: aarch64-pc-windows-msvc,        os: windows-latest, use: cargo, ext: .exe }
+          - { target: i686-pc-windows-msvc,           os: windows-latest, use: cargo, ext: .exe }
+          # Windows — GNU (MinGW)
+          - { target: x86_64-pc-windows-gnu,          os: windows-latest, use: cargo, ext: .exe }
+          # BSD — cross-compiled via cross
+          - { target: x86_64-unknown-freebsd,         os: ubuntu-latest,  use: cross }
+          - { target: x86_64-unknown-netbsd,          os: ubuntu-latest,  use: cross }
+          # illumos — cross
+          - { target: x86_64-unknown-illumos,         os: ubuntu-latest,  use: cross }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: install apt deps
+        if: matrix.deps
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.deps }}
+      - name: install cross
+        if: matrix.use == 'cross'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+      - name: build
+        run: ${{ matrix.use }} build --release --locked --target ${{ matrix.target }} --bin telia
+      - name: package
+        shell: bash
+        run: |
+          asset="telia-${{ matrix.target }}${{ matrix.ext }}"
+          cp "target/${{ matrix.target }}/release/telia${{ matrix.ext }}" "$asset"
+          echo "ASSET=$asset" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ env.ASSET }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            dist/*

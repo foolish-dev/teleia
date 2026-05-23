@@ -21,8 +21,10 @@
 
 ## Install
 
+Auto-detects your platform, downloads the latest prebuilt binary from GitHub Releases, falls back to a cargo source build if no prebuilt exists. Prebuilts cover Linux (x86_64 · aarch64 · armv7 · i686 · riscv64 · ppc64le · s390x), macOS (Intel + Apple Silicon), Windows (x86_64 · ARM64 · i686, MSVC + MinGW), FreeBSD, NetBSD, and illumos.
+
 ```sh
-# Linux / macOS — clones, builds, drops `telia` into ~/.local/bin
+# Linux / macOS — drops `telia` into ~/.local/bin
 curl -fsSL https://raw.githubusercontent.com/foolish-dev/telia/dev/install.sh | sh
 ```
 
@@ -36,7 +38,13 @@ irm https://raw.githubusercontent.com/foolish-dev/telia/dev/install.ps1 | iex
 cargo install --git https://github.com/foolish-dev/telia telia-cli
 ```
 
-Override the install location with `PREFIX=/usr/local/bin sh` (Unix) or `$env:PREFIX = 'C:\Tools'` before `iex` (Windows). `cargo run --release` works from a workspace clone.
+Overrides (env vars before the pipe on Unix, `$env:NAME = 'value'` on Windows):
+`PREFIX` install location (default `~/.local/bin`) ·
+`TAG` pin a release tag (default `latest`) ·
+`FROM_SOURCE=1` skip the prebuilt download and cargo-build from source ·
+`BRANCH` source-build branch (default `dev`).
+
+`cargo run --release` works from a workspace clone.
 
 ## Run
 
