@@ -7,7 +7,7 @@ desktop in one shot:
 | --- | --- |
 | **[Noctalia shell](https://github.com/noctalia-dev/noctalia-shell)** | patches `colorSchemes.predefinedScheme` + `darkMode` in `~/.config/noctalia/settings.json`. The matching built-in scheme activates immediately. |
 | **[niri](https://github.com/YaLTeR/niri)** | writes `~/.config/niri/grogu.kdl`, an include-able snippet with focus-ring colours. niri live-reloads. |
-| **[telia](https://github.com/foolish-dev/telia)** | sets the `theme` row in telia's sqlite prefs store. telia picks it up on next launch. |
+| **[teleia](https://github.com/foolish-dev/teleia)** | sets the `theme` row in teleia's sqlite prefs store. teleia picks it up on next launch. |
 | **vim / neovim** | drops `~/.vim/colors/grogu.vim` and/or `~/.config/nvim/colors/grogu.vim`. Activate with `:colorscheme grogu`. |
 | **[kitty](https://sw.kovidgoyal.net/kitty/)** | writes `~/.config/kitty/grogu.conf`. Activate by adding `include grogu.conf` to `kitty.conf` once; reload with `kill -SIGUSR1 $(pgrep kitty)` or kitty's default `Ctrl+Shift+F5`. |
 | **[ghostty](https://ghostty.org)** | writes `~/.config/ghostty/themes/grogu`. Activate by adding `theme = grogu` to `~/.config/ghostty/config`; ghostty live-reloads on save. |
@@ -21,7 +21,7 @@ cargo install --path .
 
 grogu list                       # tokyo-night / catppuccin / dracula
 grogu paths                      # everywhere grogu reads or writes
-grogu apply                      # defaults to telia's stored theme pref
+grogu apply                      # defaults to teleia's stored theme pref
 grogu apply --theme catppuccin
 grogu apply --no-vim --dry-run   # see what would change without touching files
 grogu apply --no-kitty --no-ghostty  # skip the terminals
@@ -66,10 +66,10 @@ The extracted palette lands in every target:
   above and the palette persists.
 - **niri**, **kitty**, **ghostty**, **vim/neovim** — same renderers
   as predefined mode, just parameterised over the extracted palette.
-- **telia** — telia only ships three themes (`tokyo-night`,
+- **teleia** — teleia only ships three themes (`tokyo-night`,
   `catppuccin`, `dracula`) with no custom-palette support, so grogu
   picks the *nearest* predefined theme by squared-distance on
-  `bg + purple` in sRGB and writes that name to telia's pref store.
+  `bg + purple` in sRGB and writes that name to teleia's pref store.
 
 Wallpaper source resolution order:
 
@@ -104,7 +104,7 @@ argument, set the command to `grogu apply --extract %{wallpaper}` —
 otherwise grogu reads the path back out of Noctalia's wallpaper cache.
 
 Now every wallpaper rotation re-paints the rest of the desktop. niri
-picks up the new colours automatically (live reload), telia uses the
+picks up the new colours automatically (live reload), teleia uses the
 updated theme on next launch, and the next time you open vim,
 `colorscheme grogu` reflects the new palette.
 
@@ -158,15 +158,15 @@ file-watches `colors.json` and live-reloads every m-color binding —
 so the bar repaints with the wallpaper-derived palette immediately,
 no restart needed.
 
-## How the telia integration works
+## How the teleia integration works
 
-grogu opens telia's sqlite store at
-`$XDG_DATA_HOME/telia/telia.sqlite` (or `~/.local/share/telia/telia.sqlite`)
+grogu opens teleia's sqlite store at
+`$XDG_DATA_HOME/teleia/teleia.sqlite` (or `~/.local/share/teleia/teleia.sqlite`)
 and does an `INSERT OR REPLACE INTO prefs (key, value) VALUES ('theme', ?)`.
-This is the same row telia's `/theme NAME` slash command writes — telia
+This is the same row teleia's `/theme NAME` slash command writes — teleia
 reads it on every launch.
 
-If telia hasn't run on the machine, grogu skips this target with a note.
+If teleia hasn't run on the machine, grogu skips this target with a note.
 
 ## Terminal reload behaviour
 
@@ -185,7 +185,7 @@ beyond file writes.)
 ## Env overrides
 
 - `NOCTALIA_CONFIG_DIR` / `NOCTALIA_SETTINGS_FILE` — point at a non-default Noctalia install
-- `XDG_CONFIG_HOME` / `XDG_DATA_HOME` — standard XDG overrides for niri / telia paths
+- `XDG_CONFIG_HOME` / `XDG_DATA_HOME` — standard XDG overrides for niri / teleia paths
 
 ## License
 
