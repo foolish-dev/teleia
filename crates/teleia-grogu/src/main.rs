@@ -1,7 +1,7 @@
 //! grogu — paint the desktop theme.
 //!
 //! Single binary. Given a theme slug (tokyo-night | catppuccin | dracula)
-//! or `--from-telia` (reads telia's stored theme pref), grogu writes a
+//! or `--from-teleia` (reads teleia's stored theme pref), grogu writes a
 //! consistent palette across four targets:
 //!
 //! - **Noctalia shell** — patches `colorSchemes.predefinedScheme` in
@@ -9,8 +9,8 @@
 //!   same name activates. Other keys are preserved verbatim.
 //! - **niri** — writes `~/.config/niri/grogu.kdl`, an include-able KDL
 //!   snippet with focus-ring colours. niri live-reloads on save.
-//! - **telia** — writes the `theme` pref straight into telia's sqlite
-//!   store. telia's `/theme` slash command picks it up on next launch.
+//! - **teleia** — writes the `theme` pref straight into teleia's sqlite
+//!   store. teleia's `/theme` slash command picks it up on next launch.
 //! - **vim / neovim** — emits a colorscheme to `~/.vim/colors/grogu.vim`
 //!   and / or `~/.config/nvim/colors/grogu.vim`, whichever directory
 //!   exists. Activate with `:colorscheme grogu`.
@@ -41,7 +41,7 @@ struct Theme {
     /// restarts. Picking from the loaded set means Meta+W repaints
     /// Noctalia immediately, every time.
     noctalia: String,
-    /// True if this palette was extracted from a wallpaper. telia and
+    /// True if this palette was extracted from a wallpaper. teleia and
     /// Noctalia both fall back to a nearest-bundled name in this mode.
     extracted: bool,
     bg: String,
@@ -126,7 +126,7 @@ fn find_predefined(slug: &str) -> Option<Theme> {
 #[command(
     name = "grogu",
     version,
-    about = "Paint Noctalia + niri + telia + vim with one theme",
+    about = "Paint Noctalia + niri + teleia + vim with one theme",
     long_about = "grogu propagates a Tokyo Night / Catppuccin / Dracula palette across the desktop. \
 Designed to run as a Noctalia post-wallpaper-change hook so the system re-themes on every wallpaper rotation."
 )]
@@ -140,7 +140,7 @@ enum Cmd {
     /// Write theme files for every target.
     Apply {
         /// Theme slug (tokyo-night, catppuccin, dracula).
-        /// Default: read from telia's prefs, or fall back to tokyo-night.
+        /// Default: read from teleia's prefs, or fall back to tokyo-night.
         /// Ignored when --extract is set.
         #[arg(long, short)]
         theme: Option<String>,
@@ -156,9 +156,9 @@ enum Cmd {
         /// Skip niri.
         #[arg(long)]
         no_niri: bool,
-        /// Skip telia.
+        /// Skip teleia.
         #[arg(long)]
-        no_telia: bool,
+        no_teleia: bool,
         /// Skip vim / neovim.
         #[arg(long)]
         no_vim: bool,
@@ -172,7 +172,7 @@ enum Cmd {
         #[arg(long)]
         no_tmux: bool,
         /// After writing every target, also live-reload running apps:
-        /// SIGUSR1 to kitty + telia, and `tmux source-file` for any
+        /// SIGUSR1 to kitty + teleia, and `tmux source-file` for any
         /// running tmux server. Designed for the Noctalia
         /// wallpaperChange hook so Meta+W repaints the whole desktop in
         /// one Rust call — no shell glue.
@@ -212,7 +212,7 @@ fn main() -> Result<()> {
             print_theme(&theme);
         }
         Cmd::Paths => {
-            println!("telia sqlite      : {}", telia_db_path()?.display());
+            println!("teleia sqlite      : {}", teleia_db_path()?.display());
             println!(
                 "noctalia settings : {}",
                 noctalia_settings_path()?.display()
@@ -230,7 +230,7 @@ fn main() -> Result<()> {
             extract,
             no_noctalia,
             no_niri,
-            no_telia,
+            no_teleia,
             no_vim,
             no_kitty,
             no_ghostty,
@@ -249,7 +249,7 @@ fn main() -> Result<()> {
                 None => {
                     let slug = match theme {
                         Some(t) => t,
-                        None => read_telia_theme()?.unwrap_or_else(|| "tokyo-night".to_string()),
+                        None => read_teleia_theme()?.unwrap_or_else(|| "tokyo-night".to_string()),
                     };
                     find_predefined(&slug).ok_or_else(|| {
                         anyhow!(
@@ -270,8 +270,8 @@ fn main() -> Result<()> {
             if !no_niri {
                 println!("  {}", apply_niri(&theme, dry_run)?);
             }
-            if !no_telia {
-                println!("  {}", apply_telia(&theme, dry_run)?);
+            if !no_teleia {
+                println!("  {}", apply_teleia(&theme, dry_run)?);
             }
             if !no_vim {
                 for line in apply_vim(&theme, dry_run)? {
@@ -351,8 +351,8 @@ fn xdg_data() -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("neither XDG_DATA_HOME nor HOME is set"))
 }
 
-fn telia_db_path() -> Result<PathBuf> {
-    Ok(xdg_data()?.join("telia/telia.sqlite"))
+fn teleia_db_path() -> Result<PathBuf> {
+    Ok(xdg_data()?.join("teleia/teleia.sqlite"))
 }
 
 fn noctalia_settings_path() -> Result<PathBuf> {
@@ -401,10 +401,10 @@ fn vim_colorscheme_paths() -> Result<Vec<PathBuf>> {
     ])
 }
 
-// -------- telia: read + write the theme pref --------
+// -------- teleia: read + write the theme pref --------
 
-fn read_telia_theme() -> Result<Option<String>> {
-    let path = telia_db_path()?;
+fn read_teleia_theme() -> Result<Option<String>> {
+    let path = teleia_db_path()?;
     if !path.exists() {
         return Ok(None);
     }
@@ -418,73 +418,73 @@ fn read_telia_theme() -> Result<Option<String>> {
     }
 }
 
-fn apply_telia(theme: &Theme, dry_run: bool) -> Result<String> {
-    let path = telia_db_path()?;
+fn apply_teleia(theme: &Theme, dry_run: bool) -> Result<String> {
+    let path = teleia_db_path()?;
     if !path.exists() {
         return Ok(format!(
-            "telia: skipped (no sqlite at {} — telia hasn't run here)",
+            "teleia: skipped (no sqlite at {} — teleia hasn't run here)",
             path.display()
         ));
     }
-    // telia's three bundled themes (tokyo-night/catppuccin/dracula) are
+    // teleia's three bundled themes (tokyo-night/catppuccin/dracula) are
     // the fallback. For extracted palettes we ALSO write the precise
-    // hex palette to `prefs.grogu_palette` — telia v0.2+ picks that up
+    // hex palette to `prefs.grogu_palette` — teleia v0.2+ picks that up
     // on SIGUSR1 and paints with the wallpaper-extracted colours. For
-    // predefined-mode runs we clear the pref (empty string) so telia
+    // predefined-mode runs we clear the pref (empty string) so teleia
     // reverts to the named theme on next signal.
-    let telia_slug = if theme.extracted {
+    let teleia_slug = if theme.extracted {
         nearest_predefined(theme)
     } else {
         theme.slug.clone()
     };
     let palette_json = if theme.extracted {
-        telia_palette_json(theme)
+        teleia_palette_json(theme)
     } else {
         String::new()
     };
     if dry_run {
         let mut msg = format!(
-            "telia: would set prefs.theme = '{telia_slug}' in {}",
+            "teleia: would set prefs.theme = '{teleia_slug}' in {}",
             path.display()
         );
         if theme.extracted {
             msg.push_str(&format!(
-                "\n  telia: would set prefs.grogu_palette = ({} bytes JSON)",
+                "\n  teleia: would set prefs.grogu_palette = ({} bytes JSON)",
                 palette_json.len()
             ));
         } else {
-            msg.push_str("\n  telia: would clear prefs.grogu_palette (predefined mode)");
+            msg.push_str("\n  teleia: would clear prefs.grogu_palette (predefined mode)");
         }
         return Ok(msg);
     }
     let conn = Connection::open(&path).with_context(|| format!("open {}", path.display()))?;
     conn.execute(
         "INSERT OR REPLACE INTO prefs (key, value) VALUES ('theme', ?1)",
-        params![telia_slug],
+        params![teleia_slug],
     )?;
     conn.execute(
         "INSERT OR REPLACE INTO prefs (key, value) VALUES ('grogu_palette', ?1)",
         params![palette_json],
     )?;
     let mut msg = format!(
-        "telia: set prefs.theme = '{telia_slug}' in {}",
+        "teleia: set prefs.theme = '{teleia_slug}' in {}",
         path.display()
     );
     if theme.extracted {
         msg.push_str(&format!(
-            "\n  telia: set prefs.grogu_palette = ({} bytes JSON)",
+            "\n  teleia: set prefs.grogu_palette = ({} bytes JSON)",
             palette_json.len()
         ));
     } else {
-        msg.push_str("\n  telia: cleared prefs.grogu_palette (predefined mode)");
+        msg.push_str("\n  teleia: cleared prefs.grogu_palette (predefined mode)");
     }
     Ok(msg)
 }
 
-/// Serialize the 10 telia palette fields as a flat JSON object of
-/// lowercase hex strings (`{"bg":"#1a1b26",...}`). telia's
+/// Serialize the 10 teleia palette fields as a flat JSON object of
+/// lowercase hex strings (`{"bg":"#1a1b26",...}`). teleia's
 /// `set_custom_palette_from_json` parses exactly this shape.
-fn telia_palette_json(t: &Theme) -> String {
+fn teleia_palette_json(t: &Theme) -> String {
     serde_json::json!({
         "bg":     t.bg,
         "bg_hl":  t.bg_hl,
@@ -502,7 +502,7 @@ fn telia_palette_json(t: &Theme) -> String {
 
 /// Pick the predefined theme whose `bg` + `purple` come closest to an
 /// extracted palette's, by squared distance in sRGB. Good enough for
-/// telia's three-option set — Tokyo Night, Catppuccin and Dracula are
+/// teleia's three-option set — Tokyo Night, Catppuccin and Dracula are
 /// distinct in accent hue, so the nearest match looks coherent.
 fn nearest_predefined(theme: &Theme) -> String {
     let target_bg = hex_to_rgb_or_zero(&theme.bg);
@@ -764,10 +764,10 @@ layout {{
     }}
 }}
 
-// Floating telia panel keyed by app-id; pair with foot's
-// `--app-id=telia-float` launcher.
+// Floating teleia panel keyed by app-id; pair with foot's
+// `--app-id=teleia-float` launcher.
 window-rule {{
-    match app-id="telia-float"
+    match app-id="teleia-float"
     focus-ring {{
         active-color  "{purple}"
         inactive-color "{dim}"

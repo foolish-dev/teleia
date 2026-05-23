@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Sync a Tokyo Night / Catppuccin / Dracula theme across Noctalia shell, niri, telia, and vim — triggered by Noctalia's wallpaper change"
+description = "Sync a Tokyo Night / Catppuccin / Dracula theme across Noctalia shell, niri, teleia, and vim — triggered by Noctalia's wallpaper change"
 
 [[bin]]
 name = "grogu"
