@@ -1,0 +1,21 @@
+[package]
+name = "teleia-grogu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Sync a Tokyo Night / Catppuccin / Dracula theme across Noctalia shell, niri, telia, and vim — triggered by Noctalia's wallpaper change"
+
+[[bin]]
+name = "grogu"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+rusqlite.workspace = true
+libc.workspace = true
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp"] }
+palette = "0.7"
+kmeans_colors = "0.7"
