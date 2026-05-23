@@ -13,7 +13,7 @@
   <a href="https://huggingface.co/FoolDev/Janus-35B"><img alt="FoolDev/Janus-35B on Hugging Face" src="https://img.shields.io/badge/%F0%9F%A4%97-FoolDev%2FJanus--35B-7aa2f7?logo=huggingface&logoColor=1a1b26&labelColor=24283b"></a>
 </p>
 
-**λ τέλεια — a minimal TUI coding agent.** One binary, no daemon. Talks to a local Ollama or any of twenty-one cloud chat-completions endpoints (≈210 named models in the dropdown). Runs twenty-five built-in tools (read/write/edit + bash + list/glob/grep + head/tail/tree/stat/diff/which/fetch/wc/sha256/date + apply_patch/mkdir/mv/cp/touch + lint/format/typecheck), hosts MCP servers, persists sessions to SQLite, resumes where you left off, and paints an OS-aware welcome banner on launch.
+**λ τέλεια — a minimal TUI coding agent.** One binary, no daemon. Talks to a local Ollama or any of twenty cloud chat-completions endpoints (≈210 named models in the dropdown). Runs twenty-five built-in tools (read/write/edit + bash + list/glob/grep + head/tail/tree/stat/diff/which/fetch/wc/sha256/date + apply_patch/mkdir/mv/cp/touch + lint/format/typecheck), hosts MCP servers, persists sessions to SQLite, resumes where you left off, and paints an OS-aware welcome banner on launch.
 
 <p align="center">
   <img src="assets/screenshot.svg" alt="τέλεια TUI session" width="780">
@@ -128,7 +128,7 @@ The model name picks the provider. Use `provider:NAME` to disambiguate names tha
 | `sambanova:NAME`                   | SambaNova    | `SAMBANOVA_API_KEY`     |
 | anything else                      | local Ollama | _none_                  |
 
-The `/model` dropdown pre-populates with ~210 named models across all twenty-one providers. `Tab` accepts, type to filter; any name is accepted including ones not in the catalog.
+The `/model` dropdown pre-populates with ~210 named models across all twenty providers. `Tab` accepts, type to filter; any name is accepted including ones not in the catalog.
 
 **Keys.** `--api-key KEY` overrides the env-var fallback. Missing a key at startup or after `/model NAME`? telia prompts with hidden input (`rpassword` at startup, in-TUI masked prompt mid-session) and saves the entered key under `prefs.api_key:<ENV_VAR>` so the next launch picks it up. `/keys` lists every provider + status; `/key PROVIDER` opens the prompt on demand. Env-var values win when set, so exporting overrides the saved one.
 
