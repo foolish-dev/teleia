@@ -667,6 +667,7 @@ async fn main() -> Result<()> {
     tui::run(agent, mcp_summary, lsp_summary, update_check).await
 }
 
+#[cfg(unix)]
 fn spawn_sigusr1_theme_reload() {
     tokio::spawn(async move {
         use tokio::signal::unix::{signal, SignalKind};
@@ -681,6 +682,10 @@ fn spawn_sigusr1_theme_reload() {
     });
 }
 
+#[cfg(not(unix))]
+fn spawn_sigusr1_theme_reload() {}
+
+#[cfg(unix)]
 fn apply_theme_from_store(store: &Store) {
     let custom = store
         .get_pref("grogu_palette")

@@ -1496,9 +1496,13 @@ fn print_theme(t: &Theme) {
 // -------- live-reload helpers --------
 
 fn reload_live_apps() -> Vec<String> {
+    #[cfg(unix)]
+    let sig = libc::SIGUSR1;
+    #[cfg(not(unix))]
+    let sig: i32 = 0;
     vec![
-        signal_summary("kitty", reload_signal("kitty", libc::SIGUSR1)),
-        signal_summary("telia", reload_signal("telia", libc::SIGUSR1)),
+        signal_summary("kitty", reload_signal("kitty", sig)),
+        signal_summary("teleia", reload_signal("teleia", sig)),
         reload_tmux(),
     ]
 }
@@ -1511,6 +1515,7 @@ fn signal_summary(name: &str, count: usize) -> String {
     }
 }
 
+#[cfg(unix)]
 fn reload_signal(name: &str, sig: i32) -> usize {
     let entries = match fs::read_dir("/proc") {
         Ok(e) => e,
@@ -1531,6 +1536,11 @@ fn reload_signal(name: &str, sig: i32) -> usize {
         }
     }
     count
+}
+
+#[cfg(not(unix))]
+fn reload_signal(_name: &str, _sig: i32) -> usize {
+    0
 }
 
 fn reload_tmux() -> String {

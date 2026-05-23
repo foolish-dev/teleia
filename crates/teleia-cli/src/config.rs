@@ -117,16 +117,16 @@ pub fn config_path() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
         let home = std::env::var_os("HOME").unwrap_or_default();
-        return PathBuf::from(home)
+        PathBuf::from(home)
             .join("Library")
             .join("Application Support")
             .join("teleia")
-            .join("config.toml");
+            .join("config.toml")
     }
     #[cfg(target_os = "windows")]
     {
         let appdata = std::env::var_os("APPDATA").unwrap_or_default();
-        return PathBuf::from(appdata).join("teleia").join("config.toml");
+        PathBuf::from(appdata).join("teleia").join("config.toml")
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
