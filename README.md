@@ -10,6 +10,7 @@
 
 <p align="center">
   <a href="https://huggingface.co/FoolDev/Janus-35B"><img alt="FoolDev/Janus-35B on Hugging Face" src="https://img.shields.io/badge/%F0%9F%A4%97-FoolDev%2FJanus--35B-7aa2f7?logo=huggingface&logoColor=1a1b26&labelColor=24283b"></a>
+  <a href="https://huggingface.co/FoolDev/Thanatos-27B"><img alt="FoolDev/Thanatos-27B on Hugging Face" src="https://img.shields.io/badge/%F0%9F%A4%97-FoolDev%2FThanatos--27B-bb9af7?logo=huggingface&logoColor=1a1b26&labelColor=24283b"></a>
 </p>
 
 **λ τέλεια — a minimal TUI coding agent (rewritten in Rust btw).** One binary, no daemon. Talks to a local Ollama or any of twenty cloud chat-completions endpoints (≈210 named models in the dropdown). Runs twenty-five built-in tools (read/write/edit + bash + list/glob/grep + head/tail/tree/stat/diff/which/fetch/wc/sha256/date + apply_patch/mkdir/mv/cp/touch + lint/format/typecheck), hosts MCP servers, persists sessions to SQLite, resumes where you left off, and paints an OS-aware welcome banner on launch.
@@ -52,7 +53,7 @@ Overrides (env vars before the pipe on Unix, `$env:NAME = 'value'` on Windows):
 ## Run
 
 ```sh
-# default: local Ollama with hf.co/FoolDev/Janus-35B
+# default: local Ollama with hf.co/FoolDev/Thanatos-27B
 teleia
 
 # cloud — uses $ANTHROPIC_API_KEY, or prompts and saves the key
