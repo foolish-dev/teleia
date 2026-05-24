@@ -444,10 +444,11 @@ async fn main() -> Result<()> {
     }
 
     if !args.no_pull && looks_like_ollama(&base_url) {
-        // Walk every default Ollama model plus the active model (deduped)
-        // and check which Ollama doesn't have cached. Then ask once for
-        // the whole set, instead of N prompts in a row. --pull-yes / -y
-        // or non-TTY stdin auto-confirms.
+        // Walk every default Ollama model plus the active model (deduped),
+        // filter out anything the user previously declined (pref persists),
+        // and ask once for the rest. --pull-yes / -y bypasses the decline
+        // filter so users can opt back in without editing the pref store.
+        // Non-TTY stdin auto-confirms.
         let mut want: Vec<String> = DEFAULT_OLLAMA_MODELS
             .iter()
             .map(|s| s.to_string())
@@ -457,6 +458,15 @@ async fn main() -> Result<()> {
         }
         let mut missing: Vec<String> = Vec::new();
         for m in &want {
+            if !args.pull_yes
+                && store
+                    .get_pref(&format!("pull_declined:{m}"))
+                    .ok()
+                    .flatten()
+                    .is_some()
+            {
+                continue;
+            }
             let pre = LlmClient::new(base_url.clone(), m.clone());
             if let Some(false) = pre.has_model().await {
                 missing.push(m.clone());
@@ -470,6 +480,10 @@ async fn main() -> Result<()> {
                 }
             } else {
                 eprintln!("· skipped {} model(s) (not cached locally)", missing.len());
+                // Persist so the next launch doesn't re-prompt for the same set.
+                for m in &missing {
+                    let _ = store.set_pref(&format!("pull_declined:{m}"), "true");
+                }
             }
         }
     }
