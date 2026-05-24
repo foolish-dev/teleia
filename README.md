@@ -9,7 +9,6 @@
 </p>
 
 <p align="center">
-  <a href="https://huggingface.co/FoolDev/Thanatos-27B-Heretic"><img alt="FoolDev/Thanatos-27B-Heretic on Hugging Face" src="https://img.shields.io/badge/%F0%9F%A4%97-FoolDev%2FThanatos--27B--Heretic-bb9af7?logo=huggingface&logoColor=1a1b26&labelColor=24283b"></a>
   <a href="https://huggingface.co/FoolDev/Janus-35B"><img alt="FoolDev/Janus-35B on Hugging Face" src="https://img.shields.io/badge/%F0%9F%A4%97-FoolDev%2FJanus--35B-7aa2f7?logo=huggingface&logoColor=1a1b26&labelColor=24283b"></a>
 </p>
 
@@ -53,7 +52,7 @@ Overrides (env vars before the pipe on Unix, `$env:NAME = 'value'` on Windows):
 ## Run
 
 ```sh
-# default: local Ollama with hf.co/FoolDev/Thanatos-27B-Heretic
+# default: local Ollama with hf.co/FoolDev/Janus-35B
 teleia
 
 # cloud — uses $ANTHROPIC_API_KEY, or prompts and saves the key
