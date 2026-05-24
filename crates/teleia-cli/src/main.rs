@@ -447,9 +447,10 @@ async fn main() -> Result<()> {
     }
 
     if !args.no_pull && looks_like_ollama(&base_url) {
-        // Walk every default Ollama model plus the active model
-        // (deduped). For each missing one, ask the user before pulling —
-        // unless --pull-yes / -y is set or stdin isn't a TTY (scripts).
+        // Walk every default Ollama model plus the active model (deduped)
+        // and check which Ollama doesn't have cached. Then ask once for
+        // the whole set, instead of N prompts in a row. --pull-yes / -y
+        // or non-TTY stdin auto-confirms.
         let mut want: Vec<String> = DEFAULT_OLLAMA_MODELS
             .iter()
             .map(|s| s.to_string())
@@ -457,9 +458,22 @@ async fn main() -> Result<()> {
         if !want.iter().any(|m| m == &model) {
             want.push(model.clone());
         }
+        let mut missing: Vec<String> = Vec::new();
         for m in &want {
             let pre = LlmClient::new(base_url.clone(), m.clone());
-            ensure_model(&pre, args.pull_yes).await?;
+            if let Some(false) = pre.has_model().await {
+                missing.push(m.clone());
+            }
+        }
+        if !missing.is_empty() {
+            if args.pull_yes || confirm_pull_many(&missing) {
+                for m in &missing {
+                    let pre = LlmClient::new(base_url.clone(), m.clone());
+                    pull_with_progress(&pre).await?;
+                }
+            } else {
+                eprintln!("· skipped {} model(s) (not cached locally)", missing.len());
+            }
         }
     }
 
@@ -718,28 +732,11 @@ fn apply_theme_from_agent(agent: &teleia_agent::Agent) {
     }
 }
 
-/// Pre-flight: if Ollama can be reached and reports the model isn't
-/// cached, prompt the user (or auto-confirm when `pull_yes` is set or
-/// stdin isn't a TTY) and on a "yes" stream `/api/pull` with an
-/// animated progress bar. Models like the default
-/// `hf.co/FoolDev/Thanatos-27B-Heretic:Q4_K_M` resolve to a HuggingFace pull
-/// automatically via Ollama's bridge.
-///
-/// If `/api/show` is unreachable (non-Ollama backend, or Ollama not
-/// running) we silently skip — let the actual chat request surface the
-/// real failure later.
-async fn ensure_model(llm: &LlmClient, pull_yes: bool) -> Result<()> {
+/// Stream `/api/pull` for a single model with an animated progress bar.
+/// Models like `hf.co/FoolDev/Thanatos-27B-Heretic:Q4_K_M` resolve to a
+/// HuggingFace pull automatically via Ollama's bridge.
+async fn pull_with_progress(llm: &LlmClient) -> Result<()> {
     let model = llm.model().to_string();
-    match llm.has_model().await {
-        Some(true) | None => return Ok(()),
-        Some(false) => {}
-    }
-
-    if !pull_yes && !confirm_pull(&model) {
-        eprintln!("· skipped {model} (not cached locally)");
-        return Ok(());
-    }
-
     eprintln!("↓ pulling {model}");
     let stream = llm.pull_model();
     pin_mut!(stream);
@@ -827,14 +824,23 @@ fn prompt_api_key(prov: &teleia_llm::Provider) -> Option<String> {
     }
 }
 
-/// Ask the user whether to pull a missing model. Non-TTY stdin (scripts,
-/// pipes, CI) defaults to yes so unattended runs still get the model.
-/// Defaults to yes on an empty line; anything starting with 'n' is a no.
-fn confirm_pull(model: &str) -> bool {
+/// Ask once whether to pull every missing model in the set. Non-TTY stdin
+/// (scripts, pipes, CI) defaults to yes so unattended runs still get the
+/// models. Defaults to yes on an empty line; anything starting with 'n'
+/// is a no.
+fn confirm_pull_many(models: &[String]) -> bool {
     if !std::io::stdin().is_terminal() {
         return true;
     }
-    eprint!("· pull {model} from Ollama now? [Y/n] ");
+    if models.len() == 1 {
+        eprint!("· pull {} from Ollama now? [Y/n] ", models[0]);
+    } else {
+        eprintln!("· {} models not cached locally:", models.len());
+        for m in models {
+            eprintln!("    {m}");
+        }
+        eprint!("· pull all from Ollama now? [Y/n] ");
+    }
     let _ = std::io::stderr().flush();
     let mut line = String::new();
     if std::io::stdin().lock().read_line(&mut line).is_err() {
