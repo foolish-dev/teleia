@@ -81,6 +81,77 @@ Three stances control tool execution — cycle with `Shift+Tab` or set explicitl
 
 `a` at any approval prompt allow-alls and flips into AUTO for the rest of the session. `Esc` denies.
 
+## Keybindings
+
+Three modes: **Insert** (default — type and edit), **Normal** (`Esc` to enter; vim motions), **Command** (`:` from Normal; vim ex-commands). The status-bar chip and input border colour signal the active mode.
+
+### Insert mode
+
+| key                       | does                                                                |
+| ------------------------- | ------------------------------------------------------------------- |
+| `Tab`                     | accept autocomplete / ghost suggestion                              |
+| `Shift+Tab`               | cycle permission mode (PLAN → BUILD → AUTO)                         |
+| `Enter`                   | submit                                                              |
+| `Esc`                     | dismiss menu → clear drag-select → switch to Normal                 |
+| `Up` / `Down`             | history recall, or menu nav, or 1-line scroll (in priority order)   |
+| `PageUp` / `PageDown`     | scroll chat 5 lines                                                 |
+| `Left` / `Right`          | cursor                                                              |
+| `Home` / `End` / `Ctrl+A` / `Ctrl+E` | line start / end                                         |
+| `Ctrl+U`                  | clear input                                                         |
+| `Ctrl+W`                  | delete word before cursor                                           |
+| `Backspace` / `Delete`    | delete char before / at cursor                                      |
+| `Ctrl+Shift+V`            | paste from system clipboard (bracketed paste)                       |
+| `Ctrl+C`                  | abort the streaming turn                                            |
+
+### Normal mode (`Esc` to enter)
+
+| key                          | does                                                  |
+| ---------------------------- | ----------------------------------------------------- |
+| `i` / `a` / `I` / `A`        | back to Insert (cursor / after / line start / line end) |
+| `:`                          | Command mode                                          |
+| `h` / `l` or `Left` / `Right` | cursor                                                |
+| `0` / `$` or `Home` / `End`  | line start / end                                      |
+| `j` / `k` or `Down` / `Up`   | scroll chat 1 line                                    |
+| `Ctrl+D` / `Ctrl+U`          | half-page scroll                                      |
+| `PageDown` / `PageUp`        | 5-line scroll                                         |
+| `G`                          | jump to latest entries, re-engage auto-follow         |
+| `x`                          | delete char at cursor                                 |
+| `Tab`                        | accept suggestion                                     |
+| `Shift+Tab`                  | cycle permission mode                                 |
+| `Enter`                      | submit                                                |
+
+### Command mode (vim ex-commands)
+
+From Normal mode, `:` opens a command line. The dropdown filters `EX_COMMANDS` by prefix; `Tab` / `Shift+Tab` cycle, `Enter` runs, `Esc` (or `Backspace` on an empty buffer) cancels. Vim aliases dispatch to the same handlers as the slash-commands:
+
+| ex command                                              | does                                                  |
+| ------------------------------------------------------- | ----------------------------------------------------- |
+| `:q` / `:qa` / `:qall` / `:x` / `:exit`                 | quit                                                  |
+| `:w NAME` / `:wa` / `:wq NAME`                          | save session (no quit on `:wq`)                       |
+| `:e NAME` / `:l NAME` / `:edit NAME` / `:load NAME`     | load session                                          |
+| `:d NAME` / `:bd NAME` / `:delete NAME`                 | delete session                                        |
+| `:ls` / `:list`                                         | list sessions                                         |
+| `:enew` / `:new` / `:reset`                             | reset session                                         |
+| `:clear`                                                | clear scrollback                                      |
+| `:colo NAME` / `:colorscheme NAME` / `:theme NAME`      | theme                                                 |
+| `:cd PATH` / `:pwd`                                     | working directory                                     |
+| `:f` / `:file` / `:show` / `:info`                      | session info                                          |
+| `:model NAME`                                           | switch model                                          |
+| `:notify on|off` / `:transparent on|off`                | toggles                                               |
+| `:key PROVIDER` / `:keys`                               | api keys                                              |
+| `:mcps` / `:lsps` / `:tools`                            | tool inventory                                        |
+| `:plan` / `:build` / `:auto` / `:ask`                   | permission mode                                       |
+| `:copy` / `:yank` / `:y`                                | copy last assistant reply                             |
+| `:prompt NAME`                                          | prompt template                                       |
+| `:help` / `:h` / `:version`                             | misc                                                  |
+
+### Mouse
+
+| gesture                       | does                                                       |
+| ----------------------------- | ---------------------------------------------------------- |
+| left-click + drag in chat     | drag-select; release copies via arboard / tmux / OSC 52    |
+| scroll wheel                  | scroll chat 3 lines per tick                               |
+
 ## Tools
 
 Twenty-five built-ins, dispatched in a tool-call loop that runs until the model stops requesting tools. MCP servers add more to the same dispatch loop.
