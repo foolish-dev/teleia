@@ -3026,32 +3026,78 @@ fn handle_mouse<B: ratatui::backend::Backend>(
     }
 }
 
-/// Push selected text to the system clipboard via two parallel paths so
-/// copy works in as many environments as possible:
+/// Push selected text to the system clipboard via three parallel paths
+/// so copy works in as many environments as possible:
 ///
-/// 1. **OSC 52** (`ESC ] 52 ; c ; <base64> BEL`) — a terminal escape
-///    that asks the emulator itself to claim the clipboard. Works
-///    across SSH because the sequence rides the TTY back to the user's
-///    local terminal; works under tmux with `set -g set-clipboard on`.
-///    Honored by foot, kitty, alacritty, wezterm, iTerm2, Windows
-///    Terminal, and modern xterm.
-/// 2. **arboard** — direct system-clipboard API for the local case
+/// 1. **`tmux load-buffer -w`** (only when `$TMUX` is set) — populates
+///    tmux's internal paste buffer AND asks tmux to forward the
+///    selection to the outer terminal via OSC 52, honoring whatever
+///    session-level configuration the user already has. Sidesteps the
+///    edge cases of writing OSC 52 directly from inside a tmux pane.
+/// 2. **Direct OSC 52** (`ESC ] 52 ; c ; <base64> BEL`, plus a tmux
+///    DCS-passthrough copy when in tmux) — terminal-escape route that
+///    rides the TTY across SSH. Honored by foot, kitty, alacritty (with
+///    `clipboard.write.enabled`), wezterm, iTerm2, Windows Terminal,
+///    modern xterm.
+/// 3. **arboard** — direct system-clipboard API for the local case
 ///    (Wayland with wl-clipboard, X11 with xclip/xsel, macOS, Windows).
 ///
-/// arboard can fail when no display server is reachable; OSC 52 then
-/// covers it. We report success whenever either channel landed bytes
-/// somewhere, and only surface "clipboard error" when both failed.
+/// The status line reports which channel(s) succeeded so the user can
+/// tell at a glance whether they're getting tmux-buffer-only, OSC 52,
+/// system clipboard, or some combination.
 fn copy_to_clipboard(text: &str, state: &mut State) {
+    let in_tmux = std::env::var_os("TMUX").is_some();
+    let tmux_ok = in_tmux && tmux_load_buffer(text).is_ok();
     let osc_ok = emit_osc52(text).is_ok();
     let arboard_ok = arboard::Clipboard::new()
         .and_then(|mut cb| cb.set_text(text.to_string()))
         .is_ok();
     let chars = text.chars().count();
-    state.status = match (osc_ok, arboard_ok) {
-        (_, true) => format!("copied {chars} chars to clipboard"),
-        (true, false) => format!("copied {chars} chars to clipboard (osc52)"),
-        (false, false) => "clipboard error: no channel succeeded".to_string(),
+    state.status = if arboard_ok {
+        format!("copied {chars} chars to clipboard")
+    } else if tmux_ok || osc_ok {
+        let mut via: Vec<&str> = Vec::new();
+        if tmux_ok {
+            via.push("tmux");
+        }
+        if osc_ok {
+            via.push("osc52");
+        }
+        format!("copied {chars} chars to clipboard ({})", via.join("+"))
+    } else {
+        "clipboard error: no channel succeeded".to_string()
     };
+}
+
+/// Run `tmux load-buffer -w -` with the selection piped on stdin. The
+/// `-w` flag (tmux 3.2+) tells tmux to also forward the buffer to the
+/// outer terminal via its own OSC 52 emission. Any spawn or non-zero
+/// exit bubbles up so [`copy_to_clipboard`] can fall back to other
+/// channels.
+fn tmux_load_buffer(text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("tmux")
+        .args(["load-buffer", "-w", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| std::io::Error::other("tmux load-buffer: no stdin"))?;
+        stdin.write_all(text.as_bytes())?;
+    }
+    let status = child.wait()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "tmux load-buffer exited {status}"
+        )))
+    }
 }
 
 /// Write an OSC 52 clipboard-set sequence directly to stdout. Inside
