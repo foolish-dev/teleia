@@ -39,8 +39,6 @@ fn system_prompt() -> String {
     format!("{SYSTEM_PROMPT_BASE}\n\n{}", karpathy::GUIDELINES)
 }
 
-pub const MAX_TOOL_HOPS: usize = 16;
-
 /// Events emitted by `turn()`. The TUI consumes these to render
 /// incrementally. Not `Clone` because `ToolApprovalRequest` carries a
 /// `oneshot::Sender` that owns its single reply slot.
@@ -484,7 +482,7 @@ impl Agent {
         try_stream! {
             self.push(Message::User { content: user_input })?;
 
-            for _ in 0..MAX_TOOL_HOPS {
+            loop {
                 yield TurnEvent::AssistantStart;
                 let mut content_buf = String::new();
                 let mut tool_calls = Vec::new();
@@ -625,13 +623,6 @@ impl Agent {
                     })?;
                 }
             }
-
-            yield TurnEvent::AssistantStart;
-            yield TurnEvent::AssistantDelta(format!(
-                "[stopped: hit tool-hop limit of {MAX_TOOL_HOPS}]"
-            ));
-            yield TurnEvent::AssistantEnd;
-            yield TurnEvent::TurnEnd;
         }
     }
 

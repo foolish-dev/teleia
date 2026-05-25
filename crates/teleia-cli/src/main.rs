@@ -303,8 +303,8 @@ const KNOWN_CLOUD_MODELS: &[&str] = &[
                   It talks to any OpenAI-compatible chat-completions endpoint — local Ollama (default), \
                   Anthropic, OpenAI, Google, xAI, DeepSeek, Mistral, Groq, or OpenRouter — picking the \
                   provider automatically from the model name unless --base-url is overridden. Tools \
-                  round-trip through a 16-hop loop: `read`, `write`, `edit`, `bash`, `list`, `glob`, \
-                  and `grep`.\n\
+                  round-trip in a loop until the model stops requesting them: `read`, `write`, \
+                  `edit`, `bash`, `list`, `glob`, and `grep`.\n\
                   \n\
                   The TUI offers vim-style Insert / Normal / Command modes, autocomplete with drop-down \
                   menus for slash commands and saved aliases, ghost-text suggestions, readline-style input \

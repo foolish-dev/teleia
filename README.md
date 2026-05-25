@@ -83,7 +83,7 @@ Three stances control tool execution — cycle with `Shift+Tab` or set explicitl
 
 ## Tools
 
-Twenty-five built-ins, capped at a 16-hop loop per turn. MCP servers add more to the same dispatch loop.
+Twenty-five built-ins, dispatched in a tool-call loop that runs until the model stops requesting tools. MCP servers add more to the same dispatch loop.
 
 | tool        | does                                                                              |
 | ----------- | --------------------------------------------------------------------------------- |
@@ -216,7 +216,7 @@ root_patterns = ["Cargo.toml"]
 ```
 crates/
   teleia-cli       # `teleia` binary + TUI + MCP client + LSP client
-  teleia-agent     # turn loop, 16-hop cap, permission gate, event stream
+  teleia-agent     # turn loop, permission gate, event stream
   teleia-llm       # chat / pull / tags streaming, provider detection
   teleia-tools     # 22 built-in tools
   teleia-tools-bin # same dispatch as a stdin/stdout CLI
