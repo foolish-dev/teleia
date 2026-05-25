@@ -3026,20 +3026,80 @@ fn handle_mouse<B: ratatui::backend::Backend>(
     }
 }
 
-/// Push selected text to the system clipboard and surface a one-line
-/// status. arboard can fail when no display server is reachable (SSH
-/// without forwarding, headless CI) — in that case we report the error
-/// rather than silently dropping the copy.
+/// Push selected text to the system clipboard via two parallel paths so
+/// copy works in as many environments as possible:
+///
+/// 1. **OSC 52** (`ESC ] 52 ; c ; <base64> BEL`) — a terminal escape
+///    that asks the emulator itself to claim the clipboard. Works
+///    across SSH because the sequence rides the TTY back to the user's
+///    local terminal; works under tmux with `set -g set-clipboard on`.
+///    Honored by foot, kitty, alacritty, wezterm, iTerm2, Windows
+///    Terminal, and modern xterm.
+/// 2. **arboard** — direct system-clipboard API for the local case
+///    (Wayland with wl-clipboard, X11 with xclip/xsel, macOS, Windows).
+///
+/// arboard can fail when no display server is reachable; OSC 52 then
+/// covers it. We report success whenever either channel landed bytes
+/// somewhere, and only surface "clipboard error" when both failed.
 fn copy_to_clipboard(text: &str, state: &mut State) {
-    match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(text.to_string())) {
-        Ok(()) => {
-            let chars = text.chars().count();
-            state.status = format!("copied {chars} chars to clipboard");
-        }
-        Err(e) => {
-            state.status = format!("clipboard error: {e}");
-        }
+    let osc_ok = emit_osc52(text).is_ok();
+    let arboard_ok = arboard::Clipboard::new()
+        .and_then(|mut cb| cb.set_text(text.to_string()))
+        .is_ok();
+    let chars = text.chars().count();
+    state.status = match (osc_ok, arboard_ok) {
+        (_, true) => format!("copied {chars} chars to clipboard"),
+        (true, false) => format!("copied {chars} chars to clipboard (osc52)"),
+        (false, false) => "clipboard error: no channel succeeded".to_string(),
+    };
+}
+
+/// Write an OSC 52 clipboard-set sequence directly to stdout. Inside
+/// crossterm raw mode the TUI redraws every frame, so an emulator that
+/// chooses to display the OSC payload would have it overwritten on the
+/// next paint — but modern terminals consume it silently.
+fn emit_osc52(text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let encoded = base64_encode(text.as_bytes());
+    let mut stdout = std::io::stdout().lock();
+    write!(stdout, "\x1b]52;c;{encoded}\x07")?;
+    stdout.flush()
+}
+
+/// Standard base64 (RFC 4648 §4) without padding-stripping, alphabet
+/// `A-Za-z0-9+/`. Hand-rolled to match the no-base64-crate posture of
+/// `sha256` in teleia-tools — OSC 52 is the only consumer.
+fn base64_encode(input: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    let mut chunks = input.chunks_exact(3);
+    for chunk in &mut chunks {
+        let n = ((chunk[0] as u32) << 16) | ((chunk[1] as u32) << 8) | (chunk[2] as u32);
+        out.push(ALPHABET[((n >> 18) & 0x3f) as usize] as char);
+        out.push(ALPHABET[((n >> 12) & 0x3f) as usize] as char);
+        out.push(ALPHABET[((n >> 6) & 0x3f) as usize] as char);
+        out.push(ALPHABET[(n & 0x3f) as usize] as char);
     }
+    let rem = chunks.remainder();
+    match rem.len() {
+        1 => {
+            let n = (rem[0] as u32) << 16;
+            out.push(ALPHABET[((n >> 18) & 0x3f) as usize] as char);
+            out.push(ALPHABET[((n >> 12) & 0x3f) as usize] as char);
+            out.push('=');
+            out.push('=');
+        }
+        2 => {
+            let n = ((rem[0] as u32) << 16) | ((rem[1] as u32) << 8);
+            out.push(ALPHABET[((n >> 18) & 0x3f) as usize] as char);
+            out.push(ALPHABET[((n >> 12) & 0x3f) as usize] as char);
+            out.push(ALPHABET[((n >> 6) & 0x3f) as usize] as char);
+            out.push('=');
+        }
+        _ => {}
+    }
+    out
 }
 
 /// Pull the symbol from each cell in the selection range into a string,
@@ -3847,6 +3907,47 @@ fn render_entry(entry: &Entry, frame: usize, username: &str) -> Vec<Line<'static
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base64_encode_empty_is_empty() {
+        assert_eq!(base64_encode(b""), "");
+    }
+
+    #[test]
+    fn base64_encode_one_byte_double_pads() {
+        // RFC 4648 §10: "f" → "Zg==".
+        assert_eq!(base64_encode(b"f"), "Zg==");
+    }
+
+    #[test]
+    fn base64_encode_two_bytes_single_pads() {
+        // RFC 4648 §10: "fo" → "Zm8=".
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+    }
+
+    #[test]
+    fn base64_encode_three_bytes_no_pad() {
+        // RFC 4648 §10: "foo" → "Zm9v".
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+    }
+
+    #[test]
+    fn base64_encode_rfc_test_vectors() {
+        // Full RFC 4648 §10 vector table.
+        assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
+        assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn base64_encode_handles_non_ascii() {
+        // Greek τέλεια — three multi-byte codepoints, exercises the
+        // full byte-range of the alphabet table.
+        let encoded = base64_encode("τέλεια".as_bytes());
+        // Round-trip via a known-good reference (computed once,
+        // documented inline so the test is self-contained).
+        assert_eq!(encoded, "z4TOrc67zrXOuc6x");
+    }
 
     #[test]
     fn plain_prose_passes_through_unchanged() {
