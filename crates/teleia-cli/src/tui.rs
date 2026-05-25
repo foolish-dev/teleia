@@ -2,8 +2,9 @@ use crate::highlight;
 use anyhow::Result;
 use crossterm::{
     event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
-        KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+        MouseEventKind,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -614,7 +615,17 @@ pub async fn run(
     // stops working as-is — most emulators expose Shift+drag (or a
     // similar modifier) as "send to terminal, ignore app capture" so
     // selection is still reachable.
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    // Bracketed paste turns Ctrl+Shift+V (and most emulator paste-binds)
+    // into a single `Event::Paste(String)` instead of a stream of synthetic
+    // keystrokes that terminals + tmux variously drop, garble, or interpret
+    // as control codes. Without this, paste into the input box silently
+    // does nothing in most modern terminals.
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        EnableBracketedPaste
+    )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -665,7 +676,8 @@ pub async fn run(
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
-        DisableMouseCapture
+        DisableMouseCapture,
+        DisableBracketedPaste
     )?;
     terminal.show_cursor()?;
     result
@@ -690,6 +702,10 @@ async fn event_loop<B: ratatui::backend::Backend>(
             Event::Key(k) => k,
             Event::Mouse(m) => {
                 handle_mouse(terminal, state, m);
+                continue;
+            }
+            Event::Paste(s) => {
+                insert_paste(state, &s);
                 continue;
             }
             _ => continue,
@@ -1774,6 +1790,7 @@ async fn run_turn<B: ratatui::backend::Backend>(
                     handle_input_edit(state, k);
                 }
                 Event::Mouse(m) => handle_mouse(terminal, state, m),
+                Event::Paste(s) => insert_paste(state, &s),
                 _ => {}
             }
         }
@@ -2941,6 +2958,30 @@ fn rect_contains(r: Rect, col: u16, row: u16) -> bool {
 /// Subset of the Insert-mode handler: just the keys that mutate the
 /// input buffer — no menu, no recall, no scroll, no submit. Used inside
 /// `run_turn` so the user can keep typing while a turn streams.
+/// Insert text from a bracketed-paste event into whichever input
+/// buffer is currently focused: the masked API-key buffer takes
+/// precedence (matches the focus order in the outer event loop),
+/// then Insert mode targets `state.input`, Command mode targets
+/// `state.command_buf`, and Normal mode swallows the paste.
+fn insert_paste(state: &mut State, text: &str) {
+    if let Some(entry) = state.pending_key_entry.as_mut() {
+        entry.buf.push_str(text);
+        return;
+    }
+    match state.mode {
+        Mode::Insert => {
+            state.input.insert_str(state.input_cursor, text);
+            state.input_cursor += text.len();
+            state.recall_idx = None;
+        }
+        Mode::Command => {
+            state.command_buf.insert_str(state.command_cursor, text);
+            state.command_cursor += text.len();
+        }
+        Mode::Normal => {}
+    }
+}
+
 fn handle_input_edit(state: &mut State, key: KeyEvent) {
     match key.code {
         KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => match c {
@@ -4012,6 +4053,56 @@ mod tests {
         let p = osc52_payload("hi", false);
         // OSC 52, clipboard selection `c`, base64 of "hi" = "aGk=", BEL terminator.
         assert_eq!(p, "\x1b]52;c;aGk=\x07");
+    }
+
+    #[test]
+    fn insert_paste_appends_to_input_in_insert_mode() {
+        let mut s = State::new("dummy", "dummy");
+        s.mode = Mode::Insert;
+        s.input = "hello ".to_string();
+        s.input_cursor = s.input.len();
+        insert_paste(&mut s, "world");
+        assert_eq!(s.input, "hello world");
+        assert_eq!(s.input_cursor, s.input.len());
+    }
+
+    #[test]
+    fn insert_paste_targets_command_buffer_in_command_mode() {
+        let mut s = State::new("dummy", "dummy");
+        s.mode = Mode::Command;
+        s.command_buf = "save ".to_string();
+        s.command_cursor = s.command_buf.len();
+        insert_paste(&mut s, "alias");
+        assert_eq!(s.command_buf, "save alias");
+        assert_eq!(s.command_cursor, s.command_buf.len());
+        assert_eq!(s.input, ""); // input untouched
+    }
+
+    #[test]
+    fn insert_paste_is_no_op_in_normal_mode() {
+        let mut s = State::new("dummy", "dummy");
+        s.mode = Mode::Normal;
+        s.input = "untouched".to_string();
+        insert_paste(&mut s, "nope");
+        assert_eq!(s.input, "untouched");
+    }
+
+    #[test]
+    fn insert_paste_into_pending_key_entry_overrides_mode() {
+        let mut s = State::new("dummy", "dummy");
+        // Even though mode is Insert, pending_key_entry takes the paste.
+        s.mode = Mode::Insert;
+        s.input = "should-stay".to_string();
+        s.input_cursor = s.input.len();
+        s.pending_key_entry = Some(KeyEntry {
+            provider: "anthropic".into(),
+            env_var: "ANTHROPIC_API_KEY".into(),
+            buf: "sk-".into(),
+            existing: false,
+        });
+        insert_paste(&mut s, "ant-abcdef");
+        assert_eq!(s.pending_key_entry.as_ref().unwrap().buf, "sk-ant-abcdef");
+        assert_eq!(s.input, "should-stay"); // input box untouched
     }
 
     #[test]
