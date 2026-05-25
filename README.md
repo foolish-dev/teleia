@@ -199,8 +199,9 @@ args    = ["run", "-i", "--rm", "ghcr.io/github/github-mcp-server"]
 [mcps.github.env]
 GITHUB_PERSONAL_ACCESS_TOKEN = "ghp_…"
 
-# LSP server. Spawned + initialised at startup (handshake only);
-# tool exposure (hover / definition / diagnostics) is still TODO.
+# LSP server. Spawned + initialised at startup; pull diagnostics and
+# hover are exposed to the agent as `lsp_diagnostics` and `lsp_hover`.
+# Definition / references / workspace ops are still TODO.
 [lsps.rust]
 command       = "rust-analyzer"
 root_patterns = ["Cargo.toml"]
@@ -208,7 +209,7 @@ root_patterns = ["Cargo.toml"]
 
 **MCP**: teleia speaks newline-delimited JSON-RPC over stdio — `initialize` + `notifications/initialized` + `tools/list` + `tools/call` + `resources/list`. Spawn failures stderr-warn but don't abort boot. `/mcps` lists running servers with tool + resource counts.
 
-**LSP**: real Content-Length-framed JSON-RPC client. Each configured server gets `initialize` + `initialized`. `/lsps` shows live status + advertised `serverInfo`. Document sync + hover/definition/diagnostics tools are not wired yet.
+**LSP**: real Content-Length-framed JSON-RPC client. Each configured server gets `initialize` + `initialized`. `/lsps` shows live status + advertised `serverInfo`. `lsp_diagnostics` (pull diagnostics) and `lsp_hover` are exposed to the agent; one-shot `textDocument/didOpen` lazily on first request. Definition / references / workspace ops are still TODO.
 
 ## Layout
 

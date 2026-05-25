@@ -1,15 +1,15 @@
 //! Minimal LSP (Language Server Protocol) client. Spawns each
 //! configured server, exchanges the `initialize` handshake over the
 //! Content-Length-framed JSON-RPC the protocol mandates, and exposes
-//! `textDocument/diagnostic` (pull diagnostics, LSP 3.17) as the
-//! `lsp_diagnostics` agent tool.
+//! `textDocument/diagnostic` (pull diagnostics, LSP 3.17) and
+//! `textDocument/hover` as the `lsp_diagnostics` and `lsp_hover` agent
+//! tools.
 //!
 //! Document synchronisation is best-effort: a file gets a one-shot
 //! `textDocument/didOpen` the first time the agent asks about it, then
-//! pull-diagnostic requests fan out to every running server so we
-//! don't have to maintain a language-id → server routing table here.
-//! Hover, definition, references, and workspace operations are still
-//! TODO.
+//! requests fan out to every running server so we don't have to
+//! maintain a language-id → server routing table here. Definition,
+//! references, and workspace operations are still TODO.
 
 use anyhow::{anyhow, Context, Result};
 use futures_util::future::BoxFuture;
@@ -28,6 +28,11 @@ use crate::config::LspEntry;
 /// LSP server is running. Pulls diagnostics for a file via
 /// `textDocument/diagnostic`.
 pub const DIAGNOSTICS_TOOL: &str = "lsp_diagnostics";
+
+/// Synthetic tool name surfaced by [`LspRegistry`] when at least one
+/// LSP server is running. Requests hover info for a 1-based
+/// `(line, character)` position via `textDocument/hover`.
+pub const HOVER_TOOL: &str = "lsp_hover";
 
 #[derive(Debug, Clone, Deserialize)]
 struct Position {
@@ -123,6 +128,10 @@ impl LspClient {
                     "diagnostic": {
                         "dynamicRegistration": false,
                         "relatedDocumentSupport": false
+                    },
+                    "hover": {
+                        "dynamicRegistration": false,
+                        "contentFormat": ["markdown", "plaintext"]
                     }
                 },
                 "workspace": {}
@@ -234,6 +243,32 @@ impl LspClient {
         Ok(lines)
     }
 
+    /// LSP `textDocument/hover`. `line` and `character` are 0-based
+    /// (LSP wire convention). Returns the rendered hover text, or
+    /// `None` when the server has nothing to say at that position
+    /// (response is `null` or has empty contents). Servers that don't
+    /// implement hover surface a method-not-found error — the registry
+    /// treats that as "no hover from this server" and moves on.
+    pub async fn hover(&mut self, uri: &str, line: u32, character: u32) -> Result<Option<String>> {
+        let params = json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": line, "character": character }
+        });
+        let result = self.request("textDocument/hover", params).await?;
+        if result.is_null() {
+            return Ok(None);
+        }
+        let Some(contents) = result.get("contents") else {
+            return Ok(None);
+        };
+        let rendered = render_hover_contents(contents);
+        Ok(if rendered.is_empty() {
+            None
+        } else {
+            Some(rendered)
+        })
+    }
+
     /// LSP framing: `Content-Length: N\r\n\r\n<N bytes of JSON>`.
     async fn write_frame(&mut self, payload: &Value) -> Result<()> {
         let body = serde_json::to_vec(payload)?;
@@ -308,6 +343,29 @@ fn format_diagnostic(uri: &str, d: &Diagnostic) -> String {
     match d.source.as_deref() {
         Some(s) if !s.is_empty() => format!("{path}:{line}:{col} {sev} [{s}]: {}", d.message),
         _ => format!("{path}:{line}:{col} {sev}: {}", d.message),
+    }
+}
+
+/// Flatten an LSP Hover `contents` field into a single string. The
+/// spec allows three shapes: a bare string, a `{ language, value }`
+/// MarkedString, a `{ kind, value }` MarkupContent, or an array of
+/// MarkedStrings. We collapse the array case with blank-line
+/// separators and pull `value` out of either object shape.
+fn render_hover_contents(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Array(arr) => arr
+            .iter()
+            .map(render_hover_contents)
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+        Value::Object(obj) => obj
+            .get("value")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        _ => String::new(),
     }
 }
 
@@ -429,6 +487,50 @@ impl LspRegistry {
             Ok(all.join("\n"))
         }
     }
+
+    /// Fan a hover request across every running server. Positions are
+    /// 1-based on the way in (to match how diagnostics render
+    /// `path:line:col`) and converted to LSP's 0-based wire form
+    /// inside. Per-server failures are swallowed the same way as
+    /// `diagnostics_for`. Hover blobs from multiple servers are joined
+    /// with a `---` separator.
+    pub async fn hover_for(&mut self, path: &str, line: u32, character: u32) -> Result<String> {
+        let raw = Path::new(path);
+        let abs = raw
+            .canonicalize()
+            .with_context(|| format!("resolving `{path}`"))?;
+        let uri = url_from_path(&abs)
+            .ok_or_else(|| anyhow!("could not form file:// URI for `{path}`"))?;
+        let text = std::fs::read_to_string(&abs).with_context(|| format!("reading `{path}`"))?;
+        let language_id = guess_language_id(&abs);
+
+        let lsp_line = line.saturating_sub(1);
+        let lsp_char = character.saturating_sub(1);
+
+        let mut blobs: Vec<String> = Vec::new();
+        for client in self.clients.iter_mut() {
+            if client
+                .open_document(&uri, &language_id, &text)
+                .await
+                .is_err()
+            {
+                continue;
+            }
+            if let Ok(Some(h)) = client.hover(&uri, lsp_line, lsp_char).await {
+                blobs.push(h);
+            }
+        }
+        if blobs.is_empty() {
+            Ok(format!(
+                "no hover info at {}:{}:{}",
+                abs.display(),
+                line,
+                character
+            ))
+        } else {
+            Ok(blobs.join("\n\n---\n\n"))
+        }
+    }
 }
 
 impl ToolRouter for LspRegistry {
@@ -436,44 +538,87 @@ impl ToolRouter for LspRegistry {
         if self.clients.is_empty() {
             return Vec::new();
         }
-        let description = format!(
+        let n = self.clients.len();
+        let diagnostics_description = format!(
             "Get diagnostics (errors, warnings) for a source file from the \
-             {} configured language server(s). Sends textDocument/didOpen \
+             {n} configured language server(s). Sends textDocument/didOpen \
              on first use, then issues a pull-diagnostic request. Returns \
              one `<path>:<line>:<col> <severity>[<source>]: <message>` row \
              per diagnostic, or `no diagnostics for <path>` when clean.",
-            self.clients.len(),
         );
-        vec![ToolDef::new(
-            DIAGNOSTICS_TOOL,
-            description,
-            json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Path to the file to diagnose (absolute or relative to teleia's cwd)"
-                    }
-                },
-                "required": ["path"]
-            }),
-        )]
+        let hover_description = format!(
+            "Get hover info (type, signature, doc-comment) at a source \
+             position from the {n} configured language server(s). `line` \
+             and `character` are 1-based to match the `<path>:<line>:<col>` \
+             positions printed by `lsp_diagnostics`. Returns the rendered \
+             hover blob (markdown when the server provides it), or `no \
+             hover info at <path>:<line>:<col>` when the server has \
+             nothing at that position.",
+        );
+        vec![
+            ToolDef::new(
+                DIAGNOSTICS_TOOL,
+                diagnostics_description,
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path to the file to diagnose (absolute or relative to teleia's cwd)"
+                        }
+                    },
+                    "required": ["path"]
+                }),
+            ),
+            ToolDef::new(
+                HOVER_TOOL,
+                hover_description,
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path to the file (absolute or relative to teleia's cwd)"
+                        },
+                        "line": {
+                            "type": "integer",
+                            "description": "1-based line number (matches lsp_diagnostics output)"
+                        },
+                        "character": {
+                            "type": "integer",
+                            "description": "1-based column number (matches lsp_diagnostics output)"
+                        }
+                    },
+                    "required": ["path", "line", "character"]
+                }),
+            ),
+        ]
     }
     fn handles(&self, name: &str) -> bool {
-        name == DIAGNOSTICS_TOOL && !self.clients.is_empty()
+        (name == DIAGNOSTICS_TOOL || name == HOVER_TOOL) && !self.clients.is_empty()
     }
     fn dispatch<'a>(&'a mut self, name: &'a str, args: &'a str) -> BoxFuture<'a, Result<String>> {
         Box::pin(async move {
-            if name != DIAGNOSTICS_TOOL {
-                return Err(anyhow!("LSP tool `{name}` not registered"));
-            }
             let v: Value = serde_json::from_str(args)
                 .with_context(|| format!("invalid JSON args for `{name}`"))?;
             let path = v
                 .get("path")
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow!("`{name}` requires a string `path` argument"))?;
-            self.diagnostics_for(path).await
+            match name {
+                DIAGNOSTICS_TOOL => self.diagnostics_for(path).await,
+                HOVER_TOOL => {
+                    let line =
+                        v.get("line").and_then(Value::as_u64).ok_or_else(|| {
+                            anyhow!("`{name}` requires an integer `line` argument")
+                        })? as u32;
+                    let character = v.get("character").and_then(Value::as_u64).ok_or_else(|| {
+                        anyhow!("`{name}` requires an integer `character` argument")
+                    })? as u32;
+                    self.hover_for(path, line, character).await
+                }
+                _ => Err(anyhow!("LSP tool `{name}` not registered")),
+            }
         })
     }
 }
@@ -537,6 +682,49 @@ mod tests {
         assert_eq!(guess_language_id(Path::new("a.zig")), "zig");
         // No extension → plaintext sentinel.
         assert_eq!(guess_language_id(Path::new("Makefile")), "plaintext");
+    }
+
+    #[test]
+    fn render_hover_handles_bare_string() {
+        let v = json!("hello world");
+        assert_eq!(render_hover_contents(&v), "hello world");
+    }
+
+    #[test]
+    fn render_hover_handles_markup_content() {
+        let v = json!({ "kind": "markdown", "value": "```rs\nfn foo()\n```" });
+        assert_eq!(render_hover_contents(&v), "```rs\nfn foo()\n```");
+    }
+
+    #[test]
+    fn render_hover_handles_marked_string_object() {
+        let v = json!({ "language": "rust", "value": "fn foo()" });
+        assert_eq!(render_hover_contents(&v), "fn foo()");
+    }
+
+    #[test]
+    fn render_hover_joins_array_with_blank_lines() {
+        let v = json!([
+            "Type: `u32`",
+            { "language": "rust", "value": "fn foo()" },
+            { "kind": "markdown", "value": "Computes the answer." }
+        ]);
+        assert_eq!(
+            render_hover_contents(&v),
+            "Type: `u32`\n\nfn foo()\n\nComputes the answer."
+        );
+    }
+
+    #[test]
+    fn render_hover_skips_empty_array_entries() {
+        let v = json!(["", { "value": "" }, "real text"]);
+        assert_eq!(render_hover_contents(&v), "real text");
+    }
+
+    #[test]
+    fn render_hover_object_without_value_is_empty() {
+        let v = json!({ "language": "rust" });
+        assert_eq!(render_hover_contents(&v), "");
     }
 
     #[test]
