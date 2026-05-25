@@ -13,7 +13,7 @@
   <a href="https://huggingface.co/FoolDev/Thanatos-27B"><img alt="FoolDev/Thanatos-27B on Hugging Face" src="https://img.shields.io/badge/%F0%9F%A4%97-FoolDev%2FThanatos--27B-bb9af7?logo=huggingface&logoColor=1a1b26&labelColor=24283b"></a>
 </p>
 
-**λ τέλεια — a minimal TUI coding agent (rewritten in Rust btw).** One binary, no daemon. Talks to a local Ollama or any of twenty cloud chat-completions endpoints (≈210 named models in the dropdown). Runs twenty-five built-in tools (read/write/edit + bash + list/glob/grep + head/tail/tree/stat/diff/which/fetch/wc/sha256/date + apply_patch/mkdir/mv/cp/touch + lint/format/typecheck), hosts MCP servers, persists sessions to SQLite, resumes where you left off, and paints an OS-aware welcome banner on launch.
+**λ τέλεια — a minimal TUI coding agent (rewritten in Rust btw).** One binary, no daemon. Talks to a local Ollama or any of twenty cloud chat-completions endpoints (≈210 named models in the dropdown). Runs twenty-eight built-in tools (read/write/edit/multi_edit/rm + bash + list/glob/grep + head/tail/tree/stat/diff/which/fetch/wc/sha256/date + apply_patch/mkdir/mv/cp/touch + lint/format/typecheck + todo_write), hosts MCP servers, persists sessions to SQLite, resumes where you left off, and paints an OS-aware welcome banner on launch.
 
 <p align="center">
   <img src="assets/screenshot.svg" alt="τέλεια TUI session" width="780">
@@ -154,13 +154,15 @@ From Normal mode, `:` opens a command line. The dropdown filters `EX_COMMANDS` b
 
 ## Tools
 
-Twenty-five built-ins, dispatched in a tool-call loop that runs until the model stops requesting tools. MCP servers add more to the same dispatch loop.
+Twenty-eight built-ins, dispatched in a tool-call loop that runs until the model stops requesting tools. MCP servers add more to the same dispatch loop.
 
 | tool        | does                                                                              |
 | ----------- | --------------------------------------------------------------------------------- |
 | `read`      | read a file; output is syntax-highlighted via scope-aware syntect mapping         |
 | `write`     | overwrite a file                                                                  |
-| `edit`      | unique-substring replace inside a file                                            |
+| `edit`      | unique-substring replace inside a file; `replace_all: true` substitutes every occurrence |
+| `multi_edit` | apply a sequence of edits to one file atomically — writes only if every step succeeds   |
+| `rm`        | delete a file, or a directory tree with `recursive: true`; refuses `/`            |
 | `apply_patch` | unified diff via `/usr/bin/patch -pN`                                           |
 | `bash`      | shell command (combined stdout/stderr, 30s timeout)                               |
 | `list`      | directory listing, dirs suffixed with `/`                                         |
@@ -182,6 +184,7 @@ Twenty-five built-ins, dispatched in a tool-call loop that runs until the model 
 | `lint`      | `cargo clippy` / `ruff` (→ `flake8`) / `eslint` / `go vet` / `shellcheck` by extension |
 | `format`    | `rustfmt` / `ruff format` (→ `black`) / `prettier` / `gofmt` (writes in place)    |
 | `typecheck` | `cargo check` / `mypy` / `tsc --noEmit` / `go build` by extension                 |
+| `todo_write` | replace the session todo list (`pending` / `in_progress` / `completed`); resets on restart |
 
 ## Providers
 
