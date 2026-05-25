@@ -3057,13 +3057,36 @@ fn copy_to_clipboard(text: &str, state: &mut State) {
 /// Write an OSC 52 clipboard-set sequence directly to stdout. Inside
 /// crossterm raw mode the TUI redraws every frame, so an emulator that
 /// chooses to display the OSC payload would have it overwritten on the
-/// next paint — but modern terminals consume it silently.
+/// next paint — but modern terminals consume it silently. When `$TMUX`
+/// is set, also emit the DCS-passthrough wrapped form so the outer
+/// terminal receives the OSC even if the user hasn't set
+/// `set -g set-clipboard on` in their tmux config.
 fn emit_osc52(text: &str) -> std::io::Result<()> {
     use std::io::Write;
-    let encoded = base64_encode(text.as_bytes());
+    let bytes = osc52_payload(text, std::env::var_os("TMUX").is_some());
     let mut stdout = std::io::stdout().lock();
-    write!(stdout, "\x1b]52;c;{encoded}\x07")?;
+    stdout.write_all(bytes.as_bytes())?;
     stdout.flush()
+}
+
+/// Build the OSC 52 clipboard-set escape, optionally followed by a
+/// tmux-passthrough-wrapped copy of the same bytes. Split out from
+/// [`emit_osc52`] so the wrapping logic is testable without owning
+/// stdout.
+///
+/// Tmux passthrough is `ESC P tmux ; <payload with every ESC doubled>
+/// ESC \\` — tmux strips the wrapper and forwards the inner bytes to
+/// the host terminal. Requires `allow-passthrough on` (default in
+/// tmux 3.3+).
+fn osc52_payload(text: &str, in_tmux: bool) -> String {
+    let encoded = base64_encode(text.as_bytes());
+    let bare = format!("\x1b]52;c;{encoded}\x07");
+    if in_tmux {
+        let inner = bare.replace('\x1b', "\x1b\x1b");
+        format!("{bare}\x1bPtmux;{inner}\x1b\\")
+    } else {
+        bare
+    }
 }
 
 /// Standard base64 (RFC 4648 §4) without padding-stripping, alphabet
@@ -3937,6 +3960,26 @@ mod tests {
         assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
         assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
         assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn osc52_payload_bare_when_not_in_tmux() {
+        let p = osc52_payload("hi", false);
+        // OSC 52, clipboard selection `c`, base64 of "hi" = "aGk=", BEL terminator.
+        assert_eq!(p, "\x1b]52;c;aGk=\x07");
+    }
+
+    #[test]
+    fn osc52_payload_includes_tmux_passthrough_when_in_tmux() {
+        let p = osc52_payload("hi", true);
+        // Bare OSC 52 (so tmux's own set-clipboard handler still sees
+        // it), followed by the DCS-passthrough form (so the outer term
+        // gets the OSC regardless of tmux config). Inside the wrapper,
+        // every ESC in the payload is doubled.
+        let bare = "\x1b]52;c;aGk=\x07";
+        let inner_escaped = "\x1b\x1b]52;c;aGk=\x07";
+        let expected = format!("{bare}\x1bPtmux;{inner_escaped}\x1b\\");
+        assert_eq!(p, expected);
     }
 
     #[test]
