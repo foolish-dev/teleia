@@ -669,6 +669,13 @@ async fn main() -> Result<()> {
     // `handles()`. Empty router skipped so the agent's built-in tools
     // stay the only option when neither registry has anything to add.
     {
+        // Snapshot the per-server tool breakdown before mcp_registry is
+        // boxed into the router — the agent needs it to hide / restore a
+        // server's tools via `/mcps disable|enable NAME`.
+        let mcp_server_defs = mcp_registry
+            .as_ref()
+            .map(|r| r.server_tool_defs())
+            .unwrap_or_default();
         let mut routers: Vec<Box<dyn teleia_agent::ToolRouter>> = Vec::new();
         if let Some(r) = mcp_registry {
             routers.push(Box::new(r));
@@ -678,6 +685,11 @@ async fn main() -> Result<()> {
         }
         if !routers.is_empty() {
             agent.set_tool_router(Box::new(router::CombinedRouter::new(routers)));
+        }
+        if !mcp_server_defs.is_empty() {
+            // Applies the persisted `mcp_disabled` pref, so a server
+            // disabled in a previous session stays disabled here too.
+            agent.set_mcp_servers(mcp_server_defs);
         }
     }
 

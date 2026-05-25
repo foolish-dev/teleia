@@ -335,6 +335,11 @@ enum MenuKind {
     /// Ollama-installed model list — surfaced from agent.available_models();
     /// arg-replacement like Alias/Theme but with a distinct title.
     Model,
+    /// MCP server name list — surfaced after `/mcps enable ` or `/mcps
+    /// disable `. Acceptance replaces only the trailing token (after the
+    /// LAST space), unlike Alias/Theme/Model which replace everything
+    /// after the first.
+    McpServer,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1185,7 +1190,7 @@ fn translate_ex(cmd: &str) -> Result<String, String> {
         "copy" | "yank" | "y" => "copy".to_string(),
         "keys" => "keys".to_string(),
         "key" => format!("key {arg}"),
-        "mcps" => "mcps".to_string(),
+        "mcps" => format!("mcps {arg}"),
         "lsps" => "lsps".to_string(),
         "auto" => "auto".to_string(),
         "build" | "ask" => "build".to_string(),
@@ -1284,14 +1289,20 @@ fn arg_placeholder(cmd: &str) -> Option<&'static str> {
         "prompt" => Some(" [NAME]"),
         "key" => Some(" PROVIDER"),
         "cd" => Some(" PATH"),
+        "mcps" => Some(" [enable|disable NAME]"),
         _ => None,
     }
 }
 
 /// Compute the dropdown menu (if any) for the current input. Pure function
-/// over `(input, aliases)` so the dispatch from `refresh_menu` can decide
-/// when to hit the store.
-fn compute_menu(input: &str, aliases: &[String], models: &[String]) -> Option<Menu> {
+/// over `(input, aliases, models, mcp_servers)` so the dispatch from
+/// `refresh_menu` can decide when to hit the store.
+fn compute_menu(
+    input: &str,
+    aliases: &[String],
+    models: &[String],
+    mcp_servers: &[String],
+) -> Option<Menu> {
     let rest = input.strip_prefix('/')?;
 
     if let Some(space) = rest.find(' ') {
@@ -1391,6 +1402,49 @@ fn compute_menu(input: &str, aliases: &[String], models: &[String]) -> Option<Me
                 kind: MenuKind::Theme,
             });
         }
+        if cmd == "mcps" {
+            // Two-level: first token is action (enable/disable), second
+            // is server name. `arg` is everything after `/mcps `.
+            let mut sub = arg.splitn(2, char::is_whitespace);
+            let action = sub.next().unwrap_or("");
+            let rest_after_action = sub.next();
+            match rest_after_action {
+                None => {
+                    // No second token yet — offer enable/disable filtered by
+                    // the partial action.
+                    let items: Vec<String> = ["enable", "disable"]
+                        .iter()
+                        .filter(|n| n.starts_with(action))
+                        .map(|s| (*s).to_string())
+                        .collect();
+                    if items.is_empty() {
+                        return None;
+                    }
+                    return Some(Menu {
+                        items,
+                        selected: 0,
+                        kind: MenuKind::Theme, // single-arg replacement
+                    });
+                }
+                Some(partial) if matches!(action, "enable" | "disable") => {
+                    let partial = partial.trim_start();
+                    let items: Vec<String> = mcp_servers
+                        .iter()
+                        .filter(|n| n.starts_with(partial))
+                        .cloned()
+                        .collect();
+                    if items.is_empty() {
+                        return None;
+                    }
+                    return Some(Menu {
+                        items,
+                        selected: 0,
+                        kind: MenuKind::McpServer,
+                    });
+                }
+                Some(_) => return None,
+            }
+        }
         return None;
     }
 
@@ -1453,6 +1507,7 @@ fn ex_arg_placeholder(cmd: &str) -> Option<&'static str> {
         "write" | "load" | "edit" | "delete" => Some(" NAME"),
         "model" | "theme" | "colorscheme" => Some(" [NAME]"),
         "notify" | "transparent" => Some(" [on|off]"),
+        "mcps" => Some(" [enable|disable NAME]"),
         _ => None,
     }
 }
@@ -1503,7 +1558,13 @@ fn refresh_menu(state: &mut State, agent: &Agent) {
             } else {
                 Vec::new()
             };
-            compute_menu(&state.input, &aliases, agent.available_models())
+            let mcp_servers = agent.mcp_server_names();
+            compute_menu(
+                &state.input,
+                &aliases,
+                agent.available_models(),
+                &mcp_servers,
+            )
         }
         Mode::Command => compute_ex_menu(&state.command_buf),
         Mode::Normal => None,
@@ -1543,6 +1604,15 @@ fn accept_menu(state: &mut State) -> bool {
             if let Some(space) = state.input.find(' ') {
                 let cmd_prefix = state.input[..=space].to_string();
                 state.input = format!("{cmd_prefix}{item}");
+                state.input_cursor = state.input.len();
+            }
+        }
+        MenuKind::McpServer => {
+            // Replace only the trailing token (after the LAST space) so
+            // `/mcps enable g` → `/mcps enable github`, not `/mcps github`.
+            if let Some(space) = state.input.rfind(' ') {
+                let prefix = state.input[..=space].to_string();
+                state.input = format!("{prefix}{item}");
                 state.input_cursor = state.input.len();
             }
         }
@@ -1929,10 +1999,63 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
             state.push(Entry::Info(body));
         }
         "mcps" => {
-            let text = state.mcp_summary.clone().unwrap_or_else(|| {
-                "no MCP servers configured. Add `[mcps.NAME]` entries to ~/.config/teleia/config.toml.".to_string()
-            });
-            state.push(Entry::Info(text));
+            let mut sub = arg.splitn(2, char::is_whitespace);
+            let action = sub.next().unwrap_or("").trim();
+            let target = sub.next().unwrap_or("").trim();
+            match action {
+                "" => {
+                    let summary = state.mcp_summary.clone().unwrap_or_else(|| {
+                        "no MCP servers configured. Add `[mcps.NAME]` entries to ~/.config/teleia/config.toml.".to_string()
+                    });
+                    let disabled = agent.disabled_mcps();
+                    let mut text = summary;
+                    if !agent.mcp_server_names().is_empty() {
+                        if disabled.is_empty() {
+                            text.push_str("\n\nall servers enabled  ·  /mcps disable NAME to hide a server's tools");
+                        } else {
+                            text.push_str(&format!(
+                                "\n\ndisabled ({} of {}): {}  ·  /mcps enable NAME to restore",
+                                disabled.len(),
+                                agent.mcp_server_names().len(),
+                                disabled.join(", ")
+                            ));
+                        }
+                    }
+                    state.push(Entry::Info(text));
+                }
+                "enable" | "disable" => {
+                    if target.is_empty() {
+                        state.push(Entry::Error(format!(
+                            "usage: /mcps {action} NAME  (known: {})",
+                            if agent.mcp_server_names().is_empty() {
+                                "<no MCP servers configured>".to_string()
+                            } else {
+                                agent.mcp_server_names().join(", ")
+                            }
+                        )));
+                        return;
+                    }
+                    let result = if action == "enable" {
+                        agent.enable_mcp(target)
+                    } else {
+                        agent.disable_mcp(target)
+                    };
+                    match result {
+                        Ok(true) => {
+                            state.push(Entry::Info(format!("{action}d MCP server `{target}`")))
+                        }
+                        Ok(false) => state.push(Entry::Info(format!(
+                            "MCP server `{target}` was already {action}d"
+                        ))),
+                        Err(e) => state.push(Entry::Error(format!("/mcps {action}: {e}"))),
+                    }
+                }
+                other => {
+                    state.push(Entry::Error(format!(
+                        "unknown /mcps subcommand: '{other}'  (use: enable NAME · disable NAME · or no args for status)"
+                    )));
+                }
+            }
         }
         "lsps" => {
             let text = state.lsp_summary.clone().unwrap_or_else(|| {
@@ -2393,6 +2516,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
             MenuKind::Theme => format!(" themes · {total} "),
             MenuKind::Ex => format!(" ex · {total} "),
             MenuKind::Model => format!(" models · {total} "),
+            MenuKind::McpServer => format!(" mcp servers · {total} "),
         };
         // Pass the whole list to ratatui — ListState's offset handling
         // scrolls long catalogues automatically and keeps `selected` in
@@ -3993,21 +4117,21 @@ mod tests {
 
     #[test]
     fn menu_command_list_filters_by_prefix() {
-        let m = compute_menu("/sa", &[], &[]).unwrap();
+        let m = compute_menu("/sa", &[], &[], &[]).unwrap();
         assert_eq!(m.kind, MenuKind::Command);
         assert_eq!(m.items, vec!["save"]);
     }
 
     #[test]
     fn menu_command_list_returns_all_for_lone_slash() {
-        let m = compute_menu("/", &[], &[]).unwrap();
+        let m = compute_menu("/", &[], &[], &[]).unwrap();
         assert_eq!(m.kind, MenuKind::Command);
         assert_eq!(m.items.len(), SLASH_COMMANDS.len());
     }
 
     #[test]
     fn menu_command_list_none_for_unknown_prefix() {
-        assert!(compute_menu("/zzz", &[], &[]).is_none());
+        assert!(compute_menu("/zzz", &[], &[], &[]).is_none());
     }
 
     #[test]
@@ -4017,7 +4141,7 @@ mod tests {
             "audit-pass-2".to_string(),
             "draft".to_string(),
         ];
-        let m = compute_menu("/load aud", &aliases, &[]).unwrap();
+        let m = compute_menu("/load aud", &aliases, &[], &[]).unwrap();
         assert_eq!(m.kind, MenuKind::Alias);
         assert_eq!(m.items, vec!["audit-pass-1", "audit-pass-2"]);
     }
@@ -4025,7 +4149,7 @@ mod tests {
     #[test]
     fn menu_alias_shows_all_on_empty_arg() {
         let aliases = vec!["foo".to_string(), "bar".to_string()];
-        let m = compute_menu("/load ", &aliases, &[]).unwrap();
+        let m = compute_menu("/load ", &aliases, &[], &[]).unwrap();
         assert_eq!(m.kind, MenuKind::Alias);
         assert_eq!(m.items.len(), 2);
     }
@@ -4033,19 +4157,19 @@ mod tests {
     #[test]
     fn menu_alias_none_when_no_aliases_match() {
         let aliases = vec!["foo".to_string()];
-        assert!(compute_menu("/load zzz", &aliases, &[]).is_none());
+        assert!(compute_menu("/load zzz", &aliases, &[], &[]).is_none());
     }
 
     #[test]
     fn menu_none_for_non_alias_commands_with_space() {
         // /help takes no arg; once a space is typed, no menu.
-        assert!(compute_menu("/help ", &[], &[]).is_none());
+        assert!(compute_menu("/help ", &[], &[], &[]).is_none());
     }
 
     #[test]
     fn menu_none_for_empty_or_no_slash() {
-        assert!(compute_menu("", &[], &[]).is_none());
-        assert!(compute_menu("hello", &[], &[]).is_none());
+        assert!(compute_menu("", &[], &[], &[]).is_none());
+        assert!(compute_menu("hello", &[], &[], &[]).is_none());
     }
 
     #[test]
@@ -4170,14 +4294,14 @@ mod tests {
 
     #[test]
     fn menu_theme_filters_by_prefix() {
-        let m = compute_menu("/theme dra", &[], &[]).unwrap();
+        let m = compute_menu("/theme dra", &[], &[], &[]).unwrap();
         assert_eq!(m.kind, MenuKind::Theme);
         assert_eq!(m.items, vec!["dracula"]);
     }
 
     #[test]
     fn menu_theme_lists_all_when_arg_empty() {
-        let m = compute_menu("/theme ", &[], &[]).unwrap();
+        let m = compute_menu("/theme ", &[], &[], &[]).unwrap();
         assert_eq!(m.kind, MenuKind::Theme);
         // Three themes today: tokyo-night, catppuccin, dracula
         assert_eq!(m.items.len(), 3);
@@ -4212,7 +4336,7 @@ mod tests {
             "hf.co/FoolDev/Thanatos-27B-Heretic:Q4_K_M".to_string(),
             "hf.co/FoolDev/Janus-35B:Q4_K_M".to_string(),
         ];
-        let m = compute_menu("/model hf.co", &[], &models).unwrap();
+        let m = compute_menu("/model hf.co", &[], &models, &[]).unwrap();
         assert_eq!(m.kind, MenuKind::Model);
         assert_eq!(m.items.len(), 2);
     }
@@ -4220,7 +4344,7 @@ mod tests {
     #[test]
     fn menu_model_shows_all_on_empty_arg() {
         let models = vec!["a".to_string(), "b".to_string()];
-        let m = compute_menu("/model ", &[], &models).unwrap();
+        let m = compute_menu("/model ", &[], &models, &[]).unwrap();
         assert_eq!(m.kind, MenuKind::Model);
         assert_eq!(m.items.len(), 2);
     }
@@ -4228,12 +4352,12 @@ mod tests {
     #[test]
     fn menu_model_none_when_no_models_cached() {
         // Empty model list (Ollama unreachable at startup) → no menu.
-        assert!(compute_menu("/model anything", &[], &[]).is_none());
+        assert!(compute_menu("/model anything", &[], &[], &[]).is_none());
     }
 
     #[test]
     fn menu_key_lists_providers() {
-        let m = compute_menu("/key ", &[], &[]).unwrap();
+        let m = compute_menu("/key ", &[], &[], &[]).unwrap();
         assert_eq!(m.kind, MenuKind::Theme);
         assert_eq!(m.items.len(), teleia_llm::PROVIDERS.len());
     }
@@ -4242,7 +4366,7 @@ mod tests {
     fn menu_key_filters_by_prefix_case_insensitive() {
         // Provider names are TitleCase but the filter is case-insensitive,
         // so lowercase prefixes still hit them.
-        let m = compute_menu("/key open", &[], &[]).unwrap();
+        let m = compute_menu("/key open", &[], &[], &[]).unwrap();
         assert_eq!(m.kind, MenuKind::Theme);
         assert!(!m.items.is_empty());
         assert!(m
@@ -4253,15 +4377,70 @@ mod tests {
 
     #[test]
     fn menu_notify_offers_on_off() {
-        let m = compute_menu("/notify ", &[], &[]).unwrap();
+        let m = compute_menu("/notify ", &[], &[], &[]).unwrap();
         assert_eq!(m.kind, MenuKind::Theme);
         assert_eq!(m.items, vec!["on", "off"]);
     }
 
     #[test]
     fn menu_transparent_filters_to_off() {
-        let m = compute_menu("/transparent of", &[], &[]).unwrap();
+        let m = compute_menu("/transparent of", &[], &[], &[]).unwrap();
         assert_eq!(m.kind, MenuKind::Theme);
         assert_eq!(m.items, vec!["off"]);
+    }
+
+    #[test]
+    fn menu_mcps_offers_enable_disable_after_space() {
+        let m = compute_menu("/mcps ", &[], &[], &[]).unwrap();
+        // First sub-token dropdown reuses the single-arg replacement
+        // kind — same as the `/notify on/off` menu.
+        assert_eq!(m.kind, MenuKind::Theme);
+        assert_eq!(m.items, vec!["enable", "disable"]);
+    }
+
+    #[test]
+    fn menu_mcps_filters_action_by_prefix() {
+        let m = compute_menu("/mcps en", &[], &[], &[]).unwrap();
+        assert_eq!(m.items, vec!["enable"]);
+    }
+
+    #[test]
+    fn menu_mcps_lists_servers_after_action() {
+        let servers = vec![
+            "filesystem".to_string(),
+            "github".to_string(),
+            "git".to_string(),
+        ];
+        let m = compute_menu("/mcps enable ", &[], &[], &servers).unwrap();
+        assert_eq!(m.kind, MenuKind::McpServer);
+        assert_eq!(m.items.len(), 3);
+    }
+
+    #[test]
+    fn menu_mcps_filters_server_names_by_prefix() {
+        let servers = vec!["filesystem".to_string(), "github".to_string()];
+        let m = compute_menu("/mcps disable gi", &[], &[], &servers).unwrap();
+        assert_eq!(m.kind, MenuKind::McpServer);
+        assert_eq!(m.items, vec!["github"]);
+    }
+
+    #[test]
+    fn menu_mcps_none_for_unknown_action() {
+        let servers = vec!["filesystem".to_string()];
+        assert!(compute_menu("/mcps reload ", &[], &[], &servers).is_none());
+    }
+
+    #[test]
+    fn accept_menu_mcp_server_replaces_only_trailing_token() {
+        let mut state = State::new("dummy-session-id", "dummy-model");
+        state.input = "/mcps enable gi".to_string();
+        state.input_cursor = state.input.len();
+        state.menu = Some(Menu {
+            items: vec!["github".to_string()],
+            selected: 0,
+            kind: MenuKind::McpServer,
+        });
+        assert!(accept_menu(&mut state));
+        assert_eq!(state.input, "/mcps enable github");
     }
 }

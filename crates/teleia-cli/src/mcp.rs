@@ -419,6 +419,23 @@ impl McpRegistry {
             .map(|(idx, c)| (c.name.clone(), tool_counts[idx], self.resources[idx].len()))
             .collect()
     }
+
+    /// Server name → owned tool defs that came from that server. Lets
+    /// the agent record the breakdown before the registry is moved into
+    /// a boxed router, so `/mcps enable|disable NAME` can hide / restore
+    /// a server's contribution without tearing down its child process.
+    pub fn server_tool_defs(&self) -> std::collections::BTreeMap<String, Vec<ToolDef>> {
+        let mut out: std::collections::BTreeMap<String, Vec<ToolDef>> =
+            std::collections::BTreeMap::new();
+        for def in &self.tools {
+            let Some(&idx) = self.index.get(&def.function.name) else {
+                continue;
+            };
+            let server = self.clients[idx].name.clone();
+            out.entry(server).or_default().push(def.clone());
+        }
+        out
+    }
 }
 
 impl McpRegistry {

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use async_stream::try_stream;
 use futures_util::{future::BoxFuture, pin_mut, Stream, StreamExt};
+use std::collections::{BTreeMap, BTreeSet};
 use teleia_llm::{ChatEvent, LlmClient, Message, ToolDef};
 use teleia_store::Store;
 
@@ -160,6 +161,14 @@ pub struct Agent {
     /// When set, its `definitions()` merge into the catalogue sent to
     /// the LLM, and `dispatch()` runs for matching tool names.
     router: Option<Box<dyn ToolRouter>>,
+    /// Per-MCP-server tool catalogue, captured at attach time so we can
+    /// hide / restore a server's tools without tearing down the child
+    /// process. Populated by [`Agent::set_mcp_servers`].
+    mcp_servers: BTreeMap<String, Vec<ToolDef>>,
+    /// MCP server names whose tools are currently filtered out of
+    /// `self.tools`. Synced to the `mcp_disabled` pref so the choice
+    /// survives restart.
+    mcp_disabled: BTreeSet<String>,
 }
 
 impl Agent {
@@ -179,6 +188,8 @@ impl Agent {
             available_models: Vec::new(),
             permission_mode: PermissionMode::default(),
             router: None,
+            mcp_servers: BTreeMap::new(),
+            mcp_disabled: BTreeSet::new(),
         };
         agent.push(Message::System {
             content: system_prompt(),
@@ -207,6 +218,8 @@ impl Agent {
                     available_models: Vec::new(),
                     permission_mode: PermissionMode::default(),
                     router: None,
+                    mcp_servers: BTreeMap::new(),
+                    mcp_disabled: BTreeSet::new(),
                 })
             }
             None => Self::new(llm, store),
@@ -229,6 +242,95 @@ impl Agent {
             }
         }
         self.router = Some(router);
+    }
+
+    /// Record which tool defs came from which MCP server, and apply any
+    /// `mcp_disabled` pref so the persisted choice survives restart.
+    /// Call after [`Agent::set_tool_router`].
+    pub fn set_mcp_servers(&mut self, servers: BTreeMap<String, Vec<ToolDef>>) {
+        self.mcp_servers = servers;
+        let persisted = self
+            .get_pref("mcp_disabled")
+            .unwrap_or_default()
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>();
+        for name in persisted {
+            if self.mcp_servers.contains_key(&name) {
+                self.hide_mcp_tools(&name);
+                self.mcp_disabled.insert(name);
+            }
+        }
+    }
+
+    pub fn mcp_server_names(&self) -> Vec<String> {
+        self.mcp_servers.keys().cloned().collect()
+    }
+
+    pub fn is_mcp_enabled(&self, name: &str) -> bool {
+        self.mcp_servers.contains_key(name) && !self.mcp_disabled.contains(name)
+    }
+
+    pub fn disabled_mcps(&self) -> Vec<String> {
+        self.mcp_disabled.iter().cloned().collect()
+    }
+
+    /// Returns `Ok(true)` if state actually changed, `Ok(false)` if the
+    /// server was already in the requested state, or `Err` if the name
+    /// isn't a known MCP server.
+    pub fn enable_mcp(&mut self, name: &str) -> Result<bool> {
+        if !self.mcp_servers.contains_key(name) {
+            return Err(anyhow::anyhow!("unknown MCP server: {name}"));
+        }
+        if !self.mcp_disabled.remove(name) {
+            return Ok(false);
+        }
+        self.show_mcp_tools(name);
+        self.persist_mcp_disabled();
+        Ok(true)
+    }
+
+    pub fn disable_mcp(&mut self, name: &str) -> Result<bool> {
+        if !self.mcp_servers.contains_key(name) {
+            return Err(anyhow::anyhow!("unknown MCP server: {name}"));
+        }
+        if !self.mcp_disabled.insert(name.to_string()) {
+            return Ok(false);
+        }
+        self.hide_mcp_tools(name);
+        self.persist_mcp_disabled();
+        Ok(true)
+    }
+
+    fn hide_mcp_tools(&mut self, name: &str) {
+        let Some(defs) = self.mcp_servers.get(name) else {
+            return;
+        };
+        let drop: std::collections::HashSet<&str> =
+            defs.iter().map(|d| d.function.name.as_str()).collect();
+        self.tools
+            .retain(|t| !drop.contains(t.function.name.as_str()));
+    }
+
+    fn show_mcp_tools(&mut self, name: &str) {
+        let Some(defs) = self.mcp_servers.get(name).cloned() else {
+            return;
+        };
+        for def in defs {
+            if !self
+                .tools
+                .iter()
+                .any(|t| t.function.name == def.function.name)
+            {
+                self.tools.push(def);
+            }
+        }
+    }
+
+    fn persist_mcp_disabled(&self) {
+        let joined: Vec<&str> = self.mcp_disabled.iter().map(String::as_str).collect();
+        self.set_pref("mcp_disabled", &joined.join(","));
     }
 
     pub fn permission_mode(&self) -> PermissionMode {
@@ -534,5 +636,130 @@ impl Agent {
         self.seq += 1;
         self.messages.push(message);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn tmp_store() -> Store {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "teleia-agent-test-{}-{}.sqlite",
+            std::process::id(),
+            n
+        ));
+        Store::open_at(&path).unwrap()
+    }
+
+    fn fake_agent() -> Agent {
+        // base_url/model are never dialled in these tests — they exercise
+        // the in-memory tool-catalogue + pref pass-through only.
+        let llm = LlmClient::new("http://127.0.0.1:0/v1", "test-model");
+        Agent::new(llm, tmp_store()).unwrap()
+    }
+
+    fn fake_def(name: &str) -> ToolDef {
+        ToolDef::new(name, format!("desc for {name}"), json!({"type": "object"}))
+    }
+
+    #[test]
+    fn disable_mcp_hides_servers_tools_from_catalogue() {
+        let mut agent = fake_agent();
+        let mut servers = BTreeMap::new();
+        servers.insert(
+            "fs".to_string(),
+            vec![fake_def("fs_read"), fake_def("fs_write")],
+        );
+        agent.tools.push(fake_def("fs_read"));
+        agent.tools.push(fake_def("fs_write"));
+        agent.set_mcp_servers(servers);
+
+        assert!(agent.is_mcp_enabled("fs"));
+        let changed = agent.disable_mcp("fs").unwrap();
+        assert!(changed);
+        assert!(!agent.is_mcp_enabled("fs"));
+        assert!(!agent
+            .tools()
+            .iter()
+            .any(|d| d.function.name == "fs_read" || d.function.name == "fs_write"));
+    }
+
+    #[test]
+    fn enable_mcp_restores_tools_after_disable() {
+        let mut agent = fake_agent();
+        let mut servers = BTreeMap::new();
+        servers.insert("git".to_string(), vec![fake_def("git_log")]);
+        agent.tools.push(fake_def("git_log"));
+        agent.set_mcp_servers(servers);
+
+        agent.disable_mcp("git").unwrap();
+        assert!(!agent.tools().iter().any(|d| d.function.name == "git_log"));
+        let changed = agent.enable_mcp("git").unwrap();
+        assert!(changed);
+        assert!(agent.tools().iter().any(|d| d.function.name == "git_log"));
+    }
+
+    #[test]
+    fn enable_mcp_is_noop_when_already_enabled() {
+        let mut agent = fake_agent();
+        let mut servers = BTreeMap::new();
+        servers.insert("git".to_string(), vec![fake_def("git_log")]);
+        agent.tools.push(fake_def("git_log"));
+        agent.set_mcp_servers(servers);
+
+        assert!(!agent.enable_mcp("git").unwrap());
+    }
+
+    #[test]
+    fn disable_mcp_errors_on_unknown_server() {
+        let mut agent = fake_agent();
+        assert!(agent.disable_mcp("nope").is_err());
+    }
+
+    #[test]
+    fn disable_mcp_persists_via_pref_and_restores_on_set_mcp_servers() {
+        // First agent: disable a server. The pref should land in the
+        // shared store.
+        let store_path = std::env::temp_dir().join(format!(
+            "teleia-agent-persist-test-{}.sqlite",
+            std::process::id(),
+        ));
+        let _ = std::fs::remove_file(&store_path);
+
+        {
+            let llm = LlmClient::new("http://127.0.0.1:0/v1", "test-model");
+            let store = Store::open_at(&store_path).unwrap();
+            let mut agent = Agent::new(llm, store).unwrap();
+            let mut servers = BTreeMap::new();
+            servers.insert("ctx7".to_string(), vec![fake_def("ctx7_query")]);
+            agent.tools.push(fake_def("ctx7_query"));
+            agent.set_mcp_servers(servers);
+            agent.disable_mcp("ctx7").unwrap();
+            assert_eq!(agent.get_pref("mcp_disabled").as_deref(), Some("ctx7"));
+        }
+
+        // Second agent: rehydrating from the same store, set_mcp_servers
+        // must replay the persisted disable.
+        {
+            let llm = LlmClient::new("http://127.0.0.1:0/v1", "test-model");
+            let store = Store::open_at(&store_path).unwrap();
+            let mut agent = Agent::new(llm, store).unwrap();
+            let mut servers = BTreeMap::new();
+            servers.insert("ctx7".to_string(), vec![fake_def("ctx7_query")]);
+            agent.tools.push(fake_def("ctx7_query"));
+            agent.set_mcp_servers(servers);
+            assert!(!agent.is_mcp_enabled("ctx7"));
+            assert!(!agent
+                .tools()
+                .iter()
+                .any(|d| d.function.name == "ctx7_query"));
+        }
+
+        let _ = std::fs::remove_file(&store_path);
     }
 }
