@@ -3093,8 +3093,7 @@ fn osc52_payload(text: &str, in_tmux: bool) -> String {
 /// `A-Za-z0-9+/`. Hand-rolled to match the no-base64-crate posture of
 /// `sha256` in teleia-tools — OSC 52 is the only consumer.
 fn base64_encode(input: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
     let mut chunks = input.chunks_exact(3);
     for chunk in &mut chunks {
