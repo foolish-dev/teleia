@@ -1,13 +1,3 @@
-//! Behavioral guidelines drawn from the karpathy-skills CLAUDE.md,
-//! rewritten for a Rust workspace. The agent appends [`GUIDELINES`] to
-//! its system prompt so the model inherits the same four-principle
-//! discipline — but with examples that fit `cargo`, lifetimes, traits,
-//! and the borrow checker rather than generic LLM-coding advice.
-
-/// The four principles, formatted for direct inclusion in a system
-/// prompt. Self-contained — safe to concatenate after the base prompt
-/// with a single blank line.
-pub const GUIDELINES: &str = "\
 # Coding guidelines (Rust)
 
 Bias toward caution over speed. For trivial tasks, use judgment.
@@ -47,4 +37,3 @@ this workspace is:
 A change isn't done until all four pass. For new behavior, add a test
 that pins it before claiming the work is finished; for a bug fix, add a
 test that reproduces the bug first.
-";

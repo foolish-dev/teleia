@@ -15,6 +15,10 @@ pub trait ToolRouter: Send {
     fn dispatch<'a>(&'a mut self, name: &'a str, args: &'a str) -> BoxFuture<'a, Result<String>>;
 }
 
+// Filename is capital-K (matches `Karpathy.md` at the workspace root),
+// but the module identifier stays snake_case so callers keep using
+// `karpathy::GUIDELINES`.
+#[path = "Karpathy.rs"]
 mod karpathy;
 
 #[derive(Debug, Clone, Copy, Default)]

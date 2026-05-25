@@ -51,6 +51,8 @@ reproduces the bug first.
 
 ---
 
-The same four principles are baked into teleia's own agent system prompt at
-`crates/teleia-agent/src/karpathy.rs` — keep the two in sync when editing
-either.
+The same four principles live in `Karpathy.md` at the workspace root and are
+baked into teleia's own agent system prompt at
+`crates/teleia-agent/src/Karpathy.rs` (which `include_str!`s the .md). Edit
+`Karpathy.md` and both stay in sync. The same file is mirrored to
+`~/.claude/Karpathy.md` for the human-facing reference.
