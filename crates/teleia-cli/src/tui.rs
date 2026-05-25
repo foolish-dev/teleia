@@ -3067,47 +3067,51 @@ fn handle_mouse<B: ratatui::backend::Backend>(
     }
 }
 
-/// Push selected text to the system clipboard via three parallel paths
-/// so copy works in as many environments as possible:
+/// Push selected text to the system clipboard. Tries one channel at a
+/// time and stops at the first one that succeeds — running every channel
+/// in parallel makes them race to set the wlr-data-control selection (or
+/// kitty/foot/wezterm's internal clipboard via OSC 52), and the loser's
+/// stale or half-decoded write silently clobbers the winner's good one.
 ///
-/// 1. **`tmux load-buffer -w`** (only when `$TMUX` is set) — populates
+/// Order of preference:
+///
+/// 1. **arboard** — direct system-clipboard API. Talks straight to the
+///    compositor (Wayland with wlr-data-control, X11 via xclip/xsel) or
+///    the OS clipboard (macOS, Windows). Doesn't go through tmux or the
+///    outer terminal, so no escape-sequence parsing to get wrong.
+/// 2. **`tmux load-buffer -w`** (only when `$TMUX` is set) — populates
 ///    tmux's internal paste buffer AND asks tmux to forward the
-///    selection to the outer terminal via OSC 52, honoring whatever
-///    session-level configuration the user already has. Sidesteps the
-///    edge cases of writing OSC 52 directly from inside a tmux pane.
-/// 2. **Direct OSC 52** (`ESC ] 52 ; c ; <base64> BEL`, plus a tmux
+///    selection to the outer terminal via OSC 52. Used when arboard
+///    can't reach a display server (typical SSH-into-tmux case).
+/// 3. **Direct OSC 52** (`ESC ] 52 ; c ; <base64> BEL`, plus a tmux
 ///    DCS-passthrough copy when in tmux) — terminal-escape route that
-///    rides the TTY across SSH. Honored by foot, kitty, alacritty (with
+///    rides the TTY across SSH when neither arboard nor tmux 3.2+ are
+///    available. Honored by foot, kitty, alacritty (with
 ///    `clipboard.write.enabled`), wezterm, iTerm2, Windows Terminal,
 ///    modern xterm.
-/// 3. **arboard** — direct system-clipboard API for the local case
-///    (Wayland with wl-clipboard, X11 with xclip/xsel, macOS, Windows).
 ///
-/// The status line reports which channel(s) succeeded so the user can
-/// tell at a glance whether they're getting tmux-buffer-only, OSC 52,
-/// system clipboard, or some combination.
+/// The status line names the channel that won, so future "paste is
+/// blank" reports point at the right layer.
 fn copy_to_clipboard(text: &str, state: &mut State) {
-    let in_tmux = std::env::var_os("TMUX").is_some();
-    let tmux_ok = in_tmux && tmux_load_buffer(text).is_ok();
-    let osc_ok = emit_osc52(text).is_ok();
-    let arboard_ok = arboard::Clipboard::new()
-        .and_then(|mut cb| cb.set_text(text.to_string()))
-        .is_ok();
     let chars = text.chars().count();
-    state.status = if arboard_ok {
-        format!("copied {chars} chars to clipboard")
-    } else if tmux_ok || osc_ok {
-        let mut via: Vec<&str> = Vec::new();
-        if tmux_ok {
-            via.push("tmux");
-        }
-        if osc_ok {
-            via.push("osc52");
-        }
-        format!("copied {chars} chars to clipboard ({})", via.join("+"))
-    } else {
-        "clipboard error: no channel succeeded".to_string()
-    };
+    let in_tmux = std::env::var_os("TMUX").is_some();
+
+    if arboard::Clipboard::new()
+        .and_then(|mut cb| cb.set_text(text.to_string()))
+        .is_ok()
+    {
+        state.status = format!("copied {chars} chars to clipboard (arboard)");
+        return;
+    }
+    if in_tmux && tmux_load_buffer(text).is_ok() {
+        state.status = format!("copied {chars} chars to clipboard (tmux)");
+        return;
+    }
+    if emit_osc52(text).is_ok() {
+        state.status = format!("copied {chars} chars to clipboard (osc52)");
+        return;
+    }
+    state.status = "clipboard error: no channel succeeded".to_string();
 }
 
 /// Run `tmux load-buffer -w -` with the selection piped on stdin. The
