@@ -1213,7 +1213,8 @@ fn execute_ex(state: &mut State, agent: &mut Agent, cmd: &str) {
     }
 
     let mut parts = cmd.splitn(2, char::is_whitespace);
-    let name = parts.next().unwrap_or("");
+    let raw_name = parts.next().unwrap_or("");
+    let name = raw_name.strip_suffix('!').unwrap_or(raw_name);
     let arg = parts.next().unwrap_or("").trim();
     match name {
         "noh" | "nohlsearch" => {
@@ -1276,24 +1277,32 @@ fn run_inline_shell(state: &mut State, cmd: &str) {
 /// already-formatted message for unknown names.
 fn translate_ex(cmd: &str) -> Result<String, String> {
     let mut parts = cmd.splitn(2, char::is_whitespace);
-    let name = parts.next().unwrap_or("");
+    let raw_name = parts.next().unwrap_or("");
+    // Trailing `!` is vim's "force" suffix (`:q!`, `:wq!`, `:x!`). teleia has
+    // no notion of "unsaved buffer" so the bang is purely cosmetic — strip it
+    // and dispatch on the bare name.
+    let name = raw_name.strip_suffix('!').unwrap_or(raw_name);
     let arg = parts.next().unwrap_or("").trim();
     let translated = match name {
-        "q" | "quit" | "qa" | "qall" | "x" | "exit" => "quit".to_string(),
-        "w" | "write" | "wa" | "wall" => format!("save {arg}"),
+        "q" | "quit" | "qa" | "qall" | "x" | "exit" | "clo" | "close" => "quit".to_string(),
+        "w" | "write" | "wa" | "wall" | "sav" | "saveas" => format!("save {arg}"),
         "wq" => format!("save {arg}"), // close-enough analogue: save, no quit
         "e" | "edit" | "l" | "load" => format!("load {arg}"),
-        "d" | "bd" | "delete" => format!("delete {arg}"),
+        "d" | "bd" | "delete" | "bw" | "bwipe" | "bwipeout" | "tabc" | "tabclose" => {
+            format!("delete {arg}")
+        }
         "ls" | "list" => "list".to_string(),
         "model" => format!("model {arg}"),
         "help" | "h" => "help".to_string(),
-        "reset" | "enew" | "new" => "reset".to_string(),
+        "reset" | "enew" | "new" | "tabnew" | "tabe" | "tabedit" | "vnew" | "vne" => {
+            "reset".to_string()
+        }
         "clear" => "clear".to_string(),
-        "show" | "info" | "f" | "file" => "show".to_string(),
+        "show" | "info" | "f" | "file" | "mes" | "messages" => "show".to_string(),
         "theme" | "colorscheme" | "colo" => format!("theme {arg}"),
         "notify" | "notifications" => format!("notify {arg}"),
         "transparent" | "transparency" | "transp" => format!("transparent {arg}"),
-        "cd" => format!("cd {arg}"),
+        "cd" | "lcd" | "tcd" => format!("cd {arg}"),
         "pwd" => "pwd".to_string(),
         "version" => "version".to_string(),
         "tools" => "tools".to_string(),
@@ -4774,6 +4783,52 @@ mod tests {
     fn ex_rejects_unknown_command() {
         let err = translate_ex("nonsense").unwrap_err();
         assert!(err.contains("nonsense"));
+    }
+
+    #[test]
+    fn ex_strips_trailing_bang_force_suffix() {
+        assert_eq!(translate_ex("q!").unwrap(), "quit");
+        assert_eq!(translate_ex("qa!").unwrap(), "quit");
+        assert_eq!(translate_ex("qall!").unwrap(), "quit");
+        assert_eq!(translate_ex("x!").unwrap(), "quit");
+        assert_eq!(translate_ex("exit!").unwrap(), "quit");
+        assert_eq!(translate_ex("w! foo").unwrap(), "save foo");
+        assert_eq!(translate_ex("wq! foo").unwrap(), "save foo");
+        assert_eq!(translate_ex("wa!").unwrap(), "save ");
+    }
+
+    #[test]
+    fn ex_translates_saveas_aliases() {
+        assert_eq!(translate_ex("saveas foo").unwrap(), "save foo");
+        assert_eq!(translate_ex("sav foo").unwrap(), "save foo");
+    }
+
+    #[test]
+    fn ex_translates_tab_and_buffer_lifecycle() {
+        assert_eq!(translate_ex("tabnew").unwrap(), "reset");
+        assert_eq!(translate_ex("tabe").unwrap(), "reset");
+        assert_eq!(translate_ex("tabedit").unwrap(), "reset");
+        assert_eq!(translate_ex("vnew").unwrap(), "reset");
+        assert_eq!(translate_ex("vne").unwrap(), "reset");
+        assert_eq!(translate_ex("tabc foo").unwrap(), "delete foo");
+        assert_eq!(translate_ex("tabclose foo").unwrap(), "delete foo");
+        assert_eq!(translate_ex("bw foo").unwrap(), "delete foo");
+        assert_eq!(translate_ex("bwipe foo").unwrap(), "delete foo");
+        assert_eq!(translate_ex("bwipeout foo").unwrap(), "delete foo");
+    }
+
+    #[test]
+    fn ex_translates_close_and_messages_aliases() {
+        assert_eq!(translate_ex("clo").unwrap(), "quit");
+        assert_eq!(translate_ex("close").unwrap(), "quit");
+        assert_eq!(translate_ex("mes").unwrap(), "show");
+        assert_eq!(translate_ex("messages").unwrap(), "show");
+    }
+
+    #[test]
+    fn ex_translates_cd_window_local_variants() {
+        assert_eq!(translate_ex("lcd /tmp").unwrap(), "cd /tmp");
+        assert_eq!(translate_ex("tcd /tmp").unwrap(), "cd /tmp");
     }
 
     #[test]
