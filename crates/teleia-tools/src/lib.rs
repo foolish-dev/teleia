@@ -35,15 +35,72 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         ToolDef::new(
             "edit",
-            "Replace a unique substring inside a file. Fails if old_string is not found or not unique.",
+            "Replace a unique substring inside a file. Fails if old_string is not found, or — when replace_all is false (the default) — if it matches more than once. Set replace_all: true to substitute every occurrence.",
             json!({
                 "type": "object",
                 "properties": {
                     "path": { "type": "string" },
                     "old_string": { "type": "string" },
-                    "new_string": { "type": "string" }
+                    "new_string": { "type": "string" },
+                    "replace_all": { "type": "boolean", "description": "Replace every occurrence instead of requiring uniqueness (default false)" }
                 },
                 "required": ["path", "old_string", "new_string"]
+            }),
+        ),
+        ToolDef::new(
+            "multi_edit",
+            "Apply a sequence of edits to a single file atomically: each step is validated against the in-memory buffer before the next runs, and the file is only written if every step succeeds. Each edit has the same shape as `edit` (old_string, new_string, optional replace_all).",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" },
+                    "edits": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "old_string": { "type": "string" },
+                                "new_string": { "type": "string" },
+                                "replace_all": { "type": "boolean" }
+                            },
+                            "required": ["old_string", "new_string"]
+                        }
+                    }
+                },
+                "required": ["path", "edits"]
+            }),
+        ),
+        ToolDef::new(
+            "rm",
+            "Delete a file. To delete a directory, set recursive: true (rm -rf). Refuses to touch `/` or an empty path.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" },
+                    "recursive": { "type": "boolean", "description": "Allow deleting a directory and its contents (default false)" }
+                },
+                "required": ["path"]
+            }),
+        ),
+        ToolDef::new(
+            "todo_write",
+            "Replace the session todo list. Pass `todos` as an array of {content, status} where status is one of `pending` / `in_progress` / `completed`. Returns the formatted list. Pass an empty array to clear. The list is process-local — it survives across turns but resets when teleia restarts.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "todos": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "content": { "type": "string" },
+                                "status": { "type": "string", "enum": ["pending", "in_progress", "completed"] }
+                            },
+                            "required": ["content", "status"]
+                        }
+                    }
+                },
+                "required": ["todos"]
             }),
         ),
         ToolDef::new(
@@ -233,6 +290,9 @@ pub async fn dispatch(name: &str, arguments: &str) -> Result<String> {
         "read" => read_tool(args).await,
         "write" => write_tool(args).await,
         "edit" => edit_tool(args).await,
+        "multi_edit" => multi_edit_tool(args).await,
+        "rm" => rm_tool(args).await,
+        "todo_write" => todo_write_tool(args).await,
         "bash" => bash_tool(args).await,
         "list" => list_tool(args).await,
         "glob" => glob_tool(args).await,
@@ -296,6 +356,34 @@ struct EditArgs {
     path: String,
     old_string: String,
     new_string: String,
+    #[serde(default)]
+    replace_all: bool,
+}
+
+#[derive(Deserialize)]
+struct EditStep {
+    old_string: String,
+    new_string: String,
+    #[serde(default)]
+    replace_all: bool,
+}
+
+fn apply_edit(buf: &str, step: &EditStep) -> Result<(String, usize)> {
+    let occurrences = buf.matches(&step.old_string).count();
+    if occurrences == 0 {
+        return Err(anyhow!("old_string not found"));
+    }
+    if !step.replace_all && occurrences > 1 {
+        return Err(anyhow!(
+            "old_string matches {occurrences} times; needs to be unique (or set replace_all)"
+        ));
+    }
+    let updated = if step.replace_all {
+        buf.replace(&step.old_string, &step.new_string)
+    } else {
+        buf.replacen(&step.old_string, &step.new_string, 1)
+    };
+    Ok((updated, occurrences))
 }
 
 async fn edit_tool(args: Value) -> Result<String> {
@@ -303,24 +391,83 @@ async fn edit_tool(args: Value) -> Result<String> {
         path,
         old_string,
         new_string,
+        replace_all,
     } = serde_json::from_value(args)?;
     let original = tokio::fs::read_to_string(&path)
         .await
         .with_context(|| format!("read {path}"))?;
-    let occurrences = original.matches(&old_string).count();
-    if occurrences == 0 {
-        return Err(anyhow!("old_string not found in {path}"));
-    }
-    if occurrences > 1 {
-        return Err(anyhow!(
-            "old_string matches {occurrences} times in {path}; needs to be unique"
-        ));
-    }
-    let updated = original.replacen(&old_string, &new_string, 1);
+    let step = EditStep {
+        old_string,
+        new_string,
+        replace_all,
+    };
+    let (updated, occurrences) =
+        apply_edit(&original, &step).map_err(|e| anyhow!("{e} in {path}"))?;
     tokio::fs::write(&path, &updated)
         .await
         .with_context(|| format!("write {path}"))?;
-    Ok(format!("edited {path}"))
+    if replace_all {
+        Ok(format!("edited {path} ({occurrences} replacements)"))
+    } else {
+        Ok(format!("edited {path}"))
+    }
+}
+
+#[derive(Deserialize)]
+struct MultiEditArgs {
+    path: String,
+    edits: Vec<EditStep>,
+}
+
+async fn multi_edit_tool(args: Value) -> Result<String> {
+    let MultiEditArgs { path, edits } = serde_json::from_value(args)?;
+    if edits.is_empty() {
+        return Err(anyhow!("edits array is empty"));
+    }
+    let original = tokio::fs::read_to_string(&path)
+        .await
+        .with_context(|| format!("read {path}"))?;
+    let mut buf = original;
+    for (i, step) in edits.iter().enumerate() {
+        let (next, _) = apply_edit(&buf, step)
+            .with_context(|| format!("multi_edit step {} on {path}", i + 1))?;
+        buf = next;
+    }
+    tokio::fs::write(&path, &buf)
+        .await
+        .with_context(|| format!("write {path}"))?;
+    Ok(format!("edited {path} ({} steps)", edits.len()))
+}
+
+#[derive(Deserialize)]
+struct RmArgs {
+    path: String,
+    #[serde(default)]
+    recursive: bool,
+}
+
+async fn rm_tool(args: Value) -> Result<String> {
+    let RmArgs { path, recursive } = serde_json::from_value(args)?;
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("path is empty"));
+    }
+    if trimmed == "/" {
+        return Err(anyhow!("refusing to delete `/`"));
+    }
+    let meta = std::fs::symlink_metadata(&path).with_context(|| format!("stat {path}"))?;
+    if meta.is_dir() {
+        if !recursive {
+            return Err(anyhow!(
+                "{path} is a directory; pass recursive: true to delete"
+            ));
+        }
+        std::fs::remove_dir_all(&path).with_context(|| format!("rm -rf {path}"))?;
+        Ok(format!("removed directory {path}"))
+    } else {
+        std::fs::remove_file(&path).with_context(|| format!("rm {path}"))?;
+        Ok(format!("removed {path}"))
+    }
 }
 
 #[derive(Deserialize)]
@@ -1071,6 +1218,64 @@ async fn typecheck_tool(args: Value) -> Result<String> {
     }
 }
 
+#[derive(Deserialize, Clone)]
+struct TodoItem {
+    content: String,
+    status: TodoStatus,
+}
+
+#[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum TodoStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+impl TodoStatus {
+    fn glyph(self) -> &'static str {
+        match self {
+            TodoStatus::Pending => "[ ]",
+            TodoStatus::InProgress => "[~]",
+            TodoStatus::Completed => "[x]",
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct TodoArgs {
+    todos: Vec<TodoItem>,
+}
+
+fn todo_state() -> &'static std::sync::Mutex<Vec<TodoItem>> {
+    static STATE: std::sync::OnceLock<std::sync::Mutex<Vec<TodoItem>>> = std::sync::OnceLock::new();
+    STATE.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+fn render_todos(todos: &[TodoItem]) -> String {
+    if todos.is_empty() {
+        return "(no todos)".to_string();
+    }
+    let mut out = String::new();
+    for t in todos {
+        out.push_str(t.status.glyph());
+        out.push(' ');
+        out.push_str(&t.content);
+        out.push('\n');
+    }
+    if out.ends_with('\n') {
+        out.pop();
+    }
+    out
+}
+
+async fn todo_write_tool(args: Value) -> Result<String> {
+    let TodoArgs { todos } = serde_json::from_value(args)?;
+    let mut state = todo_state().lock().expect("todo state poisoned");
+    *state = todos.clone();
+    Ok(render_todos(&todos))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1165,6 +1370,125 @@ mod tests {
         .to_string();
         let err = dispatch("edit", &args).await.unwrap_err().to_string();
         assert!(err.contains("unique"));
+    }
+
+    #[tokio::test]
+    async fn edit_replace_all_substitutes_every_occurrence() {
+        let path = tmp_path("edit-all.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "abc abc abc").unwrap();
+        let args = json!({
+            "path": path.to_str().unwrap(),
+            "old_string": "abc",
+            "new_string": "x",
+            "replace_all": true
+        })
+        .to_string();
+        let result = dispatch("edit", &args).await.unwrap();
+        assert!(result.contains("3 replacements"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "x x x");
+    }
+
+    #[tokio::test]
+    async fn multi_edit_applies_edits_in_sequence() {
+        let path = tmp_path("multi-edit.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "alpha beta gamma").unwrap();
+        let args = json!({
+            "path": path.to_str().unwrap(),
+            "edits": [
+                { "old_string": "alpha", "new_string": "ALPHA" },
+                { "old_string": "gamma", "new_string": "GAMMA" }
+            ]
+        })
+        .to_string();
+        let result = dispatch("multi_edit", &args).await.unwrap();
+        assert!(result.contains("2 steps"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "ALPHA beta GAMMA");
+    }
+
+    #[tokio::test]
+    async fn multi_edit_is_atomic_on_failure() {
+        let path = tmp_path("multi-edit-atomic.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "alpha beta").unwrap();
+        let args = json!({
+            "path": path.to_str().unwrap(),
+            "edits": [
+                { "old_string": "alpha", "new_string": "ALPHA" },
+                { "old_string": "nope", "new_string": "x" }
+            ]
+        })
+        .to_string();
+        assert!(dispatch("multi_edit", &args).await.is_err());
+        // File must be untouched — first step shouldn't have landed on disk.
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "alpha beta");
+    }
+
+    #[tokio::test]
+    async fn rm_removes_a_file() {
+        let path = tmp_path("rm-file.txt");
+        std::fs::write(&path, "x").unwrap();
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        let result = dispatch("rm", &args).await.unwrap();
+        assert!(result.contains("removed"));
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn rm_refuses_directory_without_recursive() {
+        let dir = tmp_path("rm-dir-guard");
+        std::fs::create_dir_all(&dir).unwrap();
+        let _c = DirCleanup(dir.clone());
+        let args = json!({ "path": dir.to_str().unwrap() }).to_string();
+        let err = dispatch("rm", &args).await.unwrap_err().to_string();
+        assert!(err.contains("recursive"));
+        assert!(dir.exists());
+    }
+
+    #[tokio::test]
+    async fn rm_removes_directory_recursively() {
+        let dir = tmp_path("rm-dir");
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+        std::fs::write(dir.join("nested/a.txt"), "x").unwrap();
+        let args = json!({ "path": dir.to_str().unwrap(), "recursive": true }).to_string();
+        let result = dispatch("rm", &args).await.unwrap();
+        assert!(result.contains("removed directory"));
+        assert!(!dir.exists());
+    }
+
+    #[tokio::test]
+    async fn rm_refuses_root() {
+        let args = json!({ "path": "/", "recursive": true }).to_string();
+        let err = dispatch("rm", &args).await.unwrap_err().to_string();
+        assert!(err.contains("refusing"));
+    }
+
+    #[tokio::test]
+    async fn todo_write_sets_and_renders_list() {
+        let args = json!({
+            "todos": [
+                { "content": "first thing",  "status": "in_progress" },
+                { "content": "second thing", "status": "pending" }
+            ]
+        })
+        .to_string();
+        let result = dispatch("todo_write", &args).await.unwrap();
+        assert!(result.contains("[~] first thing"));
+        assert!(result.contains("[ ] second thing"));
+    }
+
+    #[tokio::test]
+    async fn todo_write_clears_with_empty_array() {
+        // Seed the state first so the clear is observable independent of test order.
+        let seed = json!({
+            "todos": [{ "content": "stale", "status": "pending" }]
+        })
+        .to_string();
+        dispatch("todo_write", &seed).await.unwrap();
+        let clear = json!({ "todos": [] }).to_string();
+        let result = dispatch("todo_write", &clear).await.unwrap();
+        assert!(result.contains("no todos"));
     }
 
     #[tokio::test]
