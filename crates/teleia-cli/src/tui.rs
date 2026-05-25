@@ -3218,7 +3218,10 @@ fn base64_encode(input: &[u8]) -> String {
 /// Pull the symbol from each cell in the selection range into a string,
 /// inserting a newline between rows. Trailing spaces on every line are
 /// trimmed so block highlights of short text don't drag a slab of padding
-/// onto the user's clipboard.
+/// onto the user's clipboard, and the chat block's top-padding row plus
+/// any empty rows below the last entry get peeled off the top and bottom
+/// — a drag that overshoots into the empty chat area otherwise pastes as
+/// `<text>\n\n\n\n\n`.
 fn extract_selection_text(buf: &ratatui::buffer::Buffer, sel: Selection, area: Rect) -> String {
     let cells = selection_cells(sel, area);
     if cells.is_empty() {
@@ -3239,7 +3242,7 @@ fn extract_selection_text(buf: &ratatui::buffer::Buffer, sel: Selection, area: R
         }
     }
     out.push_str(line_buf.trim_end());
-    out
+    out.trim_matches('\n').to_string()
 }
 
 /// Compact token count: 0..999 as-is, 1k..999k as "1k"/"45k", 1M+ as "1.2M".
@@ -4107,6 +4110,36 @@ mod tests {
         insert_paste(&mut s, "ant-abcdef");
         assert_eq!(s.pending_key_entry.as_ref().unwrap().buf, "sk-ant-abcdef");
         assert_eq!(s.input, "should-stay"); // input box untouched
+    }
+
+    #[test]
+    fn extract_strips_top_padding_and_empty_trailing_rows() {
+        use ratatui::widgets::Widget;
+        // Mirror the real chat: bordered Paragraph with 1-cell padding
+        // and Wrap, rendered into a buffer that's taller than the
+        // content so empty rows sit below the last line.
+        let area = Rect::new(0, 0, 30, 10);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        Paragraph::new(vec![Line::from("hello world")])
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .padding(Padding::new(1, 1, 1, 0)),
+            )
+            .wrap(Wrap { trim: false })
+            .render(area, &mut buf);
+
+        // Selection across the whole inner area — drags from top-left to
+        // bottom-right, the way a user grabbing "everything in chat"
+        // would. Pre-fix this returned `"\n hello world\n\n\n\n\n\n"`;
+        // we want just the visible line.
+        let inner = selection_inner_area(area);
+        let sel = Selection {
+            anchor: (inner.x, inner.y),
+            cursor: (inner.x + inner.width - 1, inner.y + inner.height - 1),
+        };
+        let text = extract_selection_text(&buf, sel, inner);
+        assert_eq!(text, " hello world");
     }
 
     #[test]
