@@ -715,7 +715,7 @@ async fn event_loop<B: ratatui::backend::Backend>(
         let key = match event::read()? {
             Event::Key(k) => k,
             Event::Mouse(m) => {
-                handle_mouse(terminal, state, m);
+                handle_mouse(terminal, state, m)?;
                 continue;
             }
             Event::Paste(s) => {
@@ -1903,7 +1903,13 @@ async fn run_turn<B: ratatui::backend::Backend>(
                     // Esc to interrupt then Enter to submit.
                     handle_input_edit(state, k);
                 }
-                Event::Mouse(m) => handle_mouse(terminal, state, m),
+                Event::Mouse(m) => {
+                    // Swallow handle_mouse errors during a streaming
+                    // turn — a drag-copy failure shouldn't abort the
+                    // turn. The outer event loop propagates the same
+                    // errors when no turn is active.
+                    let _ = handle_mouse(terminal, state, m);
+                }
                 Event::Paste(s) => insert_paste(state, &s),
                 _ => {}
             }
@@ -3142,12 +3148,14 @@ fn handle_input_edit(state: &mut State, key: KeyEvent) {
 
 /// Mouse-event dispatch shared by the outer event loop and the in-turn
 /// event drain. Scroll wheel adjusts `state.scroll`; left-button
-/// down/drag/up drives drag-select + clipboard copy.
+/// down/drag/up drives drag-select + clipboard copy. Returns `io::Result`
+/// because the drag-release path re-issues `terminal.draw()` to capture
+/// the just-rendered buffer (see the Up(Left) arm).
 fn handle_mouse<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     state: &mut State,
     m: MouseEvent,
-) {
+) -> std::io::Result<()> {
     match m.kind {
         MouseEventKind::ScrollUp => scroll_up(state, 3),
         MouseEventKind::ScrollDown => scroll_down(state, 3),
@@ -3169,8 +3177,20 @@ fn handle_mouse<B: ratatui::backend::Backend>(
         MouseEventKind::Up(MouseButton::Left) => {
             if let Some(sel) = state.selection {
                 if !sel.is_point() {
+                    // `terminal.current_buffer_mut()` returns the back
+                    // buffer that `swap_buffers()` just reset at the end
+                    // of the previous `draw()` — empty cells. The
+                    // just-rendered buffer is only reachable via the
+                    // `CompletedFrame` returned by `terminal.draw()`.
+                    // Re-issuing a draw here and reading from
+                    // `cf.buffer` is the same trick the Visual-mode `y`
+                    // arm uses; without it `extract_selection_text`
+                    // walks cleared cells, the `!text.is_empty()` guard
+                    // skips the copy, and drag-select silently does
+                    // nothing.
+                    let cf = terminal.draw(|f| draw(f, state))?;
                     let inner = selection_inner_area(state.log_area);
-                    let text = extract_selection_text(terminal.current_buffer_mut(), sel, inner);
+                    let text = extract_selection_text(cf.buffer, sel, inner);
                     if !text.is_empty() {
                         copy_to_clipboard(&text, state);
                     }
@@ -3185,6 +3205,7 @@ fn handle_mouse<B: ratatui::backend::Backend>(
         }
         _ => {}
     }
+    Ok(())
 }
 
 /// Read the system clipboard via arboard and route the text through
