@@ -476,6 +476,13 @@ struct State {
     /// Leader key of a two-key Normal-mode sequence (`gg`, `dd`), cleared
     /// by the next keypress.
     pending_op: Option<PendingOp>,
+    /// Persistent arboard handle. Holding it across copies keeps the
+    /// X11/macOS/Windows selection owner alive so paste actually returns
+    /// the bytes we set — dropping the handle right after `set_text` lets
+    /// the data source die before the display server can serve a request,
+    /// leaving the next paste empty or stale. Wayland routes through
+    /// `wl-copy` instead, which forks a daemon that owns the selection.
+    clipboard: Option<arboard::Clipboard>,
 }
 
 pub struct PendingApproval {
@@ -531,6 +538,7 @@ impl State {
             follow_bottom: true,
             last_total_lines: 0,
             pending_op: None,
+            clipboard: None,
         }
     }
 
@@ -3387,12 +3395,19 @@ fn copy_to_clipboard(text: &str, state: &mut State) {
         // Deliberately skip arboard here: on Wayland it reports Ok but
         // the selection evaporates with the Clipboard struct — falling
         // through to it would just lie to the user.
-    } else if arboard::Clipboard::new()
-        .and_then(|mut cb| cb.set_text(text.to_string()))
-        .is_ok()
-    {
-        state.status = format!("copied {chars} chars to clipboard (arboard)");
-        return;
+    } else {
+        if state.clipboard.is_none() {
+            state.clipboard = arboard::Clipboard::new().ok();
+        }
+        let arboard_ok = state
+            .clipboard
+            .as_mut()
+            .map(|cb| cb.set_text(text.to_string()).is_ok())
+            .unwrap_or(false);
+        if arboard_ok {
+            state.status = format!("copied {chars} chars to clipboard (arboard)");
+            return;
+        }
     }
     if in_tmux && tmux_load_buffer(text).is_ok() {
         state.status = format!("copied {chars} chars to clipboard (tmux)");
