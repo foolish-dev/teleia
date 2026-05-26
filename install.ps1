@@ -10,6 +10,8 @@
 #   $env:BRANCH = "main"          # source-build branch (default: dev)
 #   $env:NO_PATH = "1"            # don't touch your user PATH
 #   $env:NO_OLLAMA_HINT = "1"     # suppress the post-install Ollama nudge
+#   $env:AUTO_INSTALL = "1"       # bootstrap missing build deps (rustup) without prompting
+#   $env:NO_AUTO_INSTALL = "1"    # never bootstrap; fail fast with manual instructions
 
 $ErrorActionPreference = 'Stop'
 
@@ -52,7 +54,37 @@ function Try-Prebuilt($target) {
     }
 }
 
+# Bootstrap rustup non-interactively when cargo is missing. Honors
+# $env:AUTO_INSTALL = '1' (skip the prompt and go) and
+# $env:NO_AUTO_INSTALL = '1' (skip the bootstrap entirely). When neither
+# is set we Read-Host; the subsequent Need cargo surfaces the manual
+# instructions if the user declines.
+function Ensure-Cargo {
+    if (Get-Command cargo -ErrorAction SilentlyContinue) { return $true }
+    if ($env:NO_AUTO_INSTALL -eq '1') { return $false }
+    if ($env:AUTO_INSTALL -ne '1') {
+        $reply = Read-Host 'cargo not found. install rustup non-interactively? [Y/n]'
+        if ($reply -match '^(n|N|no|No|NO)$') { return $false }
+    }
+    $rustupArch = switch -Regex ($env:PROCESSOR_ARCHITECTURE) {
+        '^AMD64$|^x86_64$' { 'x86_64' }
+        '^ARM64$'          { 'aarch64' }
+        default            { 'i686' }
+    }
+    $rustupInit = Join-Path $Tmp 'rustup-init.exe'
+    Write-Host "installing rustup (stable toolchain, minimal profile)..."
+    Invoke-WebRequest -Uri "https://win.rustup.rs/$rustupArch" -OutFile $rustupInit -UseBasicParsing
+    & $rustupInit -y --default-toolchain stable --profile minimal --no-modify-path
+    if ($LASTEXITCODE -ne 0) { return $false }
+    $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
+    $env:Path = "$cargoBin;$env:Path"
+    return [bool](Get-Command cargo -ErrorAction SilentlyContinue)
+}
+
 function From-Source {
+    if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+        Ensure-Cargo | Out-Null
+    }
     Need cargo 'install Rust via https://rustup.rs'
     Need git   'install git via https://git-scm.com/download/win'
 

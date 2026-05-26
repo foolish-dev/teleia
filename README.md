@@ -46,7 +46,11 @@ Overrides (env vars before the pipe on Unix, `$env:NAME = 'value'` on Windows):
 `FROM_SOURCE=1` skip the prebuilt download and cargo-build from source ·
 `BRANCH` source-build branch (default `dev`) ·
 `NO_PATH=1` skip the PATH edit ·
-`NO_OLLAMA_HINT=1` skip the post-install nudge.
+`NO_OLLAMA_HINT=1` skip the post-install nudge ·
+`AUTO_INSTALL=1` bootstrap rustup automatically if cargo is missing on a source build (no prompt) ·
+`NO_AUTO_INSTALL=1` never bootstrap; fall back to the manual-install error.
+
+On a source build with no Rust toolchain present, the installer otherwise prompts on `/dev/tty` (Unix) or `Read-Host` (Windows) before running the official rustup-init.
 
 `cargo run --release` works from a workspace clone.
 
