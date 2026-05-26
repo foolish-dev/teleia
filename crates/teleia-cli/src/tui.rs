@@ -32,10 +32,11 @@ fn mode_hints(mode: Mode) -> &'static str {
     match mode {
         Mode::Insert => "↵ send · esc normal · tab accept · /help",
         Mode::Normal => {
-            "i insert · v visual · : command · y yank · w/b/e word · gg top · G bot · q quit"
+            "i insert · v/V/^v visual · R replace · : cmd · y yank · w/b/e word · q quit"
         }
         Mode::Visual => "h j k l move · y yank · esc cancel",
         Mode::Command => "↵ run · esc cancel",
+        Mode::Replace => "type overwrites · esc normal · ← back",
     }
 }
 
@@ -360,16 +361,39 @@ enum Mode {
     Normal,
     Visual,
     Command,
+    /// Overwrite-as-you-type mode (vim's `R`, entered with `R` from
+    /// Normal). Char keys replace the char at the cursor instead of
+    /// inserting; cursor advances past it. At end-of-buffer the keypress
+    /// appends (matching vim). Esc returns to Normal. Backspace just
+    /// moves the cursor left — vim restores the original char, but we
+    /// don't track the pre-edit buffer, so we don't pretend to.
+    Replace,
 }
 
-/// First half of a two-key Normal-mode sequence (`gg`, `dd`). Set when the
-/// leader key is pressed, consumed by the next keypress; if the second key
-/// doesn't complete a known sequence the operator cancels and the key is
-/// re-processed as if pressed fresh (matching vim).
+/// First half of a two-key Normal-mode sequence (`gg`, `dd`) or a
+/// pending operator that consumes the next char (`r`). Set when the
+/// leader key is pressed, consumed by the next keypress; if the second
+/// key doesn't complete a known sequence the operator cancels and the
+/// key is re-processed as if pressed fresh (matching vim).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PendingOp {
     G,
     D,
+    R,
+}
+
+/// Shape of a Visual-mode (or mouse-drag) selection. `Char` is vim's
+/// `v` — first row from anchor to end-of-row, last row from start-of-row
+/// to cursor, middle rows full-width. `Line` is vim's `V` — every
+/// touched row taken full-width regardless of column. `Block` is vim's
+/// `Ctrl-v` — the rectangle bounded by min/max col and min/max row of
+/// anchor and cursor.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum SelectionKind {
+    #[default]
+    Char,
+    Line,
+    Block,
 }
 
 /// Text-style (not rectangular) drag-selection: anchor is where the mouse
@@ -379,13 +403,18 @@ enum PendingOp {
 struct Selection {
     anchor: (u16, u16),
     cursor: (u16, u16),
+    kind: SelectionKind,
 }
 
 impl Selection {
     fn new(col: u16, row: u16) -> Self {
+        Self::with_kind(SelectionKind::Char, col, row)
+    }
+    fn with_kind(kind: SelectionKind, col: u16, row: u16) -> Self {
         Self {
             anchor: (col, row),
             cursor: (col, row),
+            kind,
         }
     }
     /// Returns `(start, end)` in reading order — start <= end where the
@@ -865,6 +894,15 @@ async fn event_loop<B: ratatui::backend::Backend>(
                             state.input_cursor = 0;
                             true
                         }
+                        // r<char> — replace the input char at the
+                        // cursor. No-op at end-of-buffer or on an
+                        // empty input, matching vim. Any non-Char key
+                        // (Esc, arrows, etc.) cancels the operator and
+                        // re-dispatches normally — `_ => false` below.
+                        (PendingOp::R, KeyCode::Char(c)) => {
+                            replace_char_at_cursor(state, c);
+                            true
+                        }
                         _ => false,
                     };
                     if handled {
@@ -948,13 +986,23 @@ async fn event_loop<B: ratatui::backend::Backend>(
                     KeyCode::Char('D') => {
                         state.input.truncate(state.input_cursor);
                     }
-                    // Two-key sequence leaders (gg, dd).
+                    // Two-key sequence leaders (gg, dd) and r<char>.
                     KeyCode::Char('g') => state.pending_op = Some(PendingOp::G),
                     KeyCode::Char('d') => state.pending_op = Some(PendingOp::D),
-                    // Enter Visual mode: anchor at the top-left of the
-                    // visible chat area and let hjkl drive a charwise
-                    // selection over scrollback.
-                    KeyCode::Char('v') => enter_visual(state),
+                    KeyCode::Char('r') => state.pending_op = Some(PendingOp::R),
+                    // Enter Replace mode (overwrite-as-you-type).
+                    KeyCode::Char('R') => state.mode = Mode::Replace,
+                    // Enter Visual mode. `v` is charwise (vim default),
+                    // `V` is linewise, `Ctrl-v` is blockwise. Anchor
+                    // lands at the top-left of the visible chat area
+                    // and hjkl drives the selection from there.
+                    KeyCode::Char('v') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        enter_visual(state, SelectionKind::Char)
+                    }
+                    KeyCode::Char('V') => enter_visual(state, SelectionKind::Line),
+                    KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        enter_visual(state, SelectionKind::Block)
+                    }
                     // Yank the most recent assistant response — same as the
                     // `:yank` / `:copy` ex-commands. Visual mode has its
                     // own `y` for selection yank; Normal-mode `y` is the
@@ -1068,6 +1116,46 @@ async fn event_loop<B: ratatui::backend::Backend>(
                     state.command_cursor = 0;
                     state.mode = Mode::Normal;
                     execute_ex(state, agent, &cmd);
+                }
+                _ => {}
+            },
+
+            Mode::Replace => match key.code {
+                KeyCode::Esc => state.mode = Mode::Normal,
+                KeyCode::Left => {
+                    if let Some((i, _)) =
+                        state.input[..state.input_cursor].char_indices().next_back()
+                    {
+                        state.input_cursor = i;
+                    }
+                }
+                KeyCode::Right => {
+                    if let Some(c) = state.input[state.input_cursor..].chars().next() {
+                        state.input_cursor += c.len_utf8();
+                    }
+                }
+                KeyCode::Home => state.input_cursor = 0,
+                KeyCode::End => state.input_cursor = state.input.len(),
+                KeyCode::Up => scroll_up(state, 1),
+                KeyCode::Down => scroll_down(state, 1),
+                KeyCode::PageUp => scroll_up(state, 5),
+                KeyCode::PageDown => scroll_down(state, 5),
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    overwrite_char_at_cursor(state, c);
+                    state.recall_idx = None;
+                }
+                KeyCode::Backspace if state.input_cursor > 0 => {
+                    // Vim restores the original char on backspace; we
+                    // don't track the pre-edit buffer, so we just back
+                    // the cursor — the user can re-type to overwrite.
+                    if let Some((i, _)) =
+                        state.input[..state.input_cursor].char_indices().next_back()
+                    {
+                        state.input_cursor = i;
+                    }
+                }
+                KeyCode::Enter => {
+                    submit_input(terminal, state, agent).await;
                 }
                 _ => {}
             },
@@ -1701,7 +1789,7 @@ fn refresh_menu(state: &mut State, agent: &Agent) {
             )
         }
         Mode::Command => compute_ex_menu(&state.command_buf),
-        Mode::Normal | Mode::Visual => None,
+        Mode::Normal | Mode::Visual | Mode::Replace => None,
     };
 
     state.menu = match (state.menu.take(), next) {
@@ -2742,6 +2830,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
         Mode::Normal => ("> ", th.green, &state.input, state.input_cursor),
         Mode::Visual => ("> ", th.purple, &state.input, state.input_cursor),
         Mode::Command => (": ", th.yellow, &state.command_buf, state.command_cursor),
+        Mode::Replace => ("> ", th.red, &state.input, state.input_cursor),
     };
 
     let inside = chunks[3];
@@ -2950,8 +3039,13 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
     let (mode_label, mode_color) = match state.mode {
         Mode::Insert => ("INS", th.cyan),
         Mode::Normal => ("NOR", th.green),
-        Mode::Visual => ("VIS", th.purple),
+        Mode::Visual => match state.selection.map(|s| s.kind).unwrap_or_default() {
+            SelectionKind::Char => ("VIS", th.purple),
+            SelectionKind::Line => ("V-L", th.purple),
+            SelectionKind::Block => ("V-B", th.purple),
+        },
         Mode::Command => ("CMD", th.yellow),
+        Mode::Replace => ("REP", th.red),
     };
     // Chip-style mode badge: dark fg on the mode colour for contrast.
     let mut status_spans = vec![
@@ -3078,66 +3172,142 @@ fn selection_inner_area(area: Rect) -> Rect {
     }
 }
 
-/// Iterator of `(col, row)` cells covered by a text-style selection (not
-/// rectangular: first row goes from anchor → end-of-row, middle rows go
-/// full-width, last row goes start-of-row → cursor). All coordinates are
-/// clamped to `area`.
+/// Iterator of `(col, row)` cells covered by a selection. The shape
+/// depends on `sel.kind`:
+///
+/// * `Char` — first row from anchor to end-of-row, middle rows
+///   full-width, last row from start-of-row to cursor. Matches vim `v`
+///   and mouse drag-select.
+/// * `Line` — every touched row taken full-width regardless of column.
+///   Matches vim `V`. A `Line` selection is never a point, even when
+///   anchor and cursor share a cell, so it always covers at least one
+///   full row.
+/// * `Block` — the rectangle bounded by the min/max col and min/max row
+///   of anchor and cursor. Matches vim `Ctrl-v`. A `Block` selection
+///   with a single cell is also never treated as a point so the user
+///   can paint a 1×1 block deliberately.
+///
+/// All coordinates are clamped to `area`.
 fn selection_cells(sel: Selection, area: Rect) -> Vec<(u16, u16)> {
-    if area.width == 0 || area.height == 0 || sel.is_point() {
+    if area.width == 0 || area.height == 0 {
         return Vec::new();
     }
-    let (start, end) = sel.ordered();
+    if sel.kind == SelectionKind::Char && sel.is_point() {
+        return Vec::new();
+    }
     let left = area.x;
     let right = area.x + area.width - 1;
     let top = area.y;
     let bottom = area.y + area.height - 1;
     let clamp_col = |c: u16| c.clamp(left, right);
     let clamp_row = |r: u16| r.clamp(top, bottom);
-    let s_row = clamp_row(start.1);
-    let e_row = clamp_row(end.1);
 
-    let mut out = Vec::new();
-    if s_row == e_row {
-        let s_col = clamp_col(start.0);
-        let e_col = clamp_col(end.0);
-        for c in s_col..=e_col {
-            out.push((c, s_row));
+    match sel.kind {
+        SelectionKind::Char => {
+            let (start, end) = sel.ordered();
+            let s_row = clamp_row(start.1);
+            let e_row = clamp_row(end.1);
+            let mut out = Vec::new();
+            if s_row == e_row {
+                let s_col = clamp_col(start.0);
+                let e_col = clamp_col(end.0);
+                for c in s_col..=e_col {
+                    out.push((c, s_row));
+                }
+                return out;
+            }
+            let s_col = clamp_col(start.0);
+            for c in s_col..=right {
+                out.push((c, s_row));
+            }
+            for r in (s_row + 1)..e_row {
+                for c in left..=right {
+                    out.push((c, r));
+                }
+            }
+            let e_col = clamp_col(end.0);
+            for c in left..=e_col {
+                out.push((c, e_row));
+            }
+            out
         }
-        return out;
-    }
-    // First (partial) row.
-    let s_col = clamp_col(start.0);
-    for c in s_col..=right {
-        out.push((c, s_row));
-    }
-    // Middle (full) rows.
-    for r in (s_row + 1)..e_row {
-        for c in left..=right {
-            out.push((c, r));
+        SelectionKind::Line => {
+            let s_row = clamp_row(sel.anchor.1.min(sel.cursor.1));
+            let e_row = clamp_row(sel.anchor.1.max(sel.cursor.1));
+            let mut out = Vec::new();
+            for r in s_row..=e_row {
+                for c in left..=right {
+                    out.push((c, r));
+                }
+            }
+            out
+        }
+        SelectionKind::Block => {
+            let s_col = clamp_col(sel.anchor.0.min(sel.cursor.0));
+            let e_col = clamp_col(sel.anchor.0.max(sel.cursor.0));
+            let s_row = clamp_row(sel.anchor.1.min(sel.cursor.1));
+            let e_row = clamp_row(sel.anchor.1.max(sel.cursor.1));
+            let mut out = Vec::new();
+            for r in s_row..=e_row {
+                for c in s_col..=e_col {
+                    out.push((c, r));
+                }
+            }
+            out
         }
     }
-    // Last (partial) row.
-    let e_col = clamp_col(end.0);
-    for c in left..=e_col {
-        out.push((c, e_row));
-    }
-    out
 }
 
 fn rect_contains(r: Rect, col: u16, row: u16) -> bool {
     col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height
 }
 
-/// Enter Visual mode: drop a fresh charwise selection at the top-left of
-/// the inner chat area and switch the mode. If the chat area hasn't been
-/// drawn yet (no log_area set), bail and stay in Normal — there's
-/// nowhere meaningful to place the cursor.
-fn enter_visual(state: &mut State) {
+/// Replace the input char at `state.input_cursor` with `c`. No-op when
+/// the cursor is at end-of-buffer or the input is empty (vim's `r`
+/// behaves the same way — there's no char to replace). Preserves
+/// multi-byte boundaries by deleting the next char and inserting `c`
+/// at the same cursor position rather than splicing bytes directly.
+fn replace_char_at_cursor(state: &mut State, c: char) {
+    let Some(existing) = state.input[state.input_cursor..].chars().next() else {
+        return;
+    };
+    let end = state.input_cursor + existing.len_utf8();
+    state
+        .input
+        .replace_range(state.input_cursor..end, &c.to_string());
+}
+
+/// Overwrite the input char at `state.input_cursor` with `c` and advance
+/// the cursor past it. At end-of-buffer the char is appended (matches
+/// vim's `R`, which behaves like Insert once you walk off the end of the
+/// original buffer). Multi-byte safe.
+fn overwrite_char_at_cursor(state: &mut State, c: char) {
+    match state.input[state.input_cursor..].chars().next() {
+        Some(existing) => {
+            let end = state.input_cursor + existing.len_utf8();
+            state
+                .input
+                .replace_range(state.input_cursor..end, &c.to_string());
+            state.input_cursor += c.len_utf8();
+        }
+        None => {
+            state.input.insert(state.input_cursor, c);
+            state.input_cursor += c.len_utf8();
+        }
+    }
+}
+
+/// Enter Visual mode with the given selection kind: drop a fresh
+/// selection at the top-left of the inner chat area and switch mode. If
+/// the chat area hasn't been drawn yet (no log_area set), bail and stay
+/// in Normal — there's nowhere meaningful to place the cursor. Char is
+/// vim's `v`, Line is vim's `V`, Block is vim's `Ctrl-v`.
+fn enter_visual(state: &mut State, kind: SelectionKind) {
     let inner = selection_inner_area(state.log_area);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-    state.selection = Some(Selection::new(inner.x, inner.y));
+    state.selection = Some(Selection::with_kind(kind, inner.x, inner.y));
     state.mode = Mode::Visual;
 }
 
@@ -3203,9 +3373,32 @@ fn insert_paste(state: &mut State, text: &str) {
         return;
     }
     match state.mode {
-        Mode::Insert => {
-            state.input.insert_str(state.input_cursor, text);
-            state.input_cursor += text.len();
+        Mode::Insert | Mode::Replace => {
+            // Bracketed paste in Replace overwrites starting at the
+            // cursor: walk the pasted text char-by-char and apply
+            // the same logic as a series of Replace keystrokes.
+            // Insert is unchanged — splice the whole string in.
+            if state.mode == Mode::Replace {
+                for c in text.chars() {
+                    let existing = state.input[state.input_cursor..].chars().next();
+                    match existing {
+                        Some(ex) => {
+                            let end = state.input_cursor + ex.len_utf8();
+                            state
+                                .input
+                                .replace_range(state.input_cursor..end, &c.to_string());
+                            state.input_cursor += c.len_utf8();
+                        }
+                        None => {
+                            state.input.insert(state.input_cursor, c);
+                            state.input_cursor += c.len_utf8();
+                        }
+                    }
+                }
+            } else {
+                state.input.insert_str(state.input_cursor, text);
+                state.input_cursor += text.len();
+            }
             state.recall_idx = None;
         }
         Mode::Command => {
@@ -4524,6 +4717,7 @@ mod tests {
         let sel = Selection {
             anchor: (inner.x, inner.y),
             cursor: (inner.x + inner.width - 1, inner.y + inner.height - 1),
+            kind: SelectionKind::Char,
         };
         let text = extract_selection_text(&buf, sel, inner);
         assert_eq!(text, " hello world");
@@ -5248,7 +5442,7 @@ mod tests {
     fn enter_visual_anchors_at_inner_top_left_and_switches_mode() {
         let mut s = State::new("dummy", "dummy");
         s.log_area = Rect::new(0, 0, 30, 10);
-        enter_visual(&mut s);
+        enter_visual(&mut s, SelectionKind::Char);
         assert_eq!(s.mode, Mode::Visual);
         let inner = selection_inner_area(s.log_area);
         let sel = s.selection.expect("selection set on enter_visual");
@@ -5261,7 +5455,7 @@ mod tests {
         let mut s = State::new("dummy", "dummy");
         s.mode = Mode::Normal;
         s.log_area = Rect::default();
-        enter_visual(&mut s);
+        enter_visual(&mut s, SelectionKind::Char);
         assert_eq!(s.mode, Mode::Normal);
         assert!(s.selection.is_none());
     }
@@ -5270,7 +5464,7 @@ mod tests {
     fn move_visual_cursor_clamps_to_inner_rect() {
         let mut s = State::new("dummy", "dummy");
         s.log_area = Rect::new(0, 0, 6, 4);
-        enter_visual(&mut s);
+        enter_visual(&mut s, SelectionKind::Char);
         let inner = selection_inner_area(s.log_area);
         // Drift past both edges with a saturating delta; both axes pin.
         move_visual_cursor(&mut s, i32::MAX, i32::MAX);
@@ -5304,7 +5498,7 @@ mod tests {
 
         let mut s = State::new("dummy", "dummy");
         s.log_area = area;
-        enter_visual(&mut s);
+        enter_visual(&mut s, SelectionKind::Char);
         // Walk to the right edge of the inner area — the cursor stays
         // pinned inside the rect even with a saturating delta.
         move_visual_cursor(&mut s, i32::MAX, 0);
@@ -5323,14 +5517,172 @@ mod tests {
     fn exit_visual_clears_or_keeps_selection() {
         let mut s = State::new("dummy", "dummy");
         s.log_area = Rect::new(0, 0, 10, 6);
-        enter_visual(&mut s);
+        enter_visual(&mut s, SelectionKind::Char);
         exit_visual(&mut s, /* keep_selection */ true);
         assert_eq!(s.mode, Mode::Normal);
         assert!(s.selection.is_some(), "keep_selection=true preserves it");
 
-        enter_visual(&mut s);
+        enter_visual(&mut s, SelectionKind::Char);
         exit_visual(&mut s, /* keep_selection */ false);
         assert_eq!(s.mode, Mode::Normal);
         assert!(s.selection.is_none(), "keep_selection=false clears it");
+    }
+
+    #[test]
+    fn replace_char_at_cursor_swaps_existing_char_and_preserves_cursor() {
+        let mut s = State::new("dummy", "dummy");
+        s.input = "hello".into();
+        s.input_cursor = 1;
+        replace_char_at_cursor(&mut s, 'a');
+        assert_eq!(s.input, "hallo");
+        assert_eq!(s.input_cursor, 1, "cursor stays — matches vim `r`");
+    }
+
+    #[test]
+    fn replace_char_at_cursor_is_noop_at_end_of_buffer() {
+        let mut s = State::new("dummy", "dummy");
+        s.input = "hi".into();
+        s.input_cursor = 2;
+        replace_char_at_cursor(&mut s, 'X');
+        assert_eq!(s.input, "hi", "no char under cursor → no change");
+        assert_eq!(s.input_cursor, 2);
+    }
+
+    #[test]
+    fn replace_char_at_cursor_handles_multibyte_chars() {
+        // Replace a 3-byte char with a 1-byte char, then back to a
+        // multi-byte char. Cursor must stay at the same byte offset
+        // since `r` doesn't move the cursor in vim.
+        let mut s = State::new("dummy", "dummy");
+        s.input = "héllo".into(); // é = 2 bytes
+        s.input_cursor = 1; // on `é`
+        replace_char_at_cursor(&mut s, 'e');
+        assert_eq!(s.input, "hello");
+        assert_eq!(s.input_cursor, 1);
+        replace_char_at_cursor(&mut s, 'ä');
+        assert_eq!(s.input, "hällo");
+        assert_eq!(s.input_cursor, 1);
+    }
+
+    #[test]
+    fn overwrite_char_at_cursor_replaces_and_advances() {
+        let mut s = State::new("dummy", "dummy");
+        s.input = "abc".into();
+        s.input_cursor = 0;
+        overwrite_char_at_cursor(&mut s, 'X');
+        assert_eq!(s.input, "Xbc");
+        assert_eq!(s.input_cursor, 1, "cursor advances past the new char");
+    }
+
+    #[test]
+    fn overwrite_char_at_cursor_appends_at_end_of_buffer() {
+        let mut s = State::new("dummy", "dummy");
+        s.input = "ab".into();
+        s.input_cursor = 2;
+        overwrite_char_at_cursor(&mut s, 'c');
+        assert_eq!(s.input, "abc", "EOB → append (vim R behavior)");
+        assert_eq!(s.input_cursor, 3);
+    }
+
+    #[test]
+    fn overwrite_char_at_cursor_handles_multibyte() {
+        let mut s = State::new("dummy", "dummy");
+        s.input = "café".into(); // é = 2 bytes
+        s.input_cursor = 3; // on `é`
+        overwrite_char_at_cursor(&mut s, 'e');
+        assert_eq!(s.input, "cafe");
+        assert_eq!(s.input_cursor, 4, "1-byte replacement at byte 3 → 4");
+        // And the reverse: append a multi-byte char past EOB.
+        overwrite_char_at_cursor(&mut s, 'ñ');
+        assert_eq!(s.input, "cafeñ");
+        assert_eq!(s.input_cursor, 6, "2-byte append moves cursor by 2");
+    }
+
+    #[test]
+    fn enter_visual_sets_selection_kind() {
+        let mut s = State::new("dummy", "dummy");
+        s.log_area = Rect::new(0, 0, 30, 10);
+        for kind in [
+            SelectionKind::Char,
+            SelectionKind::Line,
+            SelectionKind::Block,
+        ] {
+            s.mode = Mode::Normal;
+            s.selection = None;
+            enter_visual(&mut s, kind);
+            assert_eq!(s.mode, Mode::Visual);
+            assert_eq!(s.selection.unwrap().kind, kind);
+        }
+    }
+
+    #[test]
+    fn selection_cells_line_covers_full_rows_regardless_of_columns() {
+        // 10x5 inner rect, line selection on rows 1..=2 anchored at col 0,
+        // cursor at col 0. Char would produce ~2 cells; Line should cover
+        // every column on both rows.
+        let area = Rect::new(0, 0, 10, 5);
+        let sel = Selection {
+            anchor: (0, 1),
+            cursor: (0, 2),
+            kind: SelectionKind::Line,
+        };
+        let cells = selection_cells(sel, area);
+        assert_eq!(cells.len(), 20, "2 rows × 10 cols = 20 cells");
+        // Every cell in rows 1 and 2 is present.
+        for row in 1..=2 {
+            for col in 0..10 {
+                assert!(cells.contains(&(col, row)), "missing ({col},{row})");
+            }
+        }
+    }
+
+    #[test]
+    fn selection_cells_block_is_a_rectangle() {
+        // 10x5 area, block from (2,1) to (5,3). Expect a 4-col × 3-row
+        // rectangle, regardless of which corner is anchor vs cursor.
+        let area = Rect::new(0, 0, 10, 5);
+        let sel = Selection {
+            anchor: (5, 3),
+            cursor: (2, 1),
+            kind: SelectionKind::Block,
+        };
+        let cells = selection_cells(sel, area);
+        assert_eq!(cells.len(), 12, "4 cols × 3 rows = 12 cells");
+        for row in 1..=3 {
+            for col in 2..=5 {
+                assert!(cells.contains(&(col, row)), "missing ({col},{row})");
+            }
+        }
+        // No cells outside the rectangle.
+        assert!(!cells.contains(&(1, 1)));
+        assert!(!cells.contains(&(6, 1)));
+        assert!(!cells.contains(&(2, 0)));
+        assert!(!cells.contains(&(2, 4)));
+    }
+
+    #[test]
+    fn selection_cells_line_and_block_emit_for_single_cell() {
+        // Char selections at a single point return empty (no drag).
+        // Line and Block still emit something — the user pressed `V`
+        // or `Ctrl-v` deliberately on this row/cell.
+        let area = Rect::new(0, 0, 10, 5);
+        let line = Selection {
+            anchor: (3, 2),
+            cursor: (3, 2),
+            kind: SelectionKind::Line,
+        };
+        assert_eq!(selection_cells(line, area).len(), 10, "Line: full row");
+        let block = Selection {
+            anchor: (3, 2),
+            cursor: (3, 2),
+            kind: SelectionKind::Block,
+        };
+        assert_eq!(selection_cells(block, area).len(), 1, "Block: 1×1");
+        let chr = Selection {
+            anchor: (3, 2),
+            cursor: (3, 2),
+            kind: SelectionKind::Char,
+        };
+        assert!(selection_cells(chr, area).is_empty(), "Char point: empty");
     }
 }
