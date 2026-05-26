@@ -101,6 +101,8 @@ Three modes: **Insert** (default — type and edit), **Normal** (`Esc` to enter;
 | `Ctrl+W`                  | delete word before cursor                                           |
 | `Backspace` / `Delete`    | delete char before / at cursor                                      |
 | `Ctrl+Shift+V`            | paste from system clipboard (bracketed paste)                       |
+| middle-click              | paste from system clipboard (X11-style; works in any mode)          |
+| drag-select               | copy highlighted chat text (Wayland: wl-copy; else arboard; → tmux → OSC 52) |
 | `Ctrl+C`                  | abort the streaming turn                                            |
 
 ### Normal mode (`Esc` to enter)
@@ -111,11 +113,14 @@ Three modes: **Insert** (default — type and edit), **Normal** (`Esc` to enter;
 | `:`                          | Command mode                                          |
 | `h` / `l` or `Left` / `Right` | cursor                                                |
 | `0` / `$` or `Home` / `End`  | line start / end                                      |
+| `w` / `b` / `e`              | word forward / back / end                             |
 | `j` / `k` or `Down` / `Up`   | scroll chat 1 line                                    |
 | `Ctrl+D` / `Ctrl+U`          | half-page scroll                                      |
 | `PageDown` / `PageUp`        | 5-line scroll                                         |
-| `G`                          | jump to latest entries, re-engage auto-follow         |
-| `x`                          | delete char at cursor                                 |
+| `gg` / `G`                   | jump to oldest / latest entries (G re-engages follow) |
+| `x` / `X`                    | delete char at / before cursor                        |
+| `D`                          | delete from cursor to end of input                    |
+| `dd`                         | clear input                                           |
 | `Tab`                        | accept suggestion                                     |
 | `Shift+Tab`                  | cycle permission mode                                 |
 | `Enter`                      | submit                                                |

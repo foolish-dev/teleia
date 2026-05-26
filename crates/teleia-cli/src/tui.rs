@@ -31,7 +31,7 @@ const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧
 fn mode_hints(mode: Mode) -> &'static str {
     match mode {
         Mode::Insert => "↵ send · esc normal · tab accept · /help",
-        Mode::Normal => "i insert · : command · ^U/^D half-page · G bottom · q quit",
+        Mode::Normal => "i insert · : command · w/b/e word · gg top · G bot · q quit",
         Mode::Command => "↵ run · esc cancel",
     }
 }
@@ -358,6 +358,16 @@ enum Mode {
     Command,
 }
 
+/// First half of a two-key Normal-mode sequence (`gg`, `dd`). Set when the
+/// leader key is pressed, consumed by the next keypress; if the second key
+/// doesn't complete a known sequence the operator cancels and the key is
+/// re-processed as if pressed fresh (matching vim).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingOp {
+    G,
+    D,
+}
+
 /// Text-style (not rectangular) drag-selection: anchor is where the mouse
 /// went down, cursor is the latest drag position. Coordinates are raw
 /// terminal cells; clamping to the chat-area happens at render/extract time.
@@ -461,6 +471,9 @@ struct State {
     /// following — keeping the visible window pinned to the same
     /// content rather than letting new entries push it up.
     last_total_lines: usize,
+    /// Leader key of a two-key Normal-mode sequence (`gg`, `dd`), cleared
+    /// by the next keypress.
+    pending_op: Option<PendingOp>,
 }
 
 pub struct PendingApproval {
@@ -515,6 +528,7 @@ impl State {
             update_check: None,
             follow_bottom: true,
             last_total_lines: 0,
+            pending_op: None,
         }
     }
 
@@ -823,7 +837,28 @@ async fn event_loop<B: ratatui::backend::Backend>(
                 }
             }
 
-            Mode::Normal => {
+            Mode::Normal => 'normal: {
+                // Two-key sequences (gg / dd). On a non-matching second key
+                // the operator cancels and the key falls through to the main
+                // match so it acts as if pressed fresh — matches vim.
+                if let Some(op) = state.pending_op.take() {
+                    let handled = match (op, key.code) {
+                        (PendingOp::G, KeyCode::Char('g')) => {
+                            state.scroll = u16::MAX;
+                            state.follow_bottom = false;
+                            true
+                        }
+                        (PendingOp::D, KeyCode::Char('d')) => {
+                            state.input.clear();
+                            state.input_cursor = 0;
+                            true
+                        }
+                        _ => false,
+                    };
+                    if handled {
+                        break 'normal;
+                    }
+                }
                 match key.code {
                     // Mode transitions into Insert
                     KeyCode::Char('i') => state.mode = Mode::Insert,
@@ -856,6 +891,16 @@ async fn event_loop<B: ratatui::backend::Backend>(
                     }
                     KeyCode::Char('0') | KeyCode::Home => state.input_cursor = 0,
                     KeyCode::Char('$') | KeyCode::End => state.input_cursor = state.input.len(),
+                    // Word motion
+                    KeyCode::Char('w') => {
+                        state.input_cursor = word_forward(&state.input, state.input_cursor);
+                    }
+                    KeyCode::Char('b') => {
+                        state.input_cursor = word_back(&state.input, state.input_cursor);
+                    }
+                    KeyCode::Char('e') => {
+                        state.input_cursor = word_end(&state.input, state.input_cursor);
+                    }
                     // Jump scrollback to the latest entries (vim's G).
                     KeyCode::Char('G') => {
                         state.scroll = 0;
@@ -879,6 +924,21 @@ async fn event_loop<B: ratatui::backend::Backend>(
                     KeyCode::Char('x') if state.input_cursor < state.input.len() => {
                         state.input.remove(state.input_cursor);
                     }
+                    KeyCode::Char('X') if state.input_cursor > 0 => {
+                        let prev = state.input[..state.input_cursor]
+                            .chars()
+                            .next_back()
+                            .expect("cursor > 0 implies at least one char before");
+                        let new_cursor = state.input_cursor - prev.len_utf8();
+                        state.input.remove(new_cursor);
+                        state.input_cursor = new_cursor;
+                    }
+                    KeyCode::Char('D') => {
+                        state.input.truncate(state.input_cursor);
+                    }
+                    // Two-key sequence leaders (gg, dd).
+                    KeyCode::Char('g') => state.pending_op = Some(PendingOp::G),
+                    KeyCode::Char('d') => state.pending_op = Some(PendingOp::D),
                     // Enter command mode
                     KeyCode::Char(':') => {
                         state.mode = Mode::Command;
@@ -1702,6 +1762,60 @@ fn scroll_down(state: &mut State, n: u16) {
     if state.scroll == 0 {
         state.follow_bottom = true;
     }
+}
+
+/// Vim `w`: start of next whitespace-separated word (or end of input).
+fn word_forward(s: &str, cursor: usize) -> usize {
+    let suffix = &s[cursor..];
+    let mut iter = suffix.char_indices().peekable();
+    while iter.peek().is_some_and(|&(_, c)| !c.is_whitespace()) {
+        iter.next();
+    }
+    while iter.peek().is_some_and(|&(_, c)| c.is_whitespace()) {
+        iter.next();
+    }
+    cursor + iter.peek().map_or(suffix.len(), |&(i, _)| i)
+}
+
+/// Vim `b`: start of the current word, or of the previous word if already
+/// at a word start / on whitespace.
+fn word_back(s: &str, cursor: usize) -> usize {
+    let prefix = &s[..cursor];
+    let chars: Vec<(usize, char)> = prefix.char_indices().collect();
+    if chars.is_empty() {
+        return 0;
+    }
+    let mut idx = chars.len() - 1;
+    while idx > 0 && chars[idx].1.is_whitespace() {
+        idx -= 1;
+    }
+    while idx > 0 && !chars[idx - 1].1.is_whitespace() {
+        idx -= 1;
+    }
+    chars[idx].0
+}
+
+/// Vim `e`: end of the current word, or of the next word if already at a
+/// word end / on whitespace.
+fn word_end(s: &str, cursor: usize) -> usize {
+    if cursor >= s.len() {
+        return cursor;
+    }
+    let suffix = &s[cursor..];
+    let mut iter = suffix.char_indices().peekable();
+    iter.next();
+    while iter.peek().is_some_and(|&(_, c)| c.is_whitespace()) {
+        iter.next();
+    }
+    let mut last = iter.peek().map_or(suffix.len(), |&(i, _)| i);
+    while let Some(&(i, c)) = iter.peek() {
+        if c.is_whitespace() {
+            break;
+        }
+        last = i;
+        iter.next();
+    }
+    cursor + last
 }
 
 fn delete_word_before_cursor(state: &mut State) {
@@ -3063,7 +3177,33 @@ fn handle_mouse<B: ratatui::backend::Backend>(
                 }
             }
         }
+        // Middle-click pastes from the system clipboard — completes the
+        // drag-select-to-copy pair the terminal's own middle-click handler
+        // would have done if mouse capture weren't on.
+        MouseEventKind::Down(MouseButton::Middle) => {
+            paste_from_clipboard(state);
+        }
         _ => {}
+    }
+}
+
+/// Read the system clipboard via arboard and route the text through
+/// [`insert_paste`] so it lands in whichever buffer matches the current
+/// mode (input / command / pending key entry). Sets the status line on
+/// success or failure so the user sees what happened.
+fn paste_from_clipboard(state: &mut State) {
+    match arboard::Clipboard::new().and_then(|mut cb| cb.get_text()) {
+        Ok(text) if !text.is_empty() => {
+            let chars = text.chars().count();
+            insert_paste(state, &text);
+            state.status = format!("pasted {chars} chars from clipboard");
+        }
+        Ok(_) => {
+            state.status = "clipboard is empty".to_string();
+        }
+        Err(_) => {
+            state.status = "clipboard read failed (no display server?)".to_string();
+        }
     }
 }
 
@@ -3075,28 +3215,43 @@ fn handle_mouse<B: ratatui::backend::Backend>(
 ///
 /// Order of preference:
 ///
-/// 1. **arboard** — direct system-clipboard API. Talks straight to the
-///    compositor (Wayland with wlr-data-control, X11 via xclip/xsel) or
-///    the OS clipboard (macOS, Windows). Doesn't go through tmux or the
-///    outer terminal, so no escape-sequence parsing to get wrong.
-/// 2. **`tmux load-buffer -w`** (only when `$TMUX` is set) — populates
+/// 1. **`wl-copy`** (only when `$WAYLAND_DISPLAY` is set) — shells out to
+///    the canonical Wayland clipboard tool, which forks a daemon that
+///    keeps the selection alive after we return. arboard on Wayland uses
+///    `wlr-data-control` and destroys its data source the moment the
+///    `Clipboard` struct drops at end of this expression, so the
+///    compositor clears the selection and pasting elsewhere comes up
+///    blank even though `set_text` returned `Ok` — hence the bypass.
+/// 2. **arboard** (non-Wayland only) — direct system-clipboard API.
+///    Talks to X11 via xclip/xsel (which fork their own daemons) or the
+///    OS clipboard on macOS / Windows.
+/// 3. **`tmux load-buffer -w`** (only when `$TMUX` is set) — populates
 ///    tmux's internal paste buffer AND asks tmux to forward the
-///    selection to the outer terminal via OSC 52. Used when arboard
-///    can't reach a display server (typical SSH-into-tmux case).
-/// 3. **Direct OSC 52** (`ESC ] 52 ; c ; <base64> BEL`, plus a tmux
+///    selection to the outer terminal via OSC 52. Used when neither
+///    wl-copy nor arboard can reach a display server (typical
+///    SSH-into-tmux case).
+/// 4. **Direct OSC 52** (`ESC ] 52 ; c ; <base64> BEL`, plus a tmux
 ///    DCS-passthrough copy when in tmux) — terminal-escape route that
-///    rides the TTY across SSH when neither arboard nor tmux 3.2+ are
-///    available. Honored by foot, kitty, alacritty (with
-///    `clipboard.write.enabled`), wezterm, iTerm2, Windows Terminal,
-///    modern xterm.
+///    rides the TTY across SSH when none of the above are available.
+///    Honored by foot, kitty, alacritty (with `clipboard.write.enabled`),
+///    wezterm, iTerm2, Windows Terminal, modern xterm.
 ///
 /// The status line names the channel that won, so future "paste is
 /// blank" reports point at the right layer.
 fn copy_to_clipboard(text: &str, state: &mut State) {
     let chars = text.chars().count();
     let in_tmux = std::env::var_os("TMUX").is_some();
+    let in_wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
 
-    if arboard::Clipboard::new()
+    if in_wayland {
+        if wl_copy(text).is_ok() {
+            state.status = format!("copied {chars} chars to clipboard (wl-copy)");
+            return;
+        }
+        // Deliberately skip arboard here: on Wayland it reports Ok but
+        // the selection evaporates with the Clipboard struct — falling
+        // through to it would just lie to the user.
+    } else if arboard::Clipboard::new()
         .and_then(|mut cb| cb.set_text(text.to_string()))
         .is_ok()
     {
@@ -3112,6 +3267,37 @@ fn copy_to_clipboard(text: &str, state: &mut State) {
         return;
     }
     state.status = "clipboard error: no channel succeeded".to_string();
+}
+
+/// Run `wl-copy` with the selection piped on stdin. wl-copy reads stdin
+/// to EOF, forks a background daemon that holds the wlr-data-control
+/// selection alive after the foreground process exits, then returns
+/// success — so the selection persists across our `wait()` and after
+/// teleia exits, unlike arboard's in-process Clipboard which dies the
+/// moment its struct drops. Any spawn or non-zero exit bubbles up so
+/// [`copy_to_clipboard`] can fall back to other channels.
+fn wl_copy(text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("wl-copy")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| std::io::Error::other("wl-copy: no stdin"))?;
+        stdin.write_all(text.as_bytes())?;
+        // stdin drops here, closing the pipe so wl-copy sees EOF and forks.
+    }
+    let status = child.wait()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!("wl-copy exited {status}")))
+    }
 }
 
 /// Run `tmux load-buffer -w -` with the selection piped on stdin. The
@@ -4759,5 +4945,55 @@ mod tests {
         });
         assert!(accept_menu(&mut state));
         assert_eq!(state.input, "/mcps enable github");
+    }
+
+    #[test]
+    fn word_forward_jumps_over_word_then_whitespace() {
+        // cursor on 'h' of "hello", `w` → start of "world"
+        assert_eq!(word_forward("hello world", 0), 6);
+        // mid-word still jumps to start of next word
+        assert_eq!(word_forward("hello world", 2), 6);
+        // already on whitespace: skip to next word start
+        assert_eq!(word_forward("hello  world", 5), 7);
+        // last word: lands at end of input
+        assert_eq!(word_forward("hello", 0), 5);
+        // empty: stays at 0
+        assert_eq!(word_forward("", 0), 0);
+    }
+
+    #[test]
+    fn word_back_returns_to_word_start() {
+        // end of input → start of last word
+        assert_eq!(word_back("hello world", 11), 6);
+        // on start of word → start of previous word
+        assert_eq!(word_back("hello world", 6), 0);
+        // on whitespace → start of previous word
+        assert_eq!(word_back("hello world", 5), 0);
+        // already at 0
+        assert_eq!(word_back("hello", 0), 0);
+        // empty input
+        assert_eq!(word_back("", 0), 0);
+    }
+
+    #[test]
+    fn word_end_advances_to_word_end() {
+        // start of word → end of same word
+        assert_eq!(word_end("hello world", 0), 4);
+        // already at end of word → end of next word
+        assert_eq!(word_end("hello world", 4), 10);
+        // on whitespace → end of next word
+        assert_eq!(word_end("hello world", 5), 10);
+        // at end of input: stays
+        assert_eq!(word_end("hello", 5), 5);
+    }
+
+    #[test]
+    fn word_motion_handles_multibyte_chars() {
+        // "héllo wörld" — each accented char is 2 bytes in UTF-8.
+        let s = "héllo wörld";
+        // word_forward from byte 0 should land at "wörld" start (byte 7).
+        assert_eq!(word_forward(s, 0), 7);
+        // word_back from end should return to start of "wörld".
+        assert_eq!(word_back(s, s.len()), 7);
     }
 }
