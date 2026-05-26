@@ -87,7 +87,7 @@ Three stances control tool execution — cycle with `Shift+Tab` or set explicitl
 
 ## Keybindings
 
-Three modes: **Insert** (default — type and edit), **Normal** (`Esc` to enter; vim motions), **Command** (`:` from Normal; vim ex-commands). The status-bar chip and input border colour signal the active mode.
+Four modes: **Insert** (default — type and edit), **Normal** (`Esc` to enter; vim motions), **Visual** (`v` from Normal; charwise selection over the chat scrollback), **Command** (`:` from Normal; vim ex-commands). The status-bar chip and input border colour signal the active mode.
 
 ### Insert mode
 
@@ -114,6 +114,7 @@ Three modes: **Insert** (default — type and edit), **Normal** (`Esc` to enter;
 | key                          | does                                                  |
 | ---------------------------- | ----------------------------------------------------- |
 | `i` / `a` / `I` / `A`        | back to Insert (cursor / after / line start / line end) |
+| `v`                          | Visual mode (charwise selection in chat scrollback)   |
 | `:`                          | Command mode                                          |
 | `h` / `l` or `Left` / `Right` | cursor                                                |
 | `0` / `$` or `Home` / `End`  | line start / end                                      |
@@ -128,6 +129,19 @@ Three modes: **Insert** (default — type and edit), **Normal** (`Esc` to enter;
 | `Tab`                        | accept suggestion                                     |
 | `Shift+Tab`                  | cycle permission mode                                 |
 | `Enter`                      | submit                                                |
+
+### Visual mode (`v` from Normal)
+
+Charwise selection over the rendered chat scrollback — the keyboard equivalent of a left-click drag. The selection anchor drops at the top-left of the inner chat area; the hardware terminal cursor tracks the selection head so you can see where motions are taking you. `y` copies the highlighted text through the same channel stack as mouse drag-select (Wayland: wl-copy; else arboard; → tmux → OSC 52) and returns to Normal with the highlight still visible. `Esc` cancels and clears the highlight.
+
+| key                          | does                                                  |
+| ---------------------------- | ----------------------------------------------------- |
+| `h` / `l` or `Left` / `Right` | move selection head left / right (anchor stays)      |
+| `j` / `k` or `Down` / `Up`   | move selection head down / up                         |
+| `0` / `Home`                 | snap selection head to row start                      |
+| `$` / `End`                  | snap selection head to row end                        |
+| `y`                          | yank selection to clipboard, exit to Normal           |
+| `Esc`                        | cancel selection, exit to Normal                      |
 
 ### Command mode (vim ex-commands)
 
