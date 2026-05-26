@@ -306,7 +306,7 @@ const KNOWN_CLOUD_MODELS: &[&str] = &[
                   round-trip in a loop until the model stops requesting them: `read`, `write`, \
                   `edit`, `bash`, `list`, `glob`, and `grep`.\n\
                   \n\
-                  The TUI offers vim-style Insert / Normal / Command modes, autocomplete with drop-down \
+                  The TUI offers vim-style Insert / Normal / Visual / Command modes, autocomplete with drop-down \
                   menus for slash commands and saved aliases, ghost-text suggestions, readline-style input \
                   history (Up/Down), Tokyo Night / Catppuccin / Dracula themes, a token tracker, and \
                   desktop notifications when a turn completes. Sessions live in SQLite at \
