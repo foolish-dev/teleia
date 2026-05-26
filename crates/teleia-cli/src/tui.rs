@@ -31,7 +31,9 @@ const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧
 fn mode_hints(mode: Mode) -> &'static str {
     match mode {
         Mode::Insert => "↵ send · esc normal · tab accept · /help",
-        Mode::Normal => "i insert · v visual · : command · w/b/e word · gg top · G bot · q quit",
+        Mode::Normal => {
+            "i insert · v visual · : command · y yank · w/b/e word · gg top · G bot · q quit"
+        }
         Mode::Visual => "h j k l move · y yank · esc cancel",
         Mode::Command => "↵ run · esc cancel",
     }
@@ -953,6 +955,11 @@ async fn event_loop<B: ratatui::backend::Backend>(
                     // visible chat area and let hjkl drive a charwise
                     // selection over scrollback.
                     KeyCode::Char('v') => enter_visual(state),
+                    // Yank the most recent assistant response — same as the
+                    // `:yank` / `:copy` ex-commands. Visual mode has its
+                    // own `y` for selection yank; Normal-mode `y` is the
+                    // no-selection shortcut.
+                    KeyCode::Char('y') => yank_last_assistant(state),
                     // Enter command mode
                     KeyCode::Char(':') => {
                         state.mode = Mode::Command;
@@ -2446,20 +2453,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
             }
             state.push(Entry::Info(text));
         }
-        "copy" | "yank" => {
-            let last = state.history.iter().rev().find_map(|e| match e {
-                Entry::Assistant { text, .. } if !text.is_empty() => Some(text.clone()),
-                _ => None,
-            });
-            match last {
-                Some(text) => {
-                    let len = text.chars().count();
-                    copy_to_clipboard(&text, state);
-                    state.push(Entry::Info(format!("copied {len} chars to clipboard")));
-                }
-                None => state.push(Entry::Error("nothing to copy yet".into())),
-            }
-        }
+        "copy" | "yank" => yank_last_assistant(state),
         "transparent" | "transparency" => {
             let new = match arg.to_ascii_lowercase().as_str() {
                 "on" | "true" | "yes" | "1" => true,
@@ -3440,6 +3434,25 @@ fn copy_to_clipboard(text: &str, state: &mut State) {
 /// terminals are typically more generous (foot 256KB, kitty / iTerm2 /
 /// WezTerm 1MB+); the xterm default is the floor we pin to.
 const OSC52_MAX_RAW_BYTES: usize = 48_000;
+
+/// Copy the most recent non-empty assistant response to the clipboard.
+/// Shared by the `:copy` / `:yank` ex-commands and the `y` Normal-mode
+/// keybind so both routes report the same status and the same
+/// "nothing to copy yet" error when scrollback has no assistant turn.
+fn yank_last_assistant(state: &mut State) {
+    let last = state.history.iter().rev().find_map(|e| match e {
+        Entry::Assistant { text, .. } if !text.is_empty() => Some(text.clone()),
+        _ => None,
+    });
+    match last {
+        Some(text) => {
+            let len = text.chars().count();
+            copy_to_clipboard(&text, state);
+            state.push(Entry::Info(format!("copied {len} chars to clipboard")));
+        }
+        None => state.push(Entry::Error("nothing to copy yet".into())),
+    }
+}
 
 /// Run `wl-copy` with the selection piped on stdin. wl-copy reads stdin
 /// to EOF, forks a background daemon that holds the wlr-data-control
