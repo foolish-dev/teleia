@@ -32,7 +32,7 @@ fn mode_hints(mode: Mode) -> &'static str {
     match mode {
         Mode::Insert => "↵ send · esc normal · tab accept · /help",
         Mode::Normal => {
-            "i insert · v/V/^v visual · R replace · : cmd · y yank · w/b/e word · q quit"
+            "i insert · v/V/^v visual · R replace · u/^r undo/redo · : cmd · y yank · q quit"
         }
         Mode::Visual => "h j k l move · y yank · esc cancel",
         Mode::Command => "↵ run · esc cancel",
@@ -514,7 +514,28 @@ struct State {
     /// leaving the next paste empty or stale. Wayland routes through
     /// `wl-copy` instead, which forks a daemon that owns the selection.
     clipboard: Option<arboard::Clipboard>,
+    /// Undo / redo stacks for the input buffer. Each entry is a
+    /// `(input, cursor)` snapshot taken right before a key dispatch that
+    /// changed it. `u` swaps the current state onto `input_redo` and
+    /// pops `input_undo` back into the live input; `Ctrl-r` mirrors that
+    /// the other direction. Capped at [`INPUT_UNDO_CAP`] so long
+    /// editing sessions don't grow unbounded. Both are cleared on
+    /// submit — once the prompt is sent there's nothing meaningful to
+    /// undo into.
+    input_undo: Vec<(String, usize)>,
+    input_redo: Vec<(String, usize)>,
+    /// One-shot flag set by the `u` and `Ctrl-r` handlers in Normal so
+    /// the outer event loop's diff-based undo recorder doesn't capture
+    /// the restored state as a fresh edit. Reset to false after each
+    /// dispatch.
+    skip_input_undo_record: bool,
 }
+
+/// Maximum number of undo snapshots kept on the input buffer. Vim's
+/// default is unbounded; we cap because a chat session can drift for
+/// hours and the input is bounded anyway by terminal width × however
+/// many lines.
+const INPUT_UNDO_CAP: usize = 200;
 
 pub struct PendingApproval {
     pub name: String,
@@ -570,6 +591,9 @@ impl State {
             last_total_lines: 0,
             pending_op: None,
             clipboard: None,
+            input_undo: Vec::new(),
+            input_redo: Vec::new(),
+            skip_input_undo_record: false,
         }
     }
 
@@ -781,6 +805,15 @@ async fn event_loop<B: ratatui::backend::Backend>(
             continue;
         }
 
+        // Snapshot the input buffer + cursor before dispatch so we can
+        // tell — *after* dispatch — whether the keypress actually
+        // mutated it. Used to feed the undo stack without sprinkling
+        // snapshot calls across every mutation site. `u` / `Ctrl-r`
+        // themselves set `state.skip_input_undo_record` for one
+        // iteration so an undo step doesn't itself get recorded as a
+        // new edit.
+        let pre_input_snapshot = (state.input.clone(), state.input_cursor);
+
         match state.mode {
             Mode::Insert => {
                 match key.code {
@@ -962,6 +995,16 @@ async fn event_loop<B: ratatui::backend::Backend>(
                     }
                     KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         scroll_down(state, 12);
+                    }
+                    // Undo / redo for the input buffer. Diff-based —
+                    // every keypress that mutated the input was already
+                    // captured by the outer event loop; here we swap
+                    // between input_undo and input_redo.
+                    KeyCode::Char('u') => {
+                        undo_input(state);
+                    }
+                    KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        redo_input(state);
                     }
                     // History scroll
                     KeyCode::Char('j') | KeyCode::Down | KeyCode::PageDown => {
@@ -1161,6 +1204,23 @@ async fn event_loop<B: ratatui::backend::Backend>(
             },
         }
 
+        // Diff-based undo recorder: any keypress that mutated the input
+        // buffer text between snapshot and now pushes the old snapshot
+        // onto the undo stack and clears the redo stack. Comparison is
+        // string-only — pure cursor motion (`h`, `l`, `w`, `0`, `$`,
+        // etc.) doesn't get its own undo step, matching vim. `u` /
+        // `Ctrl-r` set `skip_input_undo_record` so their own swap
+        // doesn't become a recorded edit.
+        if state.skip_input_undo_record {
+            state.skip_input_undo_record = false;
+        } else if state.input != pre_input_snapshot.0 {
+            state.input_undo.push(pre_input_snapshot);
+            if state.input_undo.len() > INPUT_UNDO_CAP {
+                state.input_undo.remove(0);
+            }
+            state.input_redo.clear();
+        }
+
         refresh_suggestion(state, agent);
         refresh_menu(state, agent);
     }
@@ -1177,6 +1237,14 @@ async fn submit_input<B: ratatui::backend::Backend>(
     state.input_cursor = 0;
     state.recall_idx = None;
     state.mode = Mode::Insert;
+    // The input is gone — there's nothing meaningful for `u` to
+    // restore into anymore. Clearing keeps a post-submit `u` from
+    // silently re-populating the box with the prompt that just went
+    // out (which would also reintroduce orphan ghost-text / menu
+    // state). The Up/Down recall ring is the right way to get the
+    // last prompt back.
+    state.input_undo.clear();
+    state.input_redo.clear();
     // The dropdown menu, ghost-text completion, and any drag-select
     // highlight all key off the now-empty input — clearing them
     // immediately keeps a stale frame from showing up between submit
@@ -3260,6 +3328,48 @@ fn selection_cells(sel: Selection, area: Rect) -> Vec<(u16, u16)> {
 
 fn rect_contains(r: Rect, col: u16, row: u16) -> bool {
     col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height
+}
+
+/// Pop the most recent snapshot off `input_undo`, save the current
+/// input on `input_redo`, and restore the popped snapshot. No-op when
+/// the undo stack is empty. `skip_input_undo_record` is set so the
+/// outer event loop's diff-based recorder doesn't capture this swap
+/// as a new edit.
+fn undo_input(state: &mut State) {
+    let Some(prev) = state.input_undo.pop() else {
+        state.status = "already at oldest input".into();
+        return;
+    };
+    state
+        .input_redo
+        .push((std::mem::take(&mut state.input), state.input_cursor));
+    if state.input_redo.len() > INPUT_UNDO_CAP {
+        state.input_redo.remove(0);
+    }
+    state.input = prev.0;
+    state.input_cursor = prev.1;
+    state.skip_input_undo_record = true;
+    state.recall_idx = None;
+}
+
+/// Pop the most recent snapshot off `input_redo`, save the current
+/// input on `input_undo`, and restore the popped snapshot. Mirror of
+/// [`undo_input`]; runs on Ctrl-r in Normal.
+fn redo_input(state: &mut State) {
+    let Some(next) = state.input_redo.pop() else {
+        state.status = "already at newest input".into();
+        return;
+    };
+    state
+        .input_undo
+        .push((std::mem::take(&mut state.input), state.input_cursor));
+    if state.input_undo.len() > INPUT_UNDO_CAP {
+        state.input_undo.remove(0);
+    }
+    state.input = next.0;
+    state.input_cursor = next.1;
+    state.skip_input_undo_record = true;
+    state.recall_idx = None;
 }
 
 /// Replace the input char at `state.input_cursor` with `c`. No-op when
@@ -5562,6 +5672,49 @@ mod tests {
         replace_char_at_cursor(&mut s, 'ä');
         assert_eq!(s.input, "hällo");
         assert_eq!(s.input_cursor, 1);
+    }
+
+    #[test]
+    fn undo_pops_most_recent_snapshot_and_pushes_current_onto_redo() {
+        let mut s = State::new("dummy", "dummy");
+        s.input_undo.push(("hello".into(), 5));
+        s.input = "hello world".into();
+        s.input_cursor = 11;
+        undo_input(&mut s);
+        assert_eq!(s.input, "hello");
+        assert_eq!(s.input_cursor, 5);
+        assert_eq!(s.input_redo.len(), 1, "current state moved to redo");
+        assert_eq!(s.input_redo[0], ("hello world".into(), 11));
+        assert!(s.skip_input_undo_record, "swap shouldn't re-record");
+    }
+
+    #[test]
+    fn undo_on_empty_stack_is_noop() {
+        let mut s = State::new("dummy", "dummy");
+        s.input = "untouched".into();
+        s.input_cursor = 3;
+        undo_input(&mut s);
+        assert_eq!(s.input, "untouched");
+        assert_eq!(s.input_cursor, 3);
+        assert!(s.input_redo.is_empty(), "nothing to redo from a no-op");
+    }
+
+    #[test]
+    fn redo_reverses_undo_round_trip() {
+        let mut s = State::new("dummy", "dummy");
+        s.input = "abc".into();
+        s.input_cursor = 3;
+        s.input_undo.push(("ab".into(), 2));
+        undo_input(&mut s);
+        // After undo: input = "ab", cursor = 2.
+        assert_eq!(s.input, "ab");
+        assert_eq!(s.input_cursor, 2);
+        s.skip_input_undo_record = false;
+        redo_input(&mut s);
+        assert_eq!(s.input, "abc");
+        assert_eq!(s.input_cursor, 3);
+        assert!(s.input_redo.is_empty());
+        assert_eq!(s.input_undo.len(), 1, "round-tripped onto undo");
     }
 
     #[test]
