@@ -362,14 +362,16 @@ enum Mode {
     Command,
 }
 
-/// First half of a two-key Normal-mode sequence (`gg`, `dd`). Set when the
-/// leader key is pressed, consumed by the next keypress; if the second key
-/// doesn't complete a known sequence the operator cancels and the key is
-/// re-processed as if pressed fresh (matching vim).
+/// First half of a two-key Normal-mode sequence (`gg`, `dd`) or a
+/// pending operator that consumes the next char (`r`). Set when the
+/// leader key is pressed, consumed by the next keypress; if the second
+/// key doesn't complete a known sequence the operator cancels and the
+/// key is re-processed as if pressed fresh (matching vim).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PendingOp {
     G,
     D,
+    R,
 }
 
 /// Shape of a Visual-mode (or mouse-drag) selection. `Char` is vim's
@@ -884,6 +886,15 @@ async fn event_loop<B: ratatui::backend::Backend>(
                             state.input_cursor = 0;
                             true
                         }
+                        // r<char> — replace the input char at the
+                        // cursor. No-op at end-of-buffer or on an
+                        // empty input, matching vim. Any non-Char key
+                        // (Esc, arrows, etc.) cancels the operator and
+                        // re-dispatches normally — `_ => false` below.
+                        (PendingOp::R, KeyCode::Char(c)) => {
+                            replace_char_at_cursor(state, c);
+                            true
+                        }
                         _ => false,
                     };
                     if handled {
@@ -967,9 +978,10 @@ async fn event_loop<B: ratatui::backend::Backend>(
                     KeyCode::Char('D') => {
                         state.input.truncate(state.input_cursor);
                     }
-                    // Two-key sequence leaders (gg, dd).
+                    // Two-key sequence leaders (gg, dd) and r<char>.
                     KeyCode::Char('g') => state.pending_op = Some(PendingOp::G),
                     KeyCode::Char('d') => state.pending_op = Some(PendingOp::D),
+                    KeyCode::Char('r') => state.pending_op = Some(PendingOp::R),
                     // Enter Visual mode. `v` is charwise (vim default),
                     // `V` is linewise, `Ctrl-v` is blockwise. Anchor
                     // lands at the top-left of the visible chat area
@@ -3198,6 +3210,21 @@ fn rect_contains(r: Rect, col: u16, row: u16) -> bool {
     col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height
 }
 
+/// Replace the input char at `state.input_cursor` with `c`. No-op when
+/// the cursor is at end-of-buffer or the input is empty (vim's `r`
+/// behaves the same way — there's no char to replace). Preserves
+/// multi-byte boundaries by deleting the next char and inserting `c`
+/// at the same cursor position rather than splicing bytes directly.
+fn replace_char_at_cursor(state: &mut State, c: char) {
+    let Some(existing) = state.input[state.input_cursor..].chars().next() else {
+        return;
+    };
+    let end = state.input_cursor + existing.len_utf8();
+    state
+        .input
+        .replace_range(state.input_cursor..end, &c.to_string());
+}
+
 /// Enter Visual mode with the given selection kind: drop a fresh
 /// selection at the top-left of the inner chat area and switch mode. If
 /// the chat area hasn't been drawn yet (no log_area set), bail and stay
@@ -5404,6 +5431,42 @@ mod tests {
         exit_visual(&mut s, /* keep_selection */ false);
         assert_eq!(s.mode, Mode::Normal);
         assert!(s.selection.is_none(), "keep_selection=false clears it");
+    }
+
+    #[test]
+    fn replace_char_at_cursor_swaps_existing_char_and_preserves_cursor() {
+        let mut s = State::new("dummy", "dummy");
+        s.input = "hello".into();
+        s.input_cursor = 1;
+        replace_char_at_cursor(&mut s, 'a');
+        assert_eq!(s.input, "hallo");
+        assert_eq!(s.input_cursor, 1, "cursor stays — matches vim `r`");
+    }
+
+    #[test]
+    fn replace_char_at_cursor_is_noop_at_end_of_buffer() {
+        let mut s = State::new("dummy", "dummy");
+        s.input = "hi".into();
+        s.input_cursor = 2;
+        replace_char_at_cursor(&mut s, 'X');
+        assert_eq!(s.input, "hi", "no char under cursor → no change");
+        assert_eq!(s.input_cursor, 2);
+    }
+
+    #[test]
+    fn replace_char_at_cursor_handles_multibyte_chars() {
+        // Replace a 3-byte char with a 1-byte char, then back to a
+        // multi-byte char. Cursor must stay at the same byte offset
+        // since `r` doesn't move the cursor in vim.
+        let mut s = State::new("dummy", "dummy");
+        s.input = "héllo".into(); // é = 2 bytes
+        s.input_cursor = 1; // on `é`
+        replace_char_at_cursor(&mut s, 'e');
+        assert_eq!(s.input, "hello");
+        assert_eq!(s.input_cursor, 1);
+        replace_char_at_cursor(&mut s, 'ä');
+        assert_eq!(s.input, "hällo");
+        assert_eq!(s.input_cursor, 1);
     }
 
     #[test]
