@@ -1126,6 +1126,40 @@ async fn event_loop<B: ratatui::backend::Backend>(
                         state.search_buf.clear();
                         state.search_cursor = 0;
                     }
+                    // Cycle search matches (`n` next, `N` previous).
+                    KeyCode::Char('n')
+                        if !key.modifiers.contains(KeyModifiers::CONTROL)
+                            && state.search_pattern.is_some() =>
+                    {
+                        search_next(state);
+                    }
+                    KeyCode::Char('N') => search_prev(state),
+                    // Word-under-input-cursor search. `*` runs forward
+                    // from the first match; `#` from the last. Both
+                    // pull the word from `state.input` because that's
+                    // where Normal-mode cursor motion happens — vim
+                    // pulls from the buffer, our buffer is the prompt.
+                    KeyCode::Char('*') => {
+                        if let Some(word) = word_under_cursor(&state.input, state.input_cursor) {
+                            run_search(state, word);
+                        } else {
+                            state.status = "no word under cursor".into();
+                        }
+                    }
+                    KeyCode::Char('#') => {
+                        if let Some(word) = word_under_cursor(&state.input, state.input_cursor) {
+                            run_search(state, word);
+                            // # is "search backward" in vim — jump from
+                            // the first match to the last so subsequent
+                            // n walks backward through occurrences.
+                            if !state.search_matches.is_empty() {
+                                state.search_idx = Some(state.search_matches.len() - 1);
+                                scroll_to_current_match(state);
+                            }
+                        } else {
+                            state.status = "no word under cursor".into();
+                        }
+                    }
                     // Tab still accepts a suggestion (rare in Normal but harmless)
                     KeyCode::Tab => {
                         if let Some(s) = state.suggestion.clone() {
@@ -1501,7 +1535,16 @@ fn execute_ex(state: &mut State, agent: &mut Agent, cmd: &str) {
     let arg = parts.next().unwrap_or("").trim();
     match name {
         "noh" | "nohlsearch" => {
+            // Clear both the drag-select highlight and the active
+            // search-result highlight, mirroring vim's `:noh` which
+            // hides hlsearch matches without forgetting the pattern.
+            // We also drop the pattern itself — there's no `:set
+            // hlsearch` knob to flip it back on, so a fresh `/` is
+            // how you re-highlight.
             state.selection = None;
+            state.search_pattern = None;
+            state.search_matches.clear();
+            state.search_idx = None;
         }
         "r" | "read" => {
             if arg.is_empty() {
@@ -3489,6 +3532,121 @@ fn rect_contains(r: Rect, col: u16, row: u16) -> bool {
     col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height
 }
 
+/// The full word that `cursor` sits inside, or `None` when the cursor
+/// is on whitespace / past end-of-buffer. Used by `*` and `#` to seed
+/// a search from whatever the user is hovering. "Word" = run of
+/// non-whitespace chars (same definition as `w`/`b`/`e`); we don't
+/// split on punctuation the way vim's strict iskeyword does, since
+/// the chat tends to surface compound tokens (paths, snake_case,
+/// kebab-case) that the user wants searched as one unit.
+fn word_under_cursor(s: &str, cursor: usize) -> Option<String> {
+    let suffix = &s[cursor..];
+    let first = suffix.chars().next()?;
+    if first.is_whitespace() {
+        return None;
+    }
+    let mut start = cursor;
+    for (i, c) in s[..cursor].char_indices().rev() {
+        if c.is_whitespace() {
+            break;
+        }
+        start = i;
+    }
+    let mut end = cursor;
+    for (i, c) in s[cursor..].char_indices() {
+        if c.is_whitespace() {
+            break;
+        }
+        end = cursor + i + c.len_utf8();
+    }
+    Some(s[start..end].to_string())
+}
+
+/// Sum of unwrapped Line rows produced by every history entry strictly
+/// before `entry_idx`, including the inter-entry spacers
+/// [`needs_spacer`] would insert. This is what `n` / `N` use to
+/// approximate the wrapped-line offset of the matched entry without
+/// re-running `Paragraph::line_count` over a partial history.
+///
+/// Wrap is ignored — short prose lines wrap to 1 visual row anyway,
+/// and a slightly-too-low scroll value just leaves the match a few
+/// rows below the top of the viewport. Cheaper than the exact count;
+/// the user can fine-tune with `j` / `k`.
+fn unwrapped_lines_before(
+    history: &[Entry],
+    entry_idx: usize,
+    frame: usize,
+    username: &str,
+) -> usize {
+    let mut count = 0usize;
+    let mut prev: Option<&Entry> = None;
+    for (i, entry) in history.iter().enumerate() {
+        if i == entry_idx {
+            break;
+        }
+        if let Some(p) = prev {
+            if needs_spacer(p, entry) {
+                count += 1;
+            }
+        }
+        count += render_entry(entry, frame, username).len();
+        prev = Some(entry);
+    }
+    count
+}
+
+/// Position scroll so the entry holding the current `search_idx` match
+/// is near the top of the visible chat window. Approximation only —
+/// uses unwrapped line counts and the previous frame's total — but
+/// gets the user close enough that the highlighted match is on screen.
+fn scroll_to_current_match(state: &mut State) {
+    let Some(idx) = state.search_idx else { return };
+    let Some(hit) = state.search_matches.get(idx) else {
+        return;
+    };
+    let entry_idx = hit.entry_idx;
+    let lines_before =
+        unwrapped_lines_before(&state.history, entry_idx, state.frame, &state.username);
+    let total = state.last_total_lines;
+    // `state.scroll` is "rows away from the bottom"; setting it to
+    // (total - lines_before) puts lines_before at the top of the
+    // viewport. saturating_sub guards the entry-at-bottom case where
+    // lines_before > total (shouldn't happen, but cheap to defend).
+    let target = total.saturating_sub(lines_before);
+    state.scroll = u16::try_from(target).unwrap_or(u16::MAX);
+    state.follow_bottom = false;
+    state.status = format!("match {} of {}", idx + 1, state.search_matches.len());
+}
+
+/// Vim `n`: advance to the next search match, wrapping past the end.
+/// No-op on an empty match list (with a status note).
+fn search_next(state: &mut State) {
+    if state.search_matches.is_empty() {
+        state.status = "no search results".into();
+        return;
+    }
+    let len = state.search_matches.len();
+    state.search_idx = Some(match state.search_idx {
+        Some(i) => (i + 1) % len,
+        None => 0,
+    });
+    scroll_to_current_match(state);
+}
+
+/// Vim `N`: back to the previous search match, wrapping past the start.
+fn search_prev(state: &mut State) {
+    if state.search_matches.is_empty() {
+        state.status = "no search results".into();
+        return;
+    }
+    let len = state.search_matches.len();
+    state.search_idx = Some(match state.search_idx {
+        Some(i) => (i + len - 1) % len,
+        None => len - 1,
+    });
+    scroll_to_current_match(state);
+}
+
 /// Scan `state.history` for every byte-offset occurrence of `pattern`,
 /// update `state.search_matches` + `state.search_pattern`, point
 /// `state.search_idx` at the first hit (or `None` when nothing
@@ -3532,6 +3690,9 @@ fn run_search(state: &mut State, pattern: String) {
     } else {
         format!("{count} match(es) for '{pattern}' · n/N to cycle")
     };
+    if count > 0 {
+        scroll_to_current_match(state);
+    }
 }
 
 /// Pop the most recent snapshot off `input_undo`, save the current
@@ -5880,6 +6041,69 @@ mod tests {
         replace_char_at_cursor(&mut s, 'ä');
         assert_eq!(s.input, "hällo");
         assert_eq!(s.input_cursor, 1);
+    }
+
+    #[test]
+    fn word_under_cursor_extracts_full_word_around_cursor() {
+        // Cursor inside "world" returns the whole word.
+        assert_eq!(
+            word_under_cursor("hello world today", 7).as_deref(),
+            Some("world")
+        );
+        // Cursor at the first byte of "world".
+        assert_eq!(
+            word_under_cursor("hello world", 6).as_deref(),
+            Some("world")
+        );
+        // Cursor at the last byte of "hello".
+        assert_eq!(
+            word_under_cursor("hello world", 4).as_deref(),
+            Some("hello")
+        );
+    }
+
+    #[test]
+    fn word_under_cursor_returns_none_on_whitespace_or_end() {
+        assert!(word_under_cursor("hello world", 5).is_none(), "space");
+        assert!(word_under_cursor("hello", 5).is_none(), "EOB");
+        assert!(word_under_cursor("", 0).is_none(), "empty");
+    }
+
+    #[test]
+    fn search_next_wraps_at_end_of_match_list() {
+        let mut s = State::new("dummy", "dummy");
+        s.history.push(Entry::User("a a a".into()));
+        run_search(&mut s, "a".into());
+        assert_eq!(s.search_idx, Some(0));
+        search_next(&mut s);
+        assert_eq!(s.search_idx, Some(1));
+        search_next(&mut s);
+        assert_eq!(s.search_idx, Some(2));
+        search_next(&mut s);
+        assert_eq!(s.search_idx, Some(0), "wraps past end");
+    }
+
+    #[test]
+    fn search_prev_wraps_at_start_of_match_list() {
+        let mut s = State::new("dummy", "dummy");
+        s.history.push(Entry::User("a a a".into()));
+        run_search(&mut s, "a".into());
+        search_prev(&mut s);
+        assert_eq!(s.search_idx, Some(2), "wraps past start");
+        search_prev(&mut s);
+        assert_eq!(s.search_idx, Some(1));
+    }
+
+    #[test]
+    fn search_next_on_empty_match_list_is_noop() {
+        let mut s = State::new("dummy", "dummy");
+        s.history.push(Entry::User("foo".into()));
+        run_search(&mut s, "bar".into());
+        assert!(s.search_idx.is_none());
+        search_next(&mut s);
+        assert!(s.search_idx.is_none());
+        search_prev(&mut s);
+        assert!(s.search_idx.is_none());
     }
 
     #[test]
