@@ -31,7 +31,8 @@ const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧
 fn mode_hints(mode: Mode) -> &'static str {
     match mode {
         Mode::Insert => "↵ send · esc normal · tab accept · /help",
-        Mode::Normal => "i insert · : command · w/b/e word · gg top · G bot · q quit",
+        Mode::Normal => "i insert · v visual · : command · w/b/e word · gg top · G bot · q quit",
+        Mode::Visual => "h j k l move · y yank · esc cancel",
         Mode::Command => "↵ run · esc cancel",
     }
 }
@@ -355,6 +356,7 @@ enum Mode {
     #[default]
     Insert,
     Normal,
+    Visual,
     Command,
 }
 
@@ -939,6 +941,10 @@ async fn event_loop<B: ratatui::backend::Backend>(
                     // Two-key sequence leaders (gg, dd).
                     KeyCode::Char('g') => state.pending_op = Some(PendingOp::G),
                     KeyCode::Char('d') => state.pending_op = Some(PendingOp::D),
+                    // Enter Visual mode: anchor at the top-left of the
+                    // visible chat area and let hjkl drive a charwise
+                    // selection over scrollback.
+                    KeyCode::Char('v') => enter_visual(state),
                     // Enter command mode
                     KeyCode::Char(':') => {
                         state.mode = Mode::Command;
@@ -963,6 +969,28 @@ async fn event_loop<B: ratatui::backend::Backend>(
                     _ => {}
                 }
             }
+
+            Mode::Visual => match key.code {
+                KeyCode::Esc => exit_visual(state, /* keep_selection */ false),
+                KeyCode::Char('h') | KeyCode::Left => move_visual_cursor(state, -1, 0),
+                KeyCode::Char('l') | KeyCode::Right => move_visual_cursor(state, 1, 0),
+                KeyCode::Char('k') | KeyCode::Up => move_visual_cursor(state, 0, -1),
+                KeyCode::Char('j') | KeyCode::Down => move_visual_cursor(state, 0, 1),
+                KeyCode::Char('0') | KeyCode::Home => snap_visual_cursor_x(state, true),
+                KeyCode::Char('$') | KeyCode::End => snap_visual_cursor_x(state, false),
+                KeyCode::Char('y') => {
+                    if let Some(sel) = state.selection {
+                        let inner = selection_inner_area(state.log_area);
+                        let text =
+                            extract_selection_text(terminal.current_buffer_mut(), sel, inner);
+                        if !text.is_empty() {
+                            copy_to_clipboard(&text, state);
+                        }
+                    }
+                    exit_visual(state, /* keep_selection */ true);
+                }
+                _ => {}
+            },
 
             Mode::Command => match key.code {
                 KeyCode::Esc => {
@@ -1643,7 +1671,7 @@ fn refresh_menu(state: &mut State, agent: &Agent) {
             )
         }
         Mode::Command => compute_ex_menu(&state.command_buf),
-        Mode::Normal => None,
+        Mode::Normal | Mode::Visual => None,
     };
 
     state.menu = match (state.menu.take(), next) {
@@ -2689,6 +2717,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
     let (prompt, prompt_color, buf, buf_cursor) = match state.mode {
         Mode::Insert => ("> ", th.cyan, &state.input, state.input_cursor),
         Mode::Normal => ("> ", th.green, &state.input, state.input_cursor),
+        Mode::Visual => ("> ", th.purple, &state.input, state.input_cursor),
         Mode::Command => (": ", th.yellow, &state.command_buf, state.command_cursor),
     };
 
@@ -2898,6 +2927,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
     let (mode_label, mode_color) = match state.mode {
         Mode::Insert => ("INS", th.cyan),
         Mode::Normal => ("NOR", th.green),
+        Mode::Visual => ("VIS", th.purple),
         Mode::Command => ("CMD", th.yellow),
     };
     // Chip-style mode badge: dark fg on the mode colour for contrast.
@@ -3000,6 +3030,13 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
                 cell.set_bg(th.bg_hl);
             }
         }
+        // In Visual mode the hardware cursor follows the selection head
+        // instead of sitting in the input box, so the user can see where
+        // hjkl is taking them. Overrides the set_cursor call that the
+        // input renderer issued earlier this frame.
+        if state.mode == Mode::Visual && rect_contains(inner, sel.cursor.0, sel.cursor.1) {
+            f.set_cursor_position(sel.cursor);
+        }
     }
 }
 
@@ -3068,6 +3105,66 @@ fn rect_contains(r: Rect, col: u16, row: u16) -> bool {
     col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height
 }
 
+/// Enter Visual mode: drop a fresh charwise selection at the top-left of
+/// the inner chat area and switch the mode. If the chat area hasn't been
+/// drawn yet (no log_area set), bail and stay in Normal — there's
+/// nowhere meaningful to place the cursor.
+fn enter_visual(state: &mut State) {
+    let inner = selection_inner_area(state.log_area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    state.selection = Some(Selection::new(inner.x, inner.y));
+    state.mode = Mode::Visual;
+}
+
+/// Leave Visual mode for Normal. If `keep_selection` is true the
+/// highlight stays visible (matches mouse-up behavior after a successful
+/// yank); otherwise the selection is cleared.
+fn exit_visual(state: &mut State, keep_selection: bool) {
+    if !keep_selection {
+        state.selection = None;
+    }
+    state.mode = Mode::Normal;
+}
+
+/// Move the Visual-mode cursor by (dx, dy) cells, clamped to the inner
+/// chat area. The anchor stays put — only `selection.cursor` moves, so
+/// the highlight grows/shrinks like vim's `v`.
+fn move_visual_cursor(state: &mut State, dx: i32, dy: i32) {
+    let inner = selection_inner_area(state.log_area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    if let Some(sel) = state.selection.as_mut() {
+        let max_col = inner.x + inner.width - 1;
+        let max_row = inner.y + inner.height - 1;
+        let new_col = i32::from(sel.cursor.0)
+            .saturating_add(dx)
+            .clamp(i32::from(inner.x), i32::from(max_col));
+        let new_row = i32::from(sel.cursor.1)
+            .saturating_add(dy)
+            .clamp(i32::from(inner.y), i32::from(max_row));
+        sel.cursor = (new_col as u16, new_row as u16);
+    }
+}
+
+/// Snap the Visual cursor to the start (`0`) or end (`$`) of its current
+/// row — same row, leftmost or rightmost column of the inner chat area.
+fn snap_visual_cursor_x(state: &mut State, to_start: bool) {
+    let inner = selection_inner_area(state.log_area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    if let Some(sel) = state.selection.as_mut() {
+        sel.cursor.0 = if to_start {
+            inner.x
+        } else {
+            inner.x + inner.width - 1
+        };
+    }
+}
+
 /// Apply a single readline-style edit to `state.input` / `input_cursor`.
 /// Subset of the Insert-mode handler: just the keys that mutate the
 /// input buffer — no menu, no recall, no scroll, no submit. Used inside
@@ -3092,7 +3189,7 @@ fn insert_paste(state: &mut State, text: &str) {
             state.command_buf.insert_str(state.command_cursor, text);
             state.command_cursor += text.len();
         }
-        Mode::Normal => {}
+        Mode::Normal | Mode::Visual => {}
     }
 }
 
@@ -5035,5 +5132,95 @@ mod tests {
         assert_eq!(word_forward(s, 0), 7);
         // word_back from end should return to start of "wörld".
         assert_eq!(word_back(s, s.len()), 7);
+    }
+
+    #[test]
+    fn enter_visual_anchors_at_inner_top_left_and_switches_mode() {
+        let mut s = State::new("dummy", "dummy");
+        s.log_area = Rect::new(0, 0, 30, 10);
+        enter_visual(&mut s);
+        assert_eq!(s.mode, Mode::Visual);
+        let inner = selection_inner_area(s.log_area);
+        let sel = s.selection.expect("selection set on enter_visual");
+        assert_eq!(sel.anchor, (inner.x, inner.y));
+        assert_eq!(sel.cursor, (inner.x, inner.y));
+    }
+
+    #[test]
+    fn enter_visual_is_noop_when_log_area_is_zero() {
+        let mut s = State::new("dummy", "dummy");
+        s.mode = Mode::Normal;
+        s.log_area = Rect::default();
+        enter_visual(&mut s);
+        assert_eq!(s.mode, Mode::Normal);
+        assert!(s.selection.is_none());
+    }
+
+    #[test]
+    fn move_visual_cursor_clamps_to_inner_rect() {
+        let mut s = State::new("dummy", "dummy");
+        s.log_area = Rect::new(0, 0, 6, 4);
+        enter_visual(&mut s);
+        let inner = selection_inner_area(s.log_area);
+        // Drift past both edges with a saturating delta; both axes pin.
+        move_visual_cursor(&mut s, i32::MAX, i32::MAX);
+        let sel = s.selection.unwrap();
+        assert_eq!(
+            sel.cursor,
+            (inner.x + inner.width - 1, inner.y + inner.height - 1)
+        );
+        // Anchor never moves.
+        assert_eq!(sel.anchor, (inner.x, inner.y));
+        // Walk back to the top-left, also clamped.
+        move_visual_cursor(&mut s, i32::MIN, i32::MIN);
+        assert_eq!(s.selection.unwrap().cursor, (inner.x, inner.y));
+    }
+
+    #[test]
+    fn visual_motion_extracts_rendered_text() {
+        use ratatui::widgets::Widget;
+        // Mirror the real chat block: bordered Paragraph with 1-cell
+        // padding and Wrap.
+        let area = Rect::new(0, 0, 30, 6);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        Paragraph::new(vec![Line::from("hello world")])
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .padding(Padding::new(1, 1, 1, 0)),
+            )
+            .wrap(Wrap { trim: false })
+            .render(area, &mut buf);
+
+        let mut s = State::new("dummy", "dummy");
+        s.log_area = area;
+        enter_visual(&mut s);
+        // Walk to the right edge of the inner area — the cursor stays
+        // pinned inside the rect even with a saturating delta.
+        move_visual_cursor(&mut s, i32::MAX, 0);
+        let inner = selection_inner_area(s.log_area);
+        let sel = s.selection.unwrap();
+        assert_eq!(sel.cursor, (inner.x + inner.width - 1, inner.y));
+        // The first inner row is padding, so the extract is whitespace.
+        // What this test pins is that motion → extract round-trips
+        // without panicking and yields a sensible (non-overflowing) cell
+        // range.
+        let text = extract_selection_text(&buf, sel, inner);
+        assert!(text.trim().is_empty(), "row-0 padding extract: {text:?}");
+    }
+
+    #[test]
+    fn exit_visual_clears_or_keeps_selection() {
+        let mut s = State::new("dummy", "dummy");
+        s.log_area = Rect::new(0, 0, 10, 6);
+        enter_visual(&mut s);
+        exit_visual(&mut s, /* keep_selection */ true);
+        assert_eq!(s.mode, Mode::Normal);
+        assert!(s.selection.is_some(), "keep_selection=true preserves it");
+
+        enter_visual(&mut s);
+        exit_visual(&mut s, /* keep_selection */ false);
+        assert_eq!(s.mode, Mode::Normal);
+        assert!(s.selection.is_none(), "keep_selection=false clears it");
     }
 }
