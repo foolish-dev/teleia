@@ -462,12 +462,21 @@ async fn rm_tool(args: Value) -> Result<String> {
                 "{path} is a directory; pass recursive: true to delete"
             ));
         }
+        // Catch paths that bypass the literal `/` check above — `//`, `/.`,
+        // `/foo/..`, etc. — before they reach `remove_dir_all`.
+        if resolves_to_root(std::path::Path::new(&path)) {
+            return Err(anyhow!("refusing to delete `{path}` (resolves to `/`)"));
+        }
         std::fs::remove_dir_all(&path).with_context(|| format!("rm -rf {path}"))?;
         Ok(format!("removed directory {path}"))
     } else {
         std::fs::remove_file(&path).with_context(|| format!("rm {path}"))?;
         Ok(format!("removed {path}"))
     }
+}
+
+fn resolves_to_root(p: &std::path::Path) -> bool {
+    matches!(std::fs::canonicalize(p), Ok(c) if c == std::path::Path::new("/"))
 }
 
 #[derive(Deserialize)]
@@ -481,16 +490,21 @@ async fn bash_tool(args: Value) -> Result<String> {
     cmd.arg("-lc").arg(&command).stdout(Stdio::piped());
     // SAFETY: pre_exec runs in the forked child before exec. dup2(1, 2)
     // routes the child's stderr fd onto stdout's pipe, so writes from
-    // both streams land in one buffer in emit order. Unix-only; on
-    // other platforms stderr stays on the inherited fd.
+    // both streams land in one buffer in emit order. setpgid(0, 0) puts
+    // bash in its own process group (pgid = bash's pid) so the timeout
+    // arm can SIGKILL the whole tree, not just bash. Unix-only; on other
+    // platforms stderr stays on the inherited fd and the timeout falls
+    // back to start_kill which only reaps bash itself.
     #[cfg(unix)]
     unsafe {
         cmd.pre_exec(|| {
             if libc::dup2(1, 2) == -1 {
-                Err(std::io::Error::last_os_error())
-            } else {
-                Ok(())
+                return Err(std::io::Error::last_os_error());
             }
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
         });
     }
     let mut child = cmd
@@ -510,7 +524,7 @@ async fn bash_tool(args: Value) -> Result<String> {
         status = child.wait() => status?,
         _ = tokio::time::sleep(Duration::from_secs(30)) => {
             timed_out = true;
-            let _ = child.start_kill();
+            kill_child_tree(&mut child);
             child.wait().await?
         }
     };
@@ -523,6 +537,25 @@ async fn bash_tool(args: Value) -> Result<String> {
         out.push_str(&format!("\n[exit {}]", exit_status.code().unwrap_or(-1)));
     }
     Ok(out)
+}
+
+/// SIGKILL the child's whole process group on Unix (catches anything bash
+/// forked — sleep, nested shells, etc. — that would otherwise outlive the
+/// timeout as orphans re-parented to PID 1). Falls back to `start_kill`
+/// elsewhere so non-Unix builds at least reap bash itself.
+fn kill_child_tree(child: &mut tokio::process::Child) {
+    #[cfg(unix)]
+    {
+        if let Some(pid) = child.id() {
+            // Negative PID = "send to the entire process group with this
+            // pgid". We set pgid = pid in pre_exec, so this is safe.
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGKILL);
+            }
+            return;
+        }
+    }
+    let _ = child.start_kill();
 }
 
 #[derive(Deserialize)]
@@ -1464,6 +1497,18 @@ mod tests {
         assert!(err.contains("refusing"));
     }
 
+    #[test]
+    fn resolves_to_root_catches_root_aliases() {
+        use std::path::Path;
+        assert!(super::resolves_to_root(Path::new("/")));
+        assert!(super::resolves_to_root(Path::new("/.")));
+        assert!(super::resolves_to_root(Path::new("/..")));
+        assert!(!super::resolves_to_root(Path::new("/tmp")));
+        assert!(!super::resolves_to_root(Path::new(
+            "/this-path-should-not-exist-xyz-12345"
+        )));
+    }
+
     #[tokio::test]
     async fn todo_write_sets_and_renders_list() {
         let args = json!({
@@ -1519,6 +1564,32 @@ mod tests {
         let result = dispatch("bash", &args).await.unwrap();
         assert!(result.contains("out"));
         assert!(result.contains("err"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn kill_child_tree_reaps_a_running_sleep() {
+        use std::process::Stdio;
+        // Spawn a long-running sleep in its own process group, then verify
+        // kill_child_tree wakes it within a small window — proves the
+        // SIGKILL actually fires rather than letting the timeout elapse.
+        let mut cmd = tokio::process::Command::new("sleep");
+        cmd.arg("60").stdout(Stdio::null()).stderr(Stdio::null());
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setpgid(0, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = cmd.spawn().expect("spawn sleep");
+        super::kill_child_tree(&mut child);
+        let status = tokio::time::timeout(Duration::from_secs(2), child.wait())
+            .await
+            .expect("kill_child_tree should reap within 2s")
+            .expect("child.wait succeeds after SIGKILL");
+        assert!(!status.success());
     }
 
     struct DirCleanup(PathBuf);
