@@ -980,9 +980,15 @@ async fn event_loop<B: ratatui::backend::Backend>(
                 KeyCode::Char('$') | KeyCode::End => snap_visual_cursor_x(state, false),
                 KeyCode::Char('y') => {
                     if let Some(sel) = state.selection {
+                        // `terminal.current_buffer_mut()` returns the back
+                        // buffer that was just reset by `swap_buffers()` at
+                        // the end of the previous `draw()` — empty cells.
+                        // To read what's actually on screen we re-issue a
+                        // draw and read from the `CompletedFrame.buffer`,
+                        // which is the just-rendered front buffer.
+                        let cf = terminal.draw(|f| draw(f, state))?;
                         let inner = selection_inner_area(state.log_area);
-                        let text =
-                            extract_selection_text(terminal.current_buffer_mut(), sel, inner);
+                        let text = extract_selection_text(cf.buffer, sel, inner);
                         if !text.is_empty() {
                             copy_to_clipboard(&text, state);
                         }
