@@ -3234,7 +3234,10 @@ fn paste_from_clipboard(state: &mut State) {
 ///    DCS-passthrough copy when in tmux) — terminal-escape route that
 ///    rides the TTY across SSH when none of the above are available.
 ///    Honored by foot, kitty, alacritty (with `clipboard.write.enabled`),
-///    wezterm, iTerm2, Windows Terminal, modern xterm.
+///    wezterm, iTerm2, Windows Terminal, modern xterm. Capped at
+///    [`OSC52_MAX_RAW_BYTES`] because xterm silently truncates oversize
+///    sequences — a selection past that limit reports a clear error
+///    instead of a misleading "copied" status.
 ///
 /// The status line names the channel that won, so future "paste is
 /// blank" reports point at the right layer.
@@ -3262,12 +3265,33 @@ fn copy_to_clipboard(text: &str, state: &mut State) {
         state.status = format!("copied {chars} chars to clipboard (tmux)");
         return;
     }
+    // OSC 52 ride: most terminals cap the entire OSC sequence at 64KB
+    // (xterm's default `controlSeqMaxLen`). base64 inflates input by 4/3,
+    // so a selection larger than ~48KB raw would be silently truncated
+    // downstream — the user sees "copied" in the status line and a
+    // partial / blank paste at the other end. Refuse with an explicit
+    // status instead of pretending it worked.
+    if text.len() > OSC52_MAX_RAW_BYTES {
+        state.status = format!(
+            "clipboard: {chars} chars ({} bytes) exceeds OSC 52 safe size (~{OSC52_MAX_RAW_BYTES} bytes); copy a smaller selection",
+            text.len()
+        );
+        return;
+    }
     if emit_osc52(text).is_ok() {
         state.status = format!("copied {chars} chars to clipboard (osc52)");
         return;
     }
     state.status = "clipboard error: no channel succeeded".to_string();
 }
+
+/// Largest raw selection (in bytes) we'll route through OSC 52. xterm's
+/// default `controlSeqMaxLen` is 65536, and base64 inflates input by 4/3,
+/// so 48000 bytes encodes to ~64000 base64 chars plus ~10 bytes of
+/// `ESC ] 52 ; c ; … BEL` wrapper — well under the ceiling. Other
+/// terminals are typically more generous (foot 256KB, kitty / iTerm2 /
+/// WezTerm 1MB+); the xterm default is the floor we pin to.
+const OSC52_MAX_RAW_BYTES: usize = 48_000;
 
 /// Run `wl-copy` with the selection piped on stdin. wl-copy reads stdin
 /// to EOF, forks a background daemon that holds the wlr-data-control
@@ -4246,6 +4270,22 @@ mod tests {
         let p = osc52_payload("hi", false);
         // OSC 52, clipboard selection `c`, base64 of "hi" = "aGk=", BEL terminator.
         assert_eq!(p, "\x1b]52;c;aGk=\x07");
+    }
+
+    #[test]
+    fn osc52_max_raw_bytes_fits_under_xterm_default_buffer() {
+        // xterm's default controlSeqMaxLen is 65536 bytes for the entire
+        // OSC sequence. Base64 inflates raw bytes by 4/3 (rounded up to a
+        // multiple of 4), plus ~10 bytes of `ESC ] 52 ; c ; ... BEL`
+        // wrapper. Verify the cap leaves real headroom under the ceiling.
+        let max_base64 = super::OSC52_MAX_RAW_BYTES.div_ceil(3) * 4;
+        let max_seq_size = max_base64 + 10;
+        assert!(
+            max_seq_size < 65_536,
+            "OSC52_MAX_RAW_BYTES={} encodes to {} OSC bytes — over xterm default",
+            super::OSC52_MAX_RAW_BYTES,
+            max_seq_size,
+        );
     }
 
     #[test]
