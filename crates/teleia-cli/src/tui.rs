@@ -32,10 +32,11 @@ fn mode_hints(mode: Mode) -> &'static str {
     match mode {
         Mode::Insert => "↵ send · esc normal · tab accept · /help",
         Mode::Normal => {
-            "i insert · v/V/^v visual · : cmd · y yank · w/b/e word · gg top · G bot · q quit"
+            "i insert · v/V/^v visual · R replace · : cmd · y yank · w/b/e word · q quit"
         }
         Mode::Visual => "h j k l move · y yank · esc cancel",
         Mode::Command => "↵ run · esc cancel",
+        Mode::Replace => "type overwrites · esc normal · ← back",
     }
 }
 
@@ -360,6 +361,13 @@ enum Mode {
     Normal,
     Visual,
     Command,
+    /// Overwrite-as-you-type mode (vim's `R`, entered with `R` from
+    /// Normal). Char keys replace the char at the cursor instead of
+    /// inserting; cursor advances past it. At end-of-buffer the keypress
+    /// appends (matching vim). Esc returns to Normal. Backspace just
+    /// moves the cursor left — vim restores the original char, but we
+    /// don't track the pre-edit buffer, so we don't pretend to.
+    Replace,
 }
 
 /// First half of a two-key Normal-mode sequence (`gg`, `dd`) or a
@@ -982,6 +990,8 @@ async fn event_loop<B: ratatui::backend::Backend>(
                     KeyCode::Char('g') => state.pending_op = Some(PendingOp::G),
                     KeyCode::Char('d') => state.pending_op = Some(PendingOp::D),
                     KeyCode::Char('r') => state.pending_op = Some(PendingOp::R),
+                    // Enter Replace mode (overwrite-as-you-type).
+                    KeyCode::Char('R') => state.mode = Mode::Replace,
                     // Enter Visual mode. `v` is charwise (vim default),
                     // `V` is linewise, `Ctrl-v` is blockwise. Anchor
                     // lands at the top-left of the visible chat area
@@ -1106,6 +1116,46 @@ async fn event_loop<B: ratatui::backend::Backend>(
                     state.command_cursor = 0;
                     state.mode = Mode::Normal;
                     execute_ex(state, agent, &cmd);
+                }
+                _ => {}
+            },
+
+            Mode::Replace => match key.code {
+                KeyCode::Esc => state.mode = Mode::Normal,
+                KeyCode::Left => {
+                    if let Some((i, _)) =
+                        state.input[..state.input_cursor].char_indices().next_back()
+                    {
+                        state.input_cursor = i;
+                    }
+                }
+                KeyCode::Right => {
+                    if let Some(c) = state.input[state.input_cursor..].chars().next() {
+                        state.input_cursor += c.len_utf8();
+                    }
+                }
+                KeyCode::Home => state.input_cursor = 0,
+                KeyCode::End => state.input_cursor = state.input.len(),
+                KeyCode::Up => scroll_up(state, 1),
+                KeyCode::Down => scroll_down(state, 1),
+                KeyCode::PageUp => scroll_up(state, 5),
+                KeyCode::PageDown => scroll_down(state, 5),
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    overwrite_char_at_cursor(state, c);
+                    state.recall_idx = None;
+                }
+                KeyCode::Backspace if state.input_cursor > 0 => {
+                    // Vim restores the original char on backspace; we
+                    // don't track the pre-edit buffer, so we just back
+                    // the cursor — the user can re-type to overwrite.
+                    if let Some((i, _)) =
+                        state.input[..state.input_cursor].char_indices().next_back()
+                    {
+                        state.input_cursor = i;
+                    }
+                }
+                KeyCode::Enter => {
+                    submit_input(terminal, state, agent).await;
                 }
                 _ => {}
             },
@@ -1739,7 +1789,7 @@ fn refresh_menu(state: &mut State, agent: &Agent) {
             )
         }
         Mode::Command => compute_ex_menu(&state.command_buf),
-        Mode::Normal | Mode::Visual => None,
+        Mode::Normal | Mode::Visual | Mode::Replace => None,
     };
 
     state.menu = match (state.menu.take(), next) {
@@ -2780,6 +2830,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
         Mode::Normal => ("> ", th.green, &state.input, state.input_cursor),
         Mode::Visual => ("> ", th.purple, &state.input, state.input_cursor),
         Mode::Command => (": ", th.yellow, &state.command_buf, state.command_cursor),
+        Mode::Replace => ("> ", th.red, &state.input, state.input_cursor),
     };
 
     let inside = chunks[3];
@@ -2994,6 +3045,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
             SelectionKind::Block => ("V-B", th.purple),
         },
         Mode::Command => ("CMD", th.yellow),
+        Mode::Replace => ("REP", th.red),
     };
     // Chip-style mode badge: dark fg on the mode colour for contrast.
     let mut status_spans = vec![
@@ -3225,6 +3277,26 @@ fn replace_char_at_cursor(state: &mut State, c: char) {
         .replace_range(state.input_cursor..end, &c.to_string());
 }
 
+/// Overwrite the input char at `state.input_cursor` with `c` and advance
+/// the cursor past it. At end-of-buffer the char is appended (matches
+/// vim's `R`, which behaves like Insert once you walk off the end of the
+/// original buffer). Multi-byte safe.
+fn overwrite_char_at_cursor(state: &mut State, c: char) {
+    match state.input[state.input_cursor..].chars().next() {
+        Some(existing) => {
+            let end = state.input_cursor + existing.len_utf8();
+            state
+                .input
+                .replace_range(state.input_cursor..end, &c.to_string());
+            state.input_cursor += c.len_utf8();
+        }
+        None => {
+            state.input.insert(state.input_cursor, c);
+            state.input_cursor += c.len_utf8();
+        }
+    }
+}
+
 /// Enter Visual mode with the given selection kind: drop a fresh
 /// selection at the top-left of the inner chat area and switch mode. If
 /// the chat area hasn't been drawn yet (no log_area set), bail and stay
@@ -3301,9 +3373,32 @@ fn insert_paste(state: &mut State, text: &str) {
         return;
     }
     match state.mode {
-        Mode::Insert => {
-            state.input.insert_str(state.input_cursor, text);
-            state.input_cursor += text.len();
+        Mode::Insert | Mode::Replace => {
+            // Bracketed paste in Replace overwrites starting at the
+            // cursor: walk the pasted text char-by-char and apply
+            // the same logic as a series of Replace keystrokes.
+            // Insert is unchanged — splice the whole string in.
+            if state.mode == Mode::Replace {
+                for c in text.chars() {
+                    let existing = state.input[state.input_cursor..].chars().next();
+                    match existing {
+                        Some(ex) => {
+                            let end = state.input_cursor + ex.len_utf8();
+                            state
+                                .input
+                                .replace_range(state.input_cursor..end, &c.to_string());
+                            state.input_cursor += c.len_utf8();
+                        }
+                        None => {
+                            state.input.insert(state.input_cursor, c);
+                            state.input_cursor += c.len_utf8();
+                        }
+                    }
+                }
+            } else {
+                state.input.insert_str(state.input_cursor, text);
+                state.input_cursor += text.len();
+            }
             state.recall_idx = None;
         }
         Mode::Command => {
@@ -5467,6 +5562,40 @@ mod tests {
         replace_char_at_cursor(&mut s, 'ä');
         assert_eq!(s.input, "hällo");
         assert_eq!(s.input_cursor, 1);
+    }
+
+    #[test]
+    fn overwrite_char_at_cursor_replaces_and_advances() {
+        let mut s = State::new("dummy", "dummy");
+        s.input = "abc".into();
+        s.input_cursor = 0;
+        overwrite_char_at_cursor(&mut s, 'X');
+        assert_eq!(s.input, "Xbc");
+        assert_eq!(s.input_cursor, 1, "cursor advances past the new char");
+    }
+
+    #[test]
+    fn overwrite_char_at_cursor_appends_at_end_of_buffer() {
+        let mut s = State::new("dummy", "dummy");
+        s.input = "ab".into();
+        s.input_cursor = 2;
+        overwrite_char_at_cursor(&mut s, 'c');
+        assert_eq!(s.input, "abc", "EOB → append (vim R behavior)");
+        assert_eq!(s.input_cursor, 3);
+    }
+
+    #[test]
+    fn overwrite_char_at_cursor_handles_multibyte() {
+        let mut s = State::new("dummy", "dummy");
+        s.input = "café".into(); // é = 2 bytes
+        s.input_cursor = 3; // on `é`
+        overwrite_char_at_cursor(&mut s, 'e');
+        assert_eq!(s.input, "cafe");
+        assert_eq!(s.input_cursor, 4, "1-byte replacement at byte 3 → 4");
+        // And the reverse: append a multi-byte char past EOB.
+        overwrite_char_at_cursor(&mut s, 'ñ');
+        assert_eq!(s.input, "cafeñ");
+        assert_eq!(s.input_cursor, 6, "2-byte append moves cursor by 2");
     }
 
     #[test]
