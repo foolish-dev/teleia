@@ -32,11 +32,12 @@ fn mode_hints(mode: Mode) -> &'static str {
     match mode {
         Mode::Insert => "↵ send · esc normal · tab accept · /help",
         Mode::Normal => {
-            "i insert · v/V/^v visual · R replace · u/^r undo/redo · : cmd · y yank · q quit"
+            "i insert · v/V visual · R replace · u undo · / search · n/N · : cmd · y yank"
         }
         Mode::Visual => "h j k l move · y yank · esc cancel",
         Mode::Command => "↵ run · esc cancel",
         Mode::Replace => "type overwrites · esc normal · ← back",
+        Mode::Search => "↵ search · esc cancel",
     }
 }
 
@@ -314,6 +315,23 @@ enum Entry {
     Info(String),
 }
 
+impl Entry {
+    /// The text that `/`-search and `*`/`#` look through. Returns the
+    /// primary content of each entry: the prompt text for `User`, the
+    /// reply text for `Assistant`, the captured stdout for `Tool`, and
+    /// the message for `Info` / `Error`. Tool args (usually JSON noise)
+    /// are skipped — a user grepping the scrollback wants reply text,
+    /// not raw argument blobs.
+    fn searchable_text(&self) -> &str {
+        match self {
+            Entry::User(t) => t,
+            Entry::Assistant { text, .. } => text,
+            Entry::Tool { output, .. } => output,
+            Entry::Info(t) | Entry::Error(t) => t,
+        }
+    }
+}
+
 /// Ghost-text autocomplete suggestion shown after the cursor.
 /// `completion` is what gets appended when the user presses Tab;
 /// `placeholder` is shown for hint (e.g. " NAME") but never typed.
@@ -368,6 +386,11 @@ enum Mode {
     /// moves the cursor left — vim restores the original char, but we
     /// don't track the pre-edit buffer, so we don't pretend to.
     Replace,
+    /// Vim's `/` prompt — type a pattern, Enter to run, Esc to cancel.
+    /// On Enter, [`run_search`] populates `state.search_matches` and
+    /// `state.search_pattern`, jumps to the first match, returns to
+    /// Normal. `n` / `N` cycle through matches afterward.
+    Search,
 }
 
 /// First half of a two-key Normal-mode sequence (`gg`, `dd`) or a
@@ -380,6 +403,18 @@ enum PendingOp {
     G,
     D,
     R,
+}
+
+/// One hit produced by a chat-scrollback search. Indexes into
+/// `state.history` and tags the byte offset of the match start within
+/// that entry's text. `len` is in bytes (the match equals the current
+/// search pattern, so it's `pattern.len()` — kept here for symmetry
+/// with potential future case-insensitive / regex matches).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SearchHit {
+    entry_idx: usize,
+    byte_offset: usize,
+    len: usize,
 }
 
 /// Shape of a Visual-mode (or mouse-drag) selection. `Char` is vim's
@@ -529,6 +564,27 @@ struct State {
     /// the restored state as a fresh edit. Reset to false after each
     /// dispatch.
     skip_input_undo_record: bool,
+    /// Live buffer for the `/` prompt while in [`Mode::Search`]. On
+    /// Enter it's promoted to `search_pattern` and a fresh match scan
+    /// runs; on Esc it's discarded and the previously-committed
+    /// pattern (if any) stays in effect.
+    search_buf: String,
+    search_cursor: usize,
+    /// Most recently committed search pattern. `None` clears all
+    /// highlights. Updated by [`run_search`] (from `/`, `*`, or `#`)
+    /// and read by the rendering pass to colour matched substrings.
+    search_pattern: Option<String>,
+    /// Match list populated from `search_pattern` at the time of the
+    /// most recent search. Each entry is the index into
+    /// `state.history` plus the byte offset within that entry's text
+    /// where the match begins. Ordered by history index, then byte
+    /// offset, so `n` / `N` walk it linearly.
+    search_matches: Vec<SearchHit>,
+    /// Cursor into `search_matches`. `None` means "no active match"
+    /// (either no search ran or the search matched nothing). `n`
+    /// advances; `N` decrements; both wrap around like vim's default
+    /// `set wrapscan`.
+    search_idx: Option<usize>,
 }
 
 /// Maximum number of undo snapshots kept on the input buffer. Vim's
@@ -594,6 +650,11 @@ impl State {
             input_undo: Vec::new(),
             input_redo: Vec::new(),
             skip_input_undo_record: false,
+            search_buf: String::new(),
+            search_cursor: 0,
+            search_pattern: None,
+            search_matches: Vec::new(),
+            search_idx: None,
         }
     }
 
@@ -1057,6 +1118,14 @@ async fn event_loop<B: ratatui::backend::Backend>(
                         state.command_buf.clear();
                         state.command_cursor = 0;
                     }
+                    // Enter Search mode (vim `/`). Esc inside Search
+                    // cancels; Enter runs the search and returns to
+                    // Normal.
+                    KeyCode::Char('/') => {
+                        state.mode = Mode::Search;
+                        state.search_buf.clear();
+                        state.search_cursor = 0;
+                    }
                     // Tab still accepts a suggestion (rare in Normal but harmless)
                     KeyCode::Tab => {
                         if let Some(s) = state.suggestion.clone() {
@@ -1199,6 +1268,49 @@ async fn event_loop<B: ratatui::backend::Backend>(
                 }
                 KeyCode::Enter => {
                     submit_input(terminal, state, agent).await;
+                }
+                _ => {}
+            },
+
+            Mode::Search => match key.code {
+                KeyCode::Esc => {
+                    state.mode = Mode::Normal;
+                    state.search_buf.clear();
+                    state.search_cursor = 0;
+                }
+                KeyCode::Char(c) => {
+                    state.search_buf.insert(state.search_cursor, c);
+                    state.search_cursor += c.len_utf8();
+                }
+                KeyCode::Left => {
+                    if let Some((i, _)) = state.search_buf[..state.search_cursor]
+                        .char_indices()
+                        .next_back()
+                    {
+                        state.search_cursor = i;
+                    }
+                }
+                KeyCode::Right => {
+                    if let Some(c) = state.search_buf[state.search_cursor..].chars().next() {
+                        state.search_cursor += c.len_utf8();
+                    }
+                }
+                KeyCode::Home => state.search_cursor = 0,
+                KeyCode::End => state.search_cursor = state.search_buf.len(),
+                KeyCode::Backspace if state.search_cursor > 0 => {
+                    let prev = state.search_buf[..state.search_cursor]
+                        .chars()
+                        .next_back()
+                        .expect("cursor > 0 implies at least one char before");
+                    let new_cursor = state.search_cursor - prev.len_utf8();
+                    state.search_buf.remove(new_cursor);
+                    state.search_cursor = new_cursor;
+                }
+                KeyCode::Enter => {
+                    let pattern = std::mem::take(&mut state.search_buf);
+                    state.search_cursor = 0;
+                    state.mode = Mode::Normal;
+                    run_search(state, pattern);
                 }
                 _ => {}
             },
@@ -1857,7 +1969,7 @@ fn refresh_menu(state: &mut State, agent: &Agent) {
             )
         }
         Mode::Command => compute_ex_menu(&state.command_buf),
-        Mode::Normal | Mode::Visual | Mode::Replace => None,
+        Mode::Normal | Mode::Visual | Mode::Replace | Mode::Search => None,
     };
 
     state.menu = match (state.menu.take(), next) {
@@ -2899,6 +3011,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
         Mode::Visual => ("> ", th.purple, &state.input, state.input_cursor),
         Mode::Command => (": ", th.yellow, &state.command_buf, state.command_cursor),
         Mode::Replace => ("> ", th.red, &state.input, state.input_cursor),
+        Mode::Search => ("/ ", th.blue, &state.search_buf, state.search_cursor),
     };
 
     let inside = chunks[3];
@@ -3114,6 +3227,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
         },
         Mode::Command => ("CMD", th.yellow),
         Mode::Replace => ("REP", th.red),
+        Mode::Search => ("SCH", th.blue),
     };
     // Chip-style mode badge: dark fg on the mode colour for contrast.
     let mut status_spans = vec![
@@ -3330,6 +3444,51 @@ fn rect_contains(r: Rect, col: u16, row: u16) -> bool {
     col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height
 }
 
+/// Scan `state.history` for every byte-offset occurrence of `pattern`,
+/// update `state.search_matches` + `state.search_pattern`, point
+/// `state.search_idx` at the first hit (or `None` when nothing
+/// matched), and write a status message. Substring matching only — no
+/// regex, no case folding. An empty `pattern` clears the search.
+fn run_search(state: &mut State, pattern: String) {
+    if pattern.is_empty() {
+        state.search_pattern = None;
+        state.search_matches.clear();
+        state.search_idx = None;
+        state.status = "search cleared".into();
+        return;
+    }
+    let mut hits = Vec::new();
+    for (entry_idx, entry) in state.history.iter().enumerate() {
+        let text = entry.searchable_text();
+        let plen = pattern.len();
+        let mut start = 0usize;
+        while let Some(rel) = text[start..].find(&pattern) {
+            hits.push(SearchHit {
+                entry_idx,
+                byte_offset: start + rel,
+                len: plen,
+            });
+            // Advance past this match to find the next one. Step by
+            // the pattern's full length so overlapping occurrences
+            // aren't double-counted (e.g. "aaa" with pattern "aa"
+            // yields one hit at offset 0, not two at 0 and 1).
+            start += rel + plen;
+            if start >= text.len() {
+                break;
+            }
+        }
+    }
+    let count = hits.len();
+    state.search_matches = hits;
+    state.search_pattern = Some(pattern.clone());
+    state.search_idx = if count == 0 { None } else { Some(0) };
+    state.status = if count == 0 {
+        format!("no matches for '{pattern}'")
+    } else {
+        format!("{count} match(es) for '{pattern}' · n/N to cycle")
+    };
+}
+
 /// Pop the most recent snapshot off `input_undo`, save the current
 /// input on `input_redo`, and restore the popped snapshot. No-op when
 /// the undo stack is empty. `skip_input_undo_record` is set so the
@@ -3514,6 +3673,10 @@ fn insert_paste(state: &mut State, text: &str) {
         Mode::Command => {
             state.command_buf.insert_str(state.command_cursor, text);
             state.command_cursor += text.len();
+        }
+        Mode::Search => {
+            state.search_buf.insert_str(state.search_cursor, text);
+            state.search_cursor += text.len();
         }
         Mode::Normal | Mode::Visual => {}
     }
@@ -5672,6 +5835,65 @@ mod tests {
         replace_char_at_cursor(&mut s, 'ä');
         assert_eq!(s.input, "hällo");
         assert_eq!(s.input_cursor, 1);
+    }
+
+    #[test]
+    fn run_search_finds_every_non_overlapping_occurrence() {
+        let mut s = State::new("dummy", "dummy");
+        s.history.push(Entry::User("hello hello".into()));
+        s.history.push(Entry::Assistant {
+            text: "hello there".into(),
+            complete: true,
+        });
+        run_search(&mut s, "hello".into());
+        assert_eq!(s.search_pattern.as_deref(), Some("hello"));
+        assert_eq!(s.search_matches.len(), 3);
+        // First entry: matches at 0 and 6 (non-overlapping).
+        assert_eq!(s.search_matches[0].entry_idx, 0);
+        assert_eq!(s.search_matches[0].byte_offset, 0);
+        assert_eq!(s.search_matches[1].entry_idx, 0);
+        assert_eq!(s.search_matches[1].byte_offset, 6);
+        // Second entry: one match at 0.
+        assert_eq!(s.search_matches[2].entry_idx, 1);
+        assert_eq!(s.search_matches[2].byte_offset, 0);
+        assert_eq!(s.search_idx, Some(0));
+    }
+
+    #[test]
+    fn run_search_skips_overlapping_occurrences() {
+        let mut s = State::new("dummy", "dummy");
+        s.history.push(Entry::Info("aaaa".into()));
+        run_search(&mut s, "aa".into());
+        // "aa" in "aaaa" lands at offsets 0 and 2 — not 0, 1, 2.
+        assert_eq!(s.search_matches.len(), 2);
+        assert_eq!(s.search_matches[0].byte_offset, 0);
+        assert_eq!(s.search_matches[1].byte_offset, 2);
+    }
+
+    #[test]
+    fn run_search_empty_pattern_clears_state() {
+        let mut s = State::new("dummy", "dummy");
+        s.search_pattern = Some("stale".into());
+        s.search_matches.push(SearchHit {
+            entry_idx: 0,
+            byte_offset: 0,
+            len: 5,
+        });
+        s.search_idx = Some(0);
+        run_search(&mut s, String::new());
+        assert!(s.search_pattern.is_none());
+        assert!(s.search_matches.is_empty());
+        assert!(s.search_idx.is_none());
+    }
+
+    #[test]
+    fn run_search_zero_matches_yields_none_idx() {
+        let mut s = State::new("dummy", "dummy");
+        s.history.push(Entry::User("nothing here".into()));
+        run_search(&mut s, "absent".into());
+        assert_eq!(s.search_pattern.as_deref(), Some("absent"));
+        assert!(s.search_matches.is_empty());
+        assert!(s.search_idx.is_none());
     }
 
     #[test]
