@@ -1790,13 +1790,20 @@ async fn submit_input<B: ratatui::backend::Backend>(
 /// skipped if PowerShell isn't on PATH). All errors swallowed — a
 /// missing notification daemon shouldn't break the turn.
 fn notify_user(title: &str, body: &str) {
+    // Body comes from the LLM (first 120 chars of the last assistant
+    // turn). Bare newlines inside an AppleScript "…" or a PowerShell
+    // '…' literal are syntax errors, so a multi-line response would
+    // silently skip the notification on macOS and Windows. Collapse any
+    // whitespace run to a single space before handing off.
+    let title = squash_whitespace(title);
+    let body = squash_whitespace(body);
     #[cfg(target_os = "linux")]
     {
         let _ = std::process::Command::new("notify-send")
             .arg("-a")
             .arg("τέλεια")
-            .arg(title)
-            .arg(body)
+            .arg(&title)
+            .arg(&body)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status();
@@ -1806,8 +1813,8 @@ fn notify_user(title: &str, body: &str) {
         // AppleScript display notification "<body>" with title "<title>"
         let script = format!(
             "display notification {} with title {}",
-            applescript_str(body),
-            applescript_str(title)
+            applescript_str(&body),
+            applescript_str(&title)
         );
         let _ = std::process::Command::new("osascript")
             .arg("-e")
@@ -1836,6 +1843,14 @@ fn notify_user(title: &str, body: &str) {
     {
         let _ = (title, body);
     }
+}
+
+/// Collapse every whitespace run (incl. `\n`, `\r`, `\t`, NBSP, …) into
+/// one ASCII space and strip leading/trailing whitespace. Used to keep
+/// notification strings on a single line — `osascript` and PowerShell
+/// single-quoted literals don't accept bare newlines.
+fn squash_whitespace(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(target_os = "macos")]
@@ -6091,6 +6106,22 @@ mod tests {
         let p = osc52_payload("hi", false);
         // OSC 52, clipboard selection `c`, base64 of "hi" = "aGk=", BEL terminator.
         assert_eq!(p, "\x1b]52;c;aGk=\x07");
+    }
+
+    #[test]
+    fn squash_whitespace_collapses_newlines_and_runs() {
+        assert_eq!(super::squash_whitespace("hello\nworld"), "hello world");
+        assert_eq!(super::squash_whitespace("a\t\tb\r\nc"), "a b c");
+        assert_eq!(
+            super::squash_whitespace("  leading and trailing  "),
+            "leading and trailing"
+        );
+        assert_eq!(super::squash_whitespace(""), "");
+        // Multi-line LLM preview is the actual trigger case.
+        assert_eq!(
+            super::squash_whitespace("First paragraph.\n\nSecond paragraph."),
+            "First paragraph. Second paragraph.",
+        );
     }
 
     #[test]
