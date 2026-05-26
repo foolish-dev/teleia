@@ -31,7 +31,9 @@ const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧
 fn mode_hints(mode: Mode) -> &'static str {
     match mode {
         Mode::Insert => "↵ send · esc normal · tab accept · /help",
-        Mode::Normal => "i insert · v visual · : command · w/b/e word · gg top · G bot · q quit",
+        Mode::Normal => {
+            "i insert · v visual · : command · y yank · w/b/e word · gg top · G bot · q quit"
+        }
         Mode::Visual => "h j k l move · y yank · esc cancel",
         Mode::Command => "↵ run · esc cancel",
     }
@@ -476,6 +478,13 @@ struct State {
     /// Leader key of a two-key Normal-mode sequence (`gg`, `dd`), cleared
     /// by the next keypress.
     pending_op: Option<PendingOp>,
+    /// Persistent arboard handle. Holding it across copies keeps the
+    /// X11/macOS/Windows selection owner alive so paste actually returns
+    /// the bytes we set — dropping the handle right after `set_text` lets
+    /// the data source die before the display server can serve a request,
+    /// leaving the next paste empty or stale. Wayland routes through
+    /// `wl-copy` instead, which forks a daemon that owns the selection.
+    clipboard: Option<arboard::Clipboard>,
 }
 
 pub struct PendingApproval {
@@ -531,6 +540,7 @@ impl State {
             follow_bottom: true,
             last_total_lines: 0,
             pending_op: None,
+            clipboard: None,
         }
     }
 
@@ -945,6 +955,11 @@ async fn event_loop<B: ratatui::backend::Backend>(
                     // visible chat area and let hjkl drive a charwise
                     // selection over scrollback.
                     KeyCode::Char('v') => enter_visual(state),
+                    // Yank the most recent assistant response — same as the
+                    // `:yank` / `:copy` ex-commands. Visual mode has its
+                    // own `y` for selection yank; Normal-mode `y` is the
+                    // no-selection shortcut.
+                    KeyCode::Char('y') => yank_last_assistant(state),
                     // Enter command mode
                     KeyCode::Char(':') => {
                         state.mode = Mode::Command;
@@ -1213,7 +1228,8 @@ fn execute_ex(state: &mut State, agent: &mut Agent, cmd: &str) {
     }
 
     let mut parts = cmd.splitn(2, char::is_whitespace);
-    let name = parts.next().unwrap_or("");
+    let raw_name = parts.next().unwrap_or("");
+    let name = raw_name.strip_suffix('!').unwrap_or(raw_name);
     let arg = parts.next().unwrap_or("").trim();
     match name {
         "noh" | "nohlsearch" => {
@@ -1276,24 +1292,32 @@ fn run_inline_shell(state: &mut State, cmd: &str) {
 /// already-formatted message for unknown names.
 fn translate_ex(cmd: &str) -> Result<String, String> {
     let mut parts = cmd.splitn(2, char::is_whitespace);
-    let name = parts.next().unwrap_or("");
+    let raw_name = parts.next().unwrap_or("");
+    // Trailing `!` is vim's "force" suffix (`:q!`, `:wq!`, `:x!`). teleia has
+    // no notion of "unsaved buffer" so the bang is purely cosmetic — strip it
+    // and dispatch on the bare name.
+    let name = raw_name.strip_suffix('!').unwrap_or(raw_name);
     let arg = parts.next().unwrap_or("").trim();
     let translated = match name {
-        "q" | "quit" | "qa" | "qall" | "x" | "exit" => "quit".to_string(),
-        "w" | "write" | "wa" | "wall" => format!("save {arg}"),
+        "q" | "quit" | "qa" | "qall" | "x" | "exit" | "clo" | "close" => "quit".to_string(),
+        "w" | "write" | "wa" | "wall" | "sav" | "saveas" => format!("save {arg}"),
         "wq" => format!("save {arg}"), // close-enough analogue: save, no quit
         "e" | "edit" | "l" | "load" => format!("load {arg}"),
-        "d" | "bd" | "delete" => format!("delete {arg}"),
+        "d" | "bd" | "delete" | "bw" | "bwipe" | "bwipeout" | "tabc" | "tabclose" => {
+            format!("delete {arg}")
+        }
         "ls" | "list" => "list".to_string(),
         "model" => format!("model {arg}"),
         "help" | "h" => "help".to_string(),
-        "reset" | "enew" | "new" => "reset".to_string(),
+        "reset" | "enew" | "new" | "tabnew" | "tabe" | "tabedit" | "vnew" | "vne" => {
+            "reset".to_string()
+        }
         "clear" => "clear".to_string(),
-        "show" | "info" | "f" | "file" => "show".to_string(),
+        "show" | "info" | "f" | "file" | "mes" | "messages" => "show".to_string(),
         "theme" | "colorscheme" | "colo" => format!("theme {arg}"),
         "notify" | "notifications" => format!("notify {arg}"),
         "transparent" | "transparency" | "transp" => format!("transparent {arg}"),
-        "cd" => format!("cd {arg}"),
+        "cd" | "lcd" | "tcd" => format!("cd {arg}"),
         "pwd" => "pwd".to_string(),
         "version" => "version".to_string(),
         "tools" => "tools".to_string(),
@@ -2429,20 +2453,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
             }
             state.push(Entry::Info(text));
         }
-        "copy" | "yank" => {
-            let last = state.history.iter().rev().find_map(|e| match e {
-                Entry::Assistant { text, .. } if !text.is_empty() => Some(text.clone()),
-                _ => None,
-            });
-            match last {
-                Some(text) => {
-                    let len = text.chars().count();
-                    copy_to_clipboard(&text, state);
-                    state.push(Entry::Info(format!("copied {len} chars to clipboard")));
-                }
-                None => state.push(Entry::Error("nothing to copy yet".into())),
-            }
-        }
+        "copy" | "yank" => yank_last_assistant(state),
         "transparent" | "transparency" => {
             let new = match arg.to_ascii_lowercase().as_str() {
                 "on" | "true" | "yes" | "1" => true,
@@ -3378,12 +3389,19 @@ fn copy_to_clipboard(text: &str, state: &mut State) {
         // Deliberately skip arboard here: on Wayland it reports Ok but
         // the selection evaporates with the Clipboard struct — falling
         // through to it would just lie to the user.
-    } else if arboard::Clipboard::new()
-        .and_then(|mut cb| cb.set_text(text.to_string()))
-        .is_ok()
-    {
-        state.status = format!("copied {chars} chars to clipboard (arboard)");
-        return;
+    } else {
+        if state.clipboard.is_none() {
+            state.clipboard = arboard::Clipboard::new().ok();
+        }
+        let arboard_ok = state
+            .clipboard
+            .as_mut()
+            .map(|cb| cb.set_text(text.to_string()).is_ok())
+            .unwrap_or(false);
+        if arboard_ok {
+            state.status = format!("copied {chars} chars to clipboard (arboard)");
+            return;
+        }
     }
     if in_tmux && tmux_load_buffer(text).is_ok() {
         state.status = format!("copied {chars} chars to clipboard (tmux)");
@@ -3416,6 +3434,25 @@ fn copy_to_clipboard(text: &str, state: &mut State) {
 /// terminals are typically more generous (foot 256KB, kitty / iTerm2 /
 /// WezTerm 1MB+); the xterm default is the floor we pin to.
 const OSC52_MAX_RAW_BYTES: usize = 48_000;
+
+/// Copy the most recent non-empty assistant response to the clipboard.
+/// Shared by the `:copy` / `:yank` ex-commands and the `y` Normal-mode
+/// keybind so both routes report the same status and the same
+/// "nothing to copy yet" error when scrollback has no assistant turn.
+fn yank_last_assistant(state: &mut State) {
+    let last = state.history.iter().rev().find_map(|e| match e {
+        Entry::Assistant { text, .. } if !text.is_empty() => Some(text.clone()),
+        _ => None,
+    });
+    match last {
+        Some(text) => {
+            let len = text.chars().count();
+            copy_to_clipboard(&text, state);
+            state.push(Entry::Info(format!("copied {len} chars to clipboard")));
+        }
+        None => state.push(Entry::Error("nothing to copy yet".into())),
+    }
+}
 
 /// Run `wl-copy` with the selection piped on stdin. wl-copy reads stdin
 /// to EOF, forks a background daemon that holds the wlr-data-control
@@ -4774,6 +4811,52 @@ mod tests {
     fn ex_rejects_unknown_command() {
         let err = translate_ex("nonsense").unwrap_err();
         assert!(err.contains("nonsense"));
+    }
+
+    #[test]
+    fn ex_strips_trailing_bang_force_suffix() {
+        assert_eq!(translate_ex("q!").unwrap(), "quit");
+        assert_eq!(translate_ex("qa!").unwrap(), "quit");
+        assert_eq!(translate_ex("qall!").unwrap(), "quit");
+        assert_eq!(translate_ex("x!").unwrap(), "quit");
+        assert_eq!(translate_ex("exit!").unwrap(), "quit");
+        assert_eq!(translate_ex("w! foo").unwrap(), "save foo");
+        assert_eq!(translate_ex("wq! foo").unwrap(), "save foo");
+        assert_eq!(translate_ex("wa!").unwrap(), "save ");
+    }
+
+    #[test]
+    fn ex_translates_saveas_aliases() {
+        assert_eq!(translate_ex("saveas foo").unwrap(), "save foo");
+        assert_eq!(translate_ex("sav foo").unwrap(), "save foo");
+    }
+
+    #[test]
+    fn ex_translates_tab_and_buffer_lifecycle() {
+        assert_eq!(translate_ex("tabnew").unwrap(), "reset");
+        assert_eq!(translate_ex("tabe").unwrap(), "reset");
+        assert_eq!(translate_ex("tabedit").unwrap(), "reset");
+        assert_eq!(translate_ex("vnew").unwrap(), "reset");
+        assert_eq!(translate_ex("vne").unwrap(), "reset");
+        assert_eq!(translate_ex("tabc foo").unwrap(), "delete foo");
+        assert_eq!(translate_ex("tabclose foo").unwrap(), "delete foo");
+        assert_eq!(translate_ex("bw foo").unwrap(), "delete foo");
+        assert_eq!(translate_ex("bwipe foo").unwrap(), "delete foo");
+        assert_eq!(translate_ex("bwipeout foo").unwrap(), "delete foo");
+    }
+
+    #[test]
+    fn ex_translates_close_and_messages_aliases() {
+        assert_eq!(translate_ex("clo").unwrap(), "quit");
+        assert_eq!(translate_ex("close").unwrap(), "quit");
+        assert_eq!(translate_ex("mes").unwrap(), "show");
+        assert_eq!(translate_ex("messages").unwrap(), "show");
+    }
+
+    #[test]
+    fn ex_translates_cd_window_local_variants() {
+        assert_eq!(translate_ex("lcd /tmp").unwrap(), "cd /tmp");
+        assert_eq!(translate_ex("tcd /tmp").unwrap(), "cd /tmp");
     }
 
     #[test]
