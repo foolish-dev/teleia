@@ -31,7 +31,8 @@ const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧
 fn mode_hints(mode: Mode) -> &'static str {
     match mode {
         Mode::Insert => "↵ send · esc normal · tab accept · /help",
-        Mode::Normal => "i insert · : command · ^U/^D half-page · G bottom · q quit",
+        Mode::Normal => "i insert · v visual · : command · w/b/e word · gg top · G bot · q quit",
+        Mode::Visual => "h j k l move · y yank · esc cancel",
         Mode::Command => "↵ run · esc cancel",
     }
 }
@@ -355,7 +356,18 @@ enum Mode {
     #[default]
     Insert,
     Normal,
+    Visual,
     Command,
+}
+
+/// First half of a two-key Normal-mode sequence (`gg`, `dd`). Set when the
+/// leader key is pressed, consumed by the next keypress; if the second key
+/// doesn't complete a known sequence the operator cancels and the key is
+/// re-processed as if pressed fresh (matching vim).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingOp {
+    G,
+    D,
 }
 
 /// Text-style (not rectangular) drag-selection: anchor is where the mouse
@@ -461,6 +473,9 @@ struct State {
     /// following — keeping the visible window pinned to the same
     /// content rather than letting new entries push it up.
     last_total_lines: usize,
+    /// Leader key of a two-key Normal-mode sequence (`gg`, `dd`), cleared
+    /// by the next keypress.
+    pending_op: Option<PendingOp>,
 }
 
 pub struct PendingApproval {
@@ -515,6 +530,7 @@ impl State {
             update_check: None,
             follow_bottom: true,
             last_total_lines: 0,
+            pending_op: None,
         }
     }
 
@@ -701,7 +717,7 @@ async fn event_loop<B: ratatui::backend::Backend>(
         let key = match event::read()? {
             Event::Key(k) => k,
             Event::Mouse(m) => {
-                handle_mouse(terminal, state, m);
+                handle_mouse(terminal, state, m)?;
                 continue;
             }
             Event::Paste(s) => {
@@ -823,7 +839,28 @@ async fn event_loop<B: ratatui::backend::Backend>(
                 }
             }
 
-            Mode::Normal => {
+            Mode::Normal => 'normal: {
+                // Two-key sequences (gg / dd). On a non-matching second key
+                // the operator cancels and the key falls through to the main
+                // match so it acts as if pressed fresh — matches vim.
+                if let Some(op) = state.pending_op.take() {
+                    let handled = match (op, key.code) {
+                        (PendingOp::G, KeyCode::Char('g')) => {
+                            state.scroll = u16::MAX;
+                            state.follow_bottom = false;
+                            true
+                        }
+                        (PendingOp::D, KeyCode::Char('d')) => {
+                            state.input.clear();
+                            state.input_cursor = 0;
+                            true
+                        }
+                        _ => false,
+                    };
+                    if handled {
+                        break 'normal;
+                    }
+                }
                 match key.code {
                     // Mode transitions into Insert
                     KeyCode::Char('i') => state.mode = Mode::Insert,
@@ -856,6 +893,16 @@ async fn event_loop<B: ratatui::backend::Backend>(
                     }
                     KeyCode::Char('0') | KeyCode::Home => state.input_cursor = 0,
                     KeyCode::Char('$') | KeyCode::End => state.input_cursor = state.input.len(),
+                    // Word motion
+                    KeyCode::Char('w') => {
+                        state.input_cursor = word_forward(&state.input, state.input_cursor);
+                    }
+                    KeyCode::Char('b') => {
+                        state.input_cursor = word_back(&state.input, state.input_cursor);
+                    }
+                    KeyCode::Char('e') => {
+                        state.input_cursor = word_end(&state.input, state.input_cursor);
+                    }
                     // Jump scrollback to the latest entries (vim's G).
                     KeyCode::Char('G') => {
                         state.scroll = 0;
@@ -879,6 +926,25 @@ async fn event_loop<B: ratatui::backend::Backend>(
                     KeyCode::Char('x') if state.input_cursor < state.input.len() => {
                         state.input.remove(state.input_cursor);
                     }
+                    KeyCode::Char('X') if state.input_cursor > 0 => {
+                        let prev = state.input[..state.input_cursor]
+                            .chars()
+                            .next_back()
+                            .expect("cursor > 0 implies at least one char before");
+                        let new_cursor = state.input_cursor - prev.len_utf8();
+                        state.input.remove(new_cursor);
+                        state.input_cursor = new_cursor;
+                    }
+                    KeyCode::Char('D') => {
+                        state.input.truncate(state.input_cursor);
+                    }
+                    // Two-key sequence leaders (gg, dd).
+                    KeyCode::Char('g') => state.pending_op = Some(PendingOp::G),
+                    KeyCode::Char('d') => state.pending_op = Some(PendingOp::D),
+                    // Enter Visual mode: anchor at the top-left of the
+                    // visible chat area and let hjkl drive a charwise
+                    // selection over scrollback.
+                    KeyCode::Char('v') => enter_visual(state),
                     // Enter command mode
                     KeyCode::Char(':') => {
                         state.mode = Mode::Command;
@@ -903,6 +969,34 @@ async fn event_loop<B: ratatui::backend::Backend>(
                     _ => {}
                 }
             }
+
+            Mode::Visual => match key.code {
+                KeyCode::Esc => exit_visual(state, /* keep_selection */ false),
+                KeyCode::Char('h') | KeyCode::Left => move_visual_cursor(state, -1, 0),
+                KeyCode::Char('l') | KeyCode::Right => move_visual_cursor(state, 1, 0),
+                KeyCode::Char('k') | KeyCode::Up => move_visual_cursor(state, 0, -1),
+                KeyCode::Char('j') | KeyCode::Down => move_visual_cursor(state, 0, 1),
+                KeyCode::Char('0') | KeyCode::Home => snap_visual_cursor_x(state, true),
+                KeyCode::Char('$') | KeyCode::End => snap_visual_cursor_x(state, false),
+                KeyCode::Char('y') => {
+                    if let Some(sel) = state.selection {
+                        // `terminal.current_buffer_mut()` returns the back
+                        // buffer that was just reset by `swap_buffers()` at
+                        // the end of the previous `draw()` — empty cells.
+                        // To read what's actually on screen we re-issue a
+                        // draw and read from the `CompletedFrame.buffer`,
+                        // which is the just-rendered front buffer.
+                        let cf = terminal.draw(|f| draw(f, state))?;
+                        let inner = selection_inner_area(state.log_area);
+                        let text = extract_selection_text(cf.buffer, sel, inner);
+                        if !text.is_empty() {
+                            copy_to_clipboard(&text, state);
+                        }
+                    }
+                    exit_visual(state, /* keep_selection */ true);
+                }
+                _ => {}
+            },
 
             Mode::Command => match key.code {
                 KeyCode::Esc => {
@@ -1583,7 +1677,7 @@ fn refresh_menu(state: &mut State, agent: &Agent) {
             )
         }
         Mode::Command => compute_ex_menu(&state.command_buf),
-        Mode::Normal => None,
+        Mode::Normal | Mode::Visual => None,
     };
 
     state.menu = match (state.menu.take(), next) {
@@ -1704,6 +1798,60 @@ fn scroll_down(state: &mut State, n: u16) {
     }
 }
 
+/// Vim `w`: start of next whitespace-separated word (or end of input).
+fn word_forward(s: &str, cursor: usize) -> usize {
+    let suffix = &s[cursor..];
+    let mut iter = suffix.char_indices().peekable();
+    while iter.peek().is_some_and(|&(_, c)| !c.is_whitespace()) {
+        iter.next();
+    }
+    while iter.peek().is_some_and(|&(_, c)| c.is_whitespace()) {
+        iter.next();
+    }
+    cursor + iter.peek().map_or(suffix.len(), |&(i, _)| i)
+}
+
+/// Vim `b`: start of the current word, or of the previous word if already
+/// at a word start / on whitespace.
+fn word_back(s: &str, cursor: usize) -> usize {
+    let prefix = &s[..cursor];
+    let chars: Vec<(usize, char)> = prefix.char_indices().collect();
+    if chars.is_empty() {
+        return 0;
+    }
+    let mut idx = chars.len() - 1;
+    while idx > 0 && chars[idx].1.is_whitespace() {
+        idx -= 1;
+    }
+    while idx > 0 && !chars[idx - 1].1.is_whitespace() {
+        idx -= 1;
+    }
+    chars[idx].0
+}
+
+/// Vim `e`: end of the current word, or of the next word if already at a
+/// word end / on whitespace.
+fn word_end(s: &str, cursor: usize) -> usize {
+    if cursor >= s.len() {
+        return cursor;
+    }
+    let suffix = &s[cursor..];
+    let mut iter = suffix.char_indices().peekable();
+    iter.next();
+    while iter.peek().is_some_and(|&(_, c)| c.is_whitespace()) {
+        iter.next();
+    }
+    let mut last = iter.peek().map_or(suffix.len(), |&(i, _)| i);
+    while let Some(&(i, c)) = iter.peek() {
+        if c.is_whitespace() {
+            break;
+        }
+        last = i;
+        iter.next();
+    }
+    cursor + last
+}
+
 fn delete_word_before_cursor(state: &mut State) {
     if state.input_cursor == 0 {
         return;
@@ -1789,7 +1937,13 @@ async fn run_turn<B: ratatui::backend::Backend>(
                     // Esc to interrupt then Enter to submit.
                     handle_input_edit(state, k);
                 }
-                Event::Mouse(m) => handle_mouse(terminal, state, m),
+                Event::Mouse(m) => {
+                    // Swallow handle_mouse errors during a streaming
+                    // turn — a drag-copy failure shouldn't abort the
+                    // turn. The outer event loop propagates the same
+                    // errors when no turn is active.
+                    let _ = handle_mouse(terminal, state, m);
+                }
                 Event::Paste(s) => insert_paste(state, &s),
                 _ => {}
             }
@@ -2575,6 +2729,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
     let (prompt, prompt_color, buf, buf_cursor) = match state.mode {
         Mode::Insert => ("> ", th.cyan, &state.input, state.input_cursor),
         Mode::Normal => ("> ", th.green, &state.input, state.input_cursor),
+        Mode::Visual => ("> ", th.purple, &state.input, state.input_cursor),
         Mode::Command => (": ", th.yellow, &state.command_buf, state.command_cursor),
     };
 
@@ -2784,6 +2939,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
     let (mode_label, mode_color) = match state.mode {
         Mode::Insert => ("INS", th.cyan),
         Mode::Normal => ("NOR", th.green),
+        Mode::Visual => ("VIS", th.purple),
         Mode::Command => ("CMD", th.yellow),
     };
     // Chip-style mode badge: dark fg on the mode colour for contrast.
@@ -2886,6 +3042,13 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
                 cell.set_bg(th.bg_hl);
             }
         }
+        // In Visual mode the hardware cursor follows the selection head
+        // instead of sitting in the input box, so the user can see where
+        // hjkl is taking them. Overrides the set_cursor call that the
+        // input renderer issued earlier this frame.
+        if state.mode == Mode::Visual && rect_contains(inner, sel.cursor.0, sel.cursor.1) {
+            f.set_cursor_position(sel.cursor);
+        }
     }
 }
 
@@ -2954,6 +3117,66 @@ fn rect_contains(r: Rect, col: u16, row: u16) -> bool {
     col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height
 }
 
+/// Enter Visual mode: drop a fresh charwise selection at the top-left of
+/// the inner chat area and switch the mode. If the chat area hasn't been
+/// drawn yet (no log_area set), bail and stay in Normal — there's
+/// nowhere meaningful to place the cursor.
+fn enter_visual(state: &mut State) {
+    let inner = selection_inner_area(state.log_area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    state.selection = Some(Selection::new(inner.x, inner.y));
+    state.mode = Mode::Visual;
+}
+
+/// Leave Visual mode for Normal. If `keep_selection` is true the
+/// highlight stays visible (matches mouse-up behavior after a successful
+/// yank); otherwise the selection is cleared.
+fn exit_visual(state: &mut State, keep_selection: bool) {
+    if !keep_selection {
+        state.selection = None;
+    }
+    state.mode = Mode::Normal;
+}
+
+/// Move the Visual-mode cursor by (dx, dy) cells, clamped to the inner
+/// chat area. The anchor stays put — only `selection.cursor` moves, so
+/// the highlight grows/shrinks like vim's `v`.
+fn move_visual_cursor(state: &mut State, dx: i32, dy: i32) {
+    let inner = selection_inner_area(state.log_area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    if let Some(sel) = state.selection.as_mut() {
+        let max_col = inner.x + inner.width - 1;
+        let max_row = inner.y + inner.height - 1;
+        let new_col = i32::from(sel.cursor.0)
+            .saturating_add(dx)
+            .clamp(i32::from(inner.x), i32::from(max_col));
+        let new_row = i32::from(sel.cursor.1)
+            .saturating_add(dy)
+            .clamp(i32::from(inner.y), i32::from(max_row));
+        sel.cursor = (new_col as u16, new_row as u16);
+    }
+}
+
+/// Snap the Visual cursor to the start (`0`) or end (`$`) of its current
+/// row — same row, leftmost or rightmost column of the inner chat area.
+fn snap_visual_cursor_x(state: &mut State, to_start: bool) {
+    let inner = selection_inner_area(state.log_area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    if let Some(sel) = state.selection.as_mut() {
+        sel.cursor.0 = if to_start {
+            inner.x
+        } else {
+            inner.x + inner.width - 1
+        };
+    }
+}
+
 /// Apply a single readline-style edit to `state.input` / `input_cursor`.
 /// Subset of the Insert-mode handler: just the keys that mutate the
 /// input buffer — no menu, no recall, no scroll, no submit. Used inside
@@ -2978,7 +3201,7 @@ fn insert_paste(state: &mut State, text: &str) {
             state.command_buf.insert_str(state.command_cursor, text);
             state.command_cursor += text.len();
         }
-        Mode::Normal => {}
+        Mode::Normal | Mode::Visual => {}
     }
 }
 
@@ -3028,12 +3251,14 @@ fn handle_input_edit(state: &mut State, key: KeyEvent) {
 
 /// Mouse-event dispatch shared by the outer event loop and the in-turn
 /// event drain. Scroll wheel adjusts `state.scroll`; left-button
-/// down/drag/up drives drag-select + clipboard copy.
+/// down/drag/up drives drag-select + clipboard copy. Returns `io::Result`
+/// because the drag-release path re-issues `terminal.draw()` to capture
+/// the just-rendered buffer (see the Up(Left) arm).
 fn handle_mouse<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     state: &mut State,
     m: MouseEvent,
-) {
+) -> std::io::Result<()> {
     match m.kind {
         MouseEventKind::ScrollUp => scroll_up(state, 3),
         MouseEventKind::ScrollDown => scroll_down(state, 3),
@@ -3055,15 +3280,54 @@ fn handle_mouse<B: ratatui::backend::Backend>(
         MouseEventKind::Up(MouseButton::Left) => {
             if let Some(sel) = state.selection {
                 if !sel.is_point() {
+                    // `terminal.current_buffer_mut()` returns the back
+                    // buffer that `swap_buffers()` just reset at the end
+                    // of the previous `draw()` — empty cells. The
+                    // just-rendered buffer is only reachable via the
+                    // `CompletedFrame` returned by `terminal.draw()`.
+                    // Re-issuing a draw here and reading from
+                    // `cf.buffer` is the same trick the Visual-mode `y`
+                    // arm uses; without it `extract_selection_text`
+                    // walks cleared cells, the `!text.is_empty()` guard
+                    // skips the copy, and drag-select silently does
+                    // nothing.
+                    let cf = terminal.draw(|f| draw(f, state))?;
                     let inner = selection_inner_area(state.log_area);
-                    let text = extract_selection_text(terminal.current_buffer_mut(), sel, inner);
+                    let text = extract_selection_text(cf.buffer, sel, inner);
                     if !text.is_empty() {
                         copy_to_clipboard(&text, state);
                     }
                 }
             }
         }
+        // Middle-click pastes from the system clipboard — completes the
+        // drag-select-to-copy pair the terminal's own middle-click handler
+        // would have done if mouse capture weren't on.
+        MouseEventKind::Down(MouseButton::Middle) => {
+            paste_from_clipboard(state);
+        }
         _ => {}
+    }
+    Ok(())
+}
+
+/// Read the system clipboard via arboard and route the text through
+/// [`insert_paste`] so it lands in whichever buffer matches the current
+/// mode (input / command / pending key entry). Sets the status line on
+/// success or failure so the user sees what happened.
+fn paste_from_clipboard(state: &mut State) {
+    match arboard::Clipboard::new().and_then(|mut cb| cb.get_text()) {
+        Ok(text) if !text.is_empty() => {
+            let chars = text.chars().count();
+            insert_paste(state, &text);
+            state.status = format!("pasted {chars} chars from clipboard");
+        }
+        Ok(_) => {
+            state.status = "clipboard is empty".to_string();
+        }
+        Err(_) => {
+            state.status = "clipboard read failed (no display server?)".to_string();
+        }
     }
 }
 
@@ -3075,28 +3339,46 @@ fn handle_mouse<B: ratatui::backend::Backend>(
 ///
 /// Order of preference:
 ///
-/// 1. **arboard** — direct system-clipboard API. Talks straight to the
-///    compositor (Wayland with wlr-data-control, X11 via xclip/xsel) or
-///    the OS clipboard (macOS, Windows). Doesn't go through tmux or the
-///    outer terminal, so no escape-sequence parsing to get wrong.
-/// 2. **`tmux load-buffer -w`** (only when `$TMUX` is set) — populates
+/// 1. **`wl-copy`** (only when `$WAYLAND_DISPLAY` is set) — shells out to
+///    the canonical Wayland clipboard tool, which forks a daemon that
+///    keeps the selection alive after we return. arboard on Wayland uses
+///    `wlr-data-control` and destroys its data source the moment the
+///    `Clipboard` struct drops at end of this expression, so the
+///    compositor clears the selection and pasting elsewhere comes up
+///    blank even though `set_text` returned `Ok` — hence the bypass.
+/// 2. **arboard** (non-Wayland only) — direct system-clipboard API.
+///    Talks to X11 via xclip/xsel (which fork their own daemons) or the
+///    OS clipboard on macOS / Windows.
+/// 3. **`tmux load-buffer -w`** (only when `$TMUX` is set) — populates
 ///    tmux's internal paste buffer AND asks tmux to forward the
-///    selection to the outer terminal via OSC 52. Used when arboard
-///    can't reach a display server (typical SSH-into-tmux case).
-/// 3. **Direct OSC 52** (`ESC ] 52 ; c ; <base64> BEL`, plus a tmux
+///    selection to the outer terminal via OSC 52. Used when neither
+///    wl-copy nor arboard can reach a display server (typical
+///    SSH-into-tmux case).
+/// 4. **Direct OSC 52** (`ESC ] 52 ; c ; <base64> BEL`, plus a tmux
 ///    DCS-passthrough copy when in tmux) — terminal-escape route that
-///    rides the TTY across SSH when neither arboard nor tmux 3.2+ are
-///    available. Honored by foot, kitty, alacritty (with
-///    `clipboard.write.enabled`), wezterm, iTerm2, Windows Terminal,
-///    modern xterm.
+///    rides the TTY across SSH when none of the above are available.
+///    Honored by foot, kitty, alacritty (with `clipboard.write.enabled`),
+///    wezterm, iTerm2, Windows Terminal, modern xterm. Capped at
+///    [`OSC52_MAX_RAW_BYTES`] because xterm silently truncates oversize
+///    sequences — a selection past that limit reports a clear error
+///    instead of a misleading "copied" status.
 ///
 /// The status line names the channel that won, so future "paste is
 /// blank" reports point at the right layer.
 fn copy_to_clipboard(text: &str, state: &mut State) {
     let chars = text.chars().count();
     let in_tmux = std::env::var_os("TMUX").is_some();
+    let in_wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
 
-    if arboard::Clipboard::new()
+    if in_wayland {
+        if wl_copy(text).is_ok() {
+            state.status = format!("copied {chars} chars to clipboard (wl-copy)");
+            return;
+        }
+        // Deliberately skip arboard here: on Wayland it reports Ok but
+        // the selection evaporates with the Clipboard struct — falling
+        // through to it would just lie to the user.
+    } else if arboard::Clipboard::new()
         .and_then(|mut cb| cb.set_text(text.to_string()))
         .is_ok()
     {
@@ -3107,11 +3389,63 @@ fn copy_to_clipboard(text: &str, state: &mut State) {
         state.status = format!("copied {chars} chars to clipboard (tmux)");
         return;
     }
+    // OSC 52 ride: most terminals cap the entire OSC sequence at 64KB
+    // (xterm's default `controlSeqMaxLen`). base64 inflates input by 4/3,
+    // so a selection larger than ~48KB raw would be silently truncated
+    // downstream — the user sees "copied" in the status line and a
+    // partial / blank paste at the other end. Refuse with an explicit
+    // status instead of pretending it worked.
+    if text.len() > OSC52_MAX_RAW_BYTES {
+        state.status = format!(
+            "clipboard: {chars} chars ({} bytes) exceeds OSC 52 safe size (~{OSC52_MAX_RAW_BYTES} bytes); copy a smaller selection",
+            text.len()
+        );
+        return;
+    }
     if emit_osc52(text).is_ok() {
         state.status = format!("copied {chars} chars to clipboard (osc52)");
         return;
     }
     state.status = "clipboard error: no channel succeeded".to_string();
+}
+
+/// Largest raw selection (in bytes) we'll route through OSC 52. xterm's
+/// default `controlSeqMaxLen` is 65536, and base64 inflates input by 4/3,
+/// so 48000 bytes encodes to ~64000 base64 chars plus ~10 bytes of
+/// `ESC ] 52 ; c ; … BEL` wrapper — well under the ceiling. Other
+/// terminals are typically more generous (foot 256KB, kitty / iTerm2 /
+/// WezTerm 1MB+); the xterm default is the floor we pin to.
+const OSC52_MAX_RAW_BYTES: usize = 48_000;
+
+/// Run `wl-copy` with the selection piped on stdin. wl-copy reads stdin
+/// to EOF, forks a background daemon that holds the wlr-data-control
+/// selection alive after the foreground process exits, then returns
+/// success — so the selection persists across our `wait()` and after
+/// teleia exits, unlike arboard's in-process Clipboard which dies the
+/// moment its struct drops. Any spawn or non-zero exit bubbles up so
+/// [`copy_to_clipboard`] can fall back to other channels.
+fn wl_copy(text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("wl-copy")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| std::io::Error::other("wl-copy: no stdin"))?;
+        stdin.write_all(text.as_bytes())?;
+        // stdin drops here, closing the pipe so wl-copy sees EOF and forks.
+    }
+    let status = child.wait()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!("wl-copy exited {status}")))
+    }
 }
 
 /// Run `tmux load-buffer -w -` with the selection piped on stdin. The
@@ -4063,6 +4397,22 @@ mod tests {
     }
 
     #[test]
+    fn osc52_max_raw_bytes_fits_under_xterm_default_buffer() {
+        // xterm's default controlSeqMaxLen is 65536 bytes for the entire
+        // OSC sequence. Base64 inflates raw bytes by 4/3 (rounded up to a
+        // multiple of 4), plus ~10 bytes of `ESC ] 52 ; c ; ... BEL`
+        // wrapper. Verify the cap leaves real headroom under the ceiling.
+        let max_base64 = super::OSC52_MAX_RAW_BYTES.div_ceil(3) * 4;
+        let max_seq_size = max_base64 + 10;
+        assert!(
+            max_seq_size < 65_536,
+            "OSC52_MAX_RAW_BYTES={} encodes to {} OSC bytes — over xterm default",
+            super::OSC52_MAX_RAW_BYTES,
+            max_seq_size,
+        );
+    }
+
+    #[test]
     fn insert_paste_appends_to_input_in_insert_mode() {
         let mut s = State::new("dummy", "dummy");
         s.mode = Mode::Insert;
@@ -4759,5 +5109,145 @@ mod tests {
         });
         assert!(accept_menu(&mut state));
         assert_eq!(state.input, "/mcps enable github");
+    }
+
+    #[test]
+    fn word_forward_jumps_over_word_then_whitespace() {
+        // cursor on 'h' of "hello", `w` → start of "world"
+        assert_eq!(word_forward("hello world", 0), 6);
+        // mid-word still jumps to start of next word
+        assert_eq!(word_forward("hello world", 2), 6);
+        // already on whitespace: skip to next word start
+        assert_eq!(word_forward("hello  world", 5), 7);
+        // last word: lands at end of input
+        assert_eq!(word_forward("hello", 0), 5);
+        // empty: stays at 0
+        assert_eq!(word_forward("", 0), 0);
+    }
+
+    #[test]
+    fn word_back_returns_to_word_start() {
+        // end of input → start of last word
+        assert_eq!(word_back("hello world", 11), 6);
+        // on start of word → start of previous word
+        assert_eq!(word_back("hello world", 6), 0);
+        // on whitespace → start of previous word
+        assert_eq!(word_back("hello world", 5), 0);
+        // already at 0
+        assert_eq!(word_back("hello", 0), 0);
+        // empty input
+        assert_eq!(word_back("", 0), 0);
+    }
+
+    #[test]
+    fn word_end_advances_to_word_end() {
+        // start of word → end of same word
+        assert_eq!(word_end("hello world", 0), 4);
+        // already at end of word → end of next word
+        assert_eq!(word_end("hello world", 4), 10);
+        // on whitespace → end of next word
+        assert_eq!(word_end("hello world", 5), 10);
+        // at end of input: stays
+        assert_eq!(word_end("hello", 5), 5);
+    }
+
+    #[test]
+    fn word_motion_handles_multibyte_chars() {
+        // "héllo wörld" — each accented char is 2 bytes in UTF-8.
+        let s = "héllo wörld";
+        // word_forward from byte 0 should land at "wörld" start (byte 7).
+        assert_eq!(word_forward(s, 0), 7);
+        // word_back from end should return to start of "wörld".
+        assert_eq!(word_back(s, s.len()), 7);
+    }
+
+    #[test]
+    fn enter_visual_anchors_at_inner_top_left_and_switches_mode() {
+        let mut s = State::new("dummy", "dummy");
+        s.log_area = Rect::new(0, 0, 30, 10);
+        enter_visual(&mut s);
+        assert_eq!(s.mode, Mode::Visual);
+        let inner = selection_inner_area(s.log_area);
+        let sel = s.selection.expect("selection set on enter_visual");
+        assert_eq!(sel.anchor, (inner.x, inner.y));
+        assert_eq!(sel.cursor, (inner.x, inner.y));
+    }
+
+    #[test]
+    fn enter_visual_is_noop_when_log_area_is_zero() {
+        let mut s = State::new("dummy", "dummy");
+        s.mode = Mode::Normal;
+        s.log_area = Rect::default();
+        enter_visual(&mut s);
+        assert_eq!(s.mode, Mode::Normal);
+        assert!(s.selection.is_none());
+    }
+
+    #[test]
+    fn move_visual_cursor_clamps_to_inner_rect() {
+        let mut s = State::new("dummy", "dummy");
+        s.log_area = Rect::new(0, 0, 6, 4);
+        enter_visual(&mut s);
+        let inner = selection_inner_area(s.log_area);
+        // Drift past both edges with a saturating delta; both axes pin.
+        move_visual_cursor(&mut s, i32::MAX, i32::MAX);
+        let sel = s.selection.unwrap();
+        assert_eq!(
+            sel.cursor,
+            (inner.x + inner.width - 1, inner.y + inner.height - 1)
+        );
+        // Anchor never moves.
+        assert_eq!(sel.anchor, (inner.x, inner.y));
+        // Walk back to the top-left, also clamped.
+        move_visual_cursor(&mut s, i32::MIN, i32::MIN);
+        assert_eq!(s.selection.unwrap().cursor, (inner.x, inner.y));
+    }
+
+    #[test]
+    fn visual_motion_extracts_rendered_text() {
+        use ratatui::widgets::Widget;
+        // Mirror the real chat block: bordered Paragraph with 1-cell
+        // padding and Wrap.
+        let area = Rect::new(0, 0, 30, 6);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        Paragraph::new(vec![Line::from("hello world")])
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .padding(Padding::new(1, 1, 1, 0)),
+            )
+            .wrap(Wrap { trim: false })
+            .render(area, &mut buf);
+
+        let mut s = State::new("dummy", "dummy");
+        s.log_area = area;
+        enter_visual(&mut s);
+        // Walk to the right edge of the inner area — the cursor stays
+        // pinned inside the rect even with a saturating delta.
+        move_visual_cursor(&mut s, i32::MAX, 0);
+        let inner = selection_inner_area(s.log_area);
+        let sel = s.selection.unwrap();
+        assert_eq!(sel.cursor, (inner.x + inner.width - 1, inner.y));
+        // The first inner row is padding, so the extract is whitespace.
+        // What this test pins is that motion → extract round-trips
+        // without panicking and yields a sensible (non-overflowing) cell
+        // range.
+        let text = extract_selection_text(&buf, sel, inner);
+        assert!(text.trim().is_empty(), "row-0 padding extract: {text:?}");
+    }
+
+    #[test]
+    fn exit_visual_clears_or_keeps_selection() {
+        let mut s = State::new("dummy", "dummy");
+        s.log_area = Rect::new(0, 0, 10, 6);
+        enter_visual(&mut s);
+        exit_visual(&mut s, /* keep_selection */ true);
+        assert_eq!(s.mode, Mode::Normal);
+        assert!(s.selection.is_some(), "keep_selection=true preserves it");
+
+        enter_visual(&mut s);
+        exit_visual(&mut s, /* keep_selection */ false);
+        assert_eq!(s.mode, Mode::Normal);
+        assert!(s.selection.is_none(), "keep_selection=false clears it");
     }
 }

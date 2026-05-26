@@ -11,6 +11,8 @@
 #   BRANCH=main             # source-build branch (default: dev)
 #   NO_PATH=1               # don't touch the shell rc
 #   NO_OLLAMA_HINT=1        # suppress the post-install Ollama nudge
+#   AUTO_INSTALL=1          # bootstrap missing build deps (rustup) without prompting
+#   NO_AUTO_INSTALL=1       # never bootstrap; fail fast with the manual instructions
 
 set -eu
 
@@ -68,7 +70,32 @@ try_prebuilt() {
     curl -fsSL --output "$TMP/teleia" "$url"
 }
 
+# Bootstrap rustup non-interactively when cargo is missing. Honors
+# AUTO_INSTALL=1 (skip the prompt and go), NO_AUTO_INSTALL=1 (skip the
+# bootstrap entirely). When neither is set we prompt on /dev/tty; if no
+# tty is available we skip — `need cargo` below then surfaces the
+# manual-install instructions as before.
+ensure_cargo() {
+    command -v cargo >/dev/null 2>&1 && return 0
+    [ "${NO_AUTO_INSTALL:-0}" = "1" ] && return 1
+    if [ "${AUTO_INSTALL:-0}" != "1" ]; then
+        [ -r /dev/tty ] || return 1
+        printf 'cargo not found. install rustup non-interactively? [Y/n] ' > /dev/tty
+        reply=""
+        IFS= read -r reply < /dev/tty || true
+        case "$reply" in n|N|no|No|NO) return 1 ;; esac
+    fi
+    need curl "install curl via your package manager"
+    echo "installing rustup (stable toolchain, minimal profile)..."
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --default-toolchain stable --profile minimal --no-modify-path
+    # shellcheck source=/dev/null
+    [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+    command -v cargo >/dev/null 2>&1
+}
+
 from_source() {
+    command -v cargo >/dev/null 2>&1 || ensure_cargo || true
     need cargo "install Rust via https://rustup.rs"
     need git   "install git via your package manager"
     echo "fetching τέλεια source ($BRANCH)..."

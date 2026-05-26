@@ -46,7 +46,11 @@ Overrides (env vars before the pipe on Unix, `$env:NAME = 'value'` on Windows):
 `FROM_SOURCE=1` skip the prebuilt download and cargo-build from source ·
 `BRANCH` source-build branch (default `dev`) ·
 `NO_PATH=1` skip the PATH edit ·
-`NO_OLLAMA_HINT=1` skip the post-install nudge.
+`NO_OLLAMA_HINT=1` skip the post-install nudge ·
+`AUTO_INSTALL=1` bootstrap rustup automatically if cargo is missing on a source build (no prompt) ·
+`NO_AUTO_INSTALL=1` never bootstrap; fall back to the manual-install error.
+
+On a source build with no Rust toolchain present, the installer otherwise prompts on `/dev/tty` (Unix) or `Read-Host` (Windows) before running the official rustup-init.
 
 `cargo run --release` works from a workspace clone.
 
@@ -83,7 +87,7 @@ Three stances control tool execution — cycle with `Shift+Tab` or set explicitl
 
 ## Keybindings
 
-Three modes: **Insert** (default — type and edit), **Normal** (`Esc` to enter; vim motions), **Command** (`:` from Normal; vim ex-commands). The status-bar chip and input border colour signal the active mode.
+Four modes: **Insert** (default — type and edit), **Normal** (`Esc` to enter; vim motions), **Visual** (`v` from Normal; charwise selection over the chat scrollback), **Command** (`:` from Normal; vim ex-commands). The status-bar chip and input border colour signal the active mode.
 
 ### Insert mode
 
@@ -101,6 +105,8 @@ Three modes: **Insert** (default — type and edit), **Normal** (`Esc` to enter;
 | `Ctrl+W`                  | delete word before cursor                                           |
 | `Backspace` / `Delete`    | delete char before / at cursor                                      |
 | `Ctrl+Shift+V`            | paste from system clipboard (bracketed paste)                       |
+| middle-click              | paste from system clipboard (X11-style; works in any mode)          |
+| drag-select               | copy highlighted chat text (Wayland: wl-copy; else arboard; → tmux → OSC 52) |
 | `Ctrl+C`                  | abort the streaming turn                                            |
 
 ### Normal mode (`Esc` to enter)
@@ -108,17 +114,34 @@ Three modes: **Insert** (default — type and edit), **Normal** (`Esc` to enter;
 | key                          | does                                                  |
 | ---------------------------- | ----------------------------------------------------- |
 | `i` / `a` / `I` / `A`        | back to Insert (cursor / after / line start / line end) |
+| `v`                          | Visual mode (charwise selection in chat scrollback)   |
 | `:`                          | Command mode                                          |
 | `h` / `l` or `Left` / `Right` | cursor                                                |
 | `0` / `$` or `Home` / `End`  | line start / end                                      |
+| `w` / `b` / `e`              | word forward / back / end                             |
 | `j` / `k` or `Down` / `Up`   | scroll chat 1 line                                    |
 | `Ctrl+D` / `Ctrl+U`          | half-page scroll                                      |
 | `PageDown` / `PageUp`        | 5-line scroll                                         |
-| `G`                          | jump to latest entries, re-engage auto-follow         |
-| `x`                          | delete char at cursor                                 |
+| `gg` / `G`                   | jump to oldest / latest entries (G re-engages follow) |
+| `x` / `X`                    | delete char at / before cursor                        |
+| `D`                          | delete from cursor to end of input                    |
+| `dd`                         | clear input                                           |
 | `Tab`                        | accept suggestion                                     |
 | `Shift+Tab`                  | cycle permission mode                                 |
 | `Enter`                      | submit                                                |
+
+### Visual mode (`v` from Normal)
+
+Charwise selection over the rendered chat scrollback — the keyboard equivalent of a left-click drag. The selection anchor drops at the top-left of the inner chat area; the hardware terminal cursor tracks the selection head so you can see where motions are taking you. `y` copies the highlighted text through the same channel stack as mouse drag-select (Wayland: wl-copy; else arboard; → tmux → OSC 52) and returns to Normal with the highlight still visible. `Esc` cancels and clears the highlight.
+
+| key                          | does                                                  |
+| ---------------------------- | ----------------------------------------------------- |
+| `h` / `l` or `Left` / `Right` | move selection head left / right (anchor stays)      |
+| `j` / `k` or `Down` / `Up`   | move selection head down / up                         |
+| `0` / `Home`                 | snap selection head to row start                      |
+| `$` / `End`                  | snap selection head to row end                        |
+| `y`                          | yank selection to clipboard, exit to Normal           |
+| `Esc`                        | cancel selection, exit to Normal                      |
 
 ### Command mode (vim ex-commands)
 
@@ -223,7 +246,7 @@ The `/model` dropdown pre-populates with ~210 named models across all twenty pro
 ## Features
 
 - **OS-aware welcome banner** — `/etc/os-release` (or `cfg!(target_os = …)` on macOS / Windows / FreeBSD) picks a pixel-art panel: Arch / Ubuntu / Debian / Fedora / Alpine / NixOS / Gentoo / Void / openSUSE / macOS / Windows / FreeBSD or a generic Linux fallback. Lambda mark + `powered by λ τέλεια` watermark below.
-- **Modes** — Insert (default), Normal (`Esc`), Command (`:`). The status bar chip and input border colour signal the active mode.
+- **Modes** — Insert (default), Normal (`Esc`), Visual (`v` from Normal), Command (`:`). The status bar chip and input border colour signal the active mode.
 - **Slash commands** — `/reset`, `/clear`, `/save NAME`, `/load NAME`, `/delete NAME`, `/list`, `/model [NAME]`, `/key PROVIDER`, `/keys`, `/mcps`, `/lsps`, `/tools`, `/plan`, `/build`, `/auto`, `/prompt [NAME]`, `/theme [NAME]`, `/notify [on|off]`, `/transparent [on|off]`, `/copy`, `/cd PATH`, `/pwd`, `/version`, `/show`, `/help`, `/quit`.
 - **Vim commands** — `:q`/`:x`/`:qa`/`:qall` → quit, `:w`/`:wa` → save, `:e`/`:l` → load, `:colo`/`:theme` → theme, `:!CMD` → shell out, `:cd PATH`, `:pwd`, `:noh` (clear drag-select), `:version`, `:r FILE` (read into chat), `:enew` → reset. `EX_COMMANDS` dropdown autocompletes via Tab.
 - **Prompt templates** — `/prompt` lists 10 starters (`review`, `debug`, `explain`, `refactor`, `test`, `docs`, `security`, `perf`, `commit`, `plan`); `/prompt NAME` drops the template into the input box.
