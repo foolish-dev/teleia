@@ -2927,6 +2927,51 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
         .scroll((offset, 0));
     f.render_widget(log, chunks[0]);
 
+    // Search-result highlight overlay: walk the inner chat area
+    // row-by-row, reconstruct the on-screen text from cell symbols, and
+    // mark every cell whose column range falls inside a match of
+    // `search_pattern`. Operates on what the user sees (post-wrap,
+    // post-paragraph) so we don't have to plumb the pattern through
+    // every render_entry call. Painted before the selection overlay so
+    // a drag-select highlight wins over a match highlight when they
+    // overlap.
+    if let Some(pat) = state.search_pattern.as_deref().filter(|p| !p.is_empty()) {
+        let inner = selection_inner_area(state.log_area);
+        if inner.width > 0 && inner.height > 0 {
+            let buf = f.buffer_mut();
+            let th2 = th;
+            for row in inner.y..inner.y + inner.height {
+                // (byte offset in row_text where this cell starts, col index)
+                let mut offsets: Vec<(usize, u16)> = Vec::new();
+                let mut row_text = String::new();
+                for col in inner.x..inner.x + inner.width {
+                    if let Some(cell) = buf.cell((col, row)) {
+                        let sym = cell.symbol();
+                        offsets.push((row_text.len(), col));
+                        row_text.push_str(sym);
+                    }
+                }
+                let mut start = 0usize;
+                while let Some(rel) = row_text[start..].find(pat) {
+                    let m_start = start + rel;
+                    let m_end = m_start + pat.len();
+                    for &(off, col) in &offsets {
+                        if off >= m_start && off < m_end {
+                            if let Some(cell) = buf.cell_mut((col, row)) {
+                                cell.set_bg(th2.yellow);
+                                cell.set_fg(th2.bg);
+                            }
+                        }
+                    }
+                    start = m_end;
+                    if start >= row_text.len() {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     // Scrollbar on the right edge of the chat block — only when there's
     // overflow. We render it into a 1-col strip that sits *just inside*
     // the right border (in the right-padding column when `h_pad > 0`)
