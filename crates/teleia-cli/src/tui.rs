@@ -32,11 +32,12 @@ fn mode_hints(mode: Mode) -> &'static str {
     match mode {
         Mode::Insert => "↵ send · esc normal · tab accept · /help",
         Mode::Normal => {
-            "i insert · v/V/^v visual · R replace · : cmd · y yank · w/b/e word · q quit"
+            "i insert · v/V visual · R replace · u undo · / search · n/N · : cmd · y yank"
         }
         Mode::Visual => "h j k l move · y yank · esc cancel",
         Mode::Command => "↵ run · esc cancel",
         Mode::Replace => "type overwrites · esc normal · ← back",
+        Mode::Search => "↵ search · esc cancel",
     }
 }
 
@@ -314,6 +315,23 @@ enum Entry {
     Info(String),
 }
 
+impl Entry {
+    /// The text that `/`-search and `*`/`#` look through. Returns the
+    /// primary content of each entry: the prompt text for `User`, the
+    /// reply text for `Assistant`, the captured stdout for `Tool`, and
+    /// the message for `Info` / `Error`. Tool args (usually JSON noise)
+    /// are skipped — a user grepping the scrollback wants reply text,
+    /// not raw argument blobs.
+    fn searchable_text(&self) -> &str {
+        match self {
+            Entry::User(t) => t,
+            Entry::Assistant { text, .. } => text,
+            Entry::Tool { output, .. } => output,
+            Entry::Info(t) | Entry::Error(t) => t,
+        }
+    }
+}
+
 /// Ghost-text autocomplete suggestion shown after the cursor.
 /// `completion` is what gets appended when the user presses Tab;
 /// `placeholder` is shown for hint (e.g. " NAME") but never typed.
@@ -368,6 +386,11 @@ enum Mode {
     /// moves the cursor left — vim restores the original char, but we
     /// don't track the pre-edit buffer, so we don't pretend to.
     Replace,
+    /// Vim's `/` prompt — type a pattern, Enter to run, Esc to cancel.
+    /// On Enter, [`run_search`] populates `state.search_matches` and
+    /// `state.search_pattern`, jumps to the first match, returns to
+    /// Normal. `n` / `N` cycle through matches afterward.
+    Search,
 }
 
 /// First half of a two-key Normal-mode sequence (`gg`, `dd`) or a
@@ -380,6 +403,18 @@ enum PendingOp {
     G,
     D,
     R,
+}
+
+/// One hit produced by a chat-scrollback search. Indexes into
+/// `state.history` and tags the byte offset of the match start within
+/// that entry's text. `len` is in bytes (the match equals the current
+/// search pattern, so it's `pattern.len()` — kept here for symmetry
+/// with potential future case-insensitive / regex matches).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SearchHit {
+    entry_idx: usize,
+    byte_offset: usize,
+    len: usize,
 }
 
 /// Shape of a Visual-mode (or mouse-drag) selection. `Char` is vim's
@@ -514,7 +549,49 @@ struct State {
     /// leaving the next paste empty or stale. Wayland routes through
     /// `wl-copy` instead, which forks a daemon that owns the selection.
     clipboard: Option<arboard::Clipboard>,
+    /// Undo / redo stacks for the input buffer. Each entry is a
+    /// `(input, cursor)` snapshot taken right before a key dispatch that
+    /// changed it. `u` swaps the current state onto `input_redo` and
+    /// pops `input_undo` back into the live input; `Ctrl-r` mirrors that
+    /// the other direction. Capped at [`INPUT_UNDO_CAP`] so long
+    /// editing sessions don't grow unbounded. Both are cleared on
+    /// submit — once the prompt is sent there's nothing meaningful to
+    /// undo into.
+    input_undo: Vec<(String, usize)>,
+    input_redo: Vec<(String, usize)>,
+    /// One-shot flag set by the `u` and `Ctrl-r` handlers in Normal so
+    /// the outer event loop's diff-based undo recorder doesn't capture
+    /// the restored state as a fresh edit. Reset to false after each
+    /// dispatch.
+    skip_input_undo_record: bool,
+    /// Live buffer for the `/` prompt while in [`Mode::Search`]. On
+    /// Enter it's promoted to `search_pattern` and a fresh match scan
+    /// runs; on Esc it's discarded and the previously-committed
+    /// pattern (if any) stays in effect.
+    search_buf: String,
+    search_cursor: usize,
+    /// Most recently committed search pattern. `None` clears all
+    /// highlights. Updated by [`run_search`] (from `/`, `*`, or `#`)
+    /// and read by the rendering pass to colour matched substrings.
+    search_pattern: Option<String>,
+    /// Match list populated from `search_pattern` at the time of the
+    /// most recent search. Each entry is the index into
+    /// `state.history` plus the byte offset within that entry's text
+    /// where the match begins. Ordered by history index, then byte
+    /// offset, so `n` / `N` walk it linearly.
+    search_matches: Vec<SearchHit>,
+    /// Cursor into `search_matches`. `None` means "no active match"
+    /// (either no search ran or the search matched nothing). `n`
+    /// advances; `N` decrements; both wrap around like vim's default
+    /// `set wrapscan`.
+    search_idx: Option<usize>,
 }
+
+/// Maximum number of undo snapshots kept on the input buffer. Vim's
+/// default is unbounded; we cap because a chat session can drift for
+/// hours and the input is bounded anyway by terminal width × however
+/// many lines.
+const INPUT_UNDO_CAP: usize = 200;
 
 pub struct PendingApproval {
     pub name: String,
@@ -570,6 +647,14 @@ impl State {
             last_total_lines: 0,
             pending_op: None,
             clipboard: None,
+            input_undo: Vec::new(),
+            input_redo: Vec::new(),
+            skip_input_undo_record: false,
+            search_buf: String::new(),
+            search_cursor: 0,
+            search_pattern: None,
+            search_matches: Vec::new(),
+            search_idx: None,
         }
     }
 
@@ -781,6 +866,15 @@ async fn event_loop<B: ratatui::backend::Backend>(
             continue;
         }
 
+        // Snapshot the input buffer + cursor before dispatch so we can
+        // tell — *after* dispatch — whether the keypress actually
+        // mutated it. Used to feed the undo stack without sprinkling
+        // snapshot calls across every mutation site. `u` / `Ctrl-r`
+        // themselves set `state.skip_input_undo_record` for one
+        // iteration so an undo step doesn't itself get recorded as a
+        // new edit.
+        let pre_input_snapshot = (state.input.clone(), state.input_cursor);
+
         match state.mode {
             Mode::Insert => {
                 match key.code {
@@ -963,6 +1057,16 @@ async fn event_loop<B: ratatui::backend::Backend>(
                     KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         scroll_down(state, 12);
                     }
+                    // Undo / redo for the input buffer. Diff-based —
+                    // every keypress that mutated the input was already
+                    // captured by the outer event loop; here we swap
+                    // between input_undo and input_redo.
+                    KeyCode::Char('u') => {
+                        undo_input(state);
+                    }
+                    KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        redo_input(state);
+                    }
                     // History scroll
                     KeyCode::Char('j') | KeyCode::Down | KeyCode::PageDown => {
                         scroll_down(state, if key.code == KeyCode::PageDown { 5 } else { 1 });
@@ -1013,6 +1117,48 @@ async fn event_loop<B: ratatui::backend::Backend>(
                         state.mode = Mode::Command;
                         state.command_buf.clear();
                         state.command_cursor = 0;
+                    }
+                    // Enter Search mode (vim `/`). Esc inside Search
+                    // cancels; Enter runs the search and returns to
+                    // Normal.
+                    KeyCode::Char('/') => {
+                        state.mode = Mode::Search;
+                        state.search_buf.clear();
+                        state.search_cursor = 0;
+                    }
+                    // Cycle search matches (`n` next, `N` previous).
+                    KeyCode::Char('n')
+                        if !key.modifiers.contains(KeyModifiers::CONTROL)
+                            && state.search_pattern.is_some() =>
+                    {
+                        search_next(state);
+                    }
+                    KeyCode::Char('N') => search_prev(state),
+                    // Word-under-input-cursor search. `*` runs forward
+                    // from the first match; `#` from the last. Both
+                    // pull the word from `state.input` because that's
+                    // where Normal-mode cursor motion happens — vim
+                    // pulls from the buffer, our buffer is the prompt.
+                    KeyCode::Char('*') => {
+                        if let Some(word) = word_under_cursor(&state.input, state.input_cursor) {
+                            run_search(state, word);
+                        } else {
+                            state.status = "no word under cursor".into();
+                        }
+                    }
+                    KeyCode::Char('#') => {
+                        if let Some(word) = word_under_cursor(&state.input, state.input_cursor) {
+                            run_search(state, word);
+                            // # is "search backward" in vim — jump from
+                            // the first match to the last so subsequent
+                            // n walks backward through occurrences.
+                            if !state.search_matches.is_empty() {
+                                state.search_idx = Some(state.search_matches.len() - 1);
+                                scroll_to_current_match(state);
+                            }
+                        } else {
+                            state.status = "no word under cursor".into();
+                        }
                     }
                     // Tab still accepts a suggestion (rare in Normal but harmless)
                     KeyCode::Tab => {
@@ -1159,6 +1305,66 @@ async fn event_loop<B: ratatui::backend::Backend>(
                 }
                 _ => {}
             },
+
+            Mode::Search => match key.code {
+                KeyCode::Esc => {
+                    state.mode = Mode::Normal;
+                    state.search_buf.clear();
+                    state.search_cursor = 0;
+                }
+                KeyCode::Char(c) => {
+                    state.search_buf.insert(state.search_cursor, c);
+                    state.search_cursor += c.len_utf8();
+                }
+                KeyCode::Left => {
+                    if let Some((i, _)) = state.search_buf[..state.search_cursor]
+                        .char_indices()
+                        .next_back()
+                    {
+                        state.search_cursor = i;
+                    }
+                }
+                KeyCode::Right => {
+                    if let Some(c) = state.search_buf[state.search_cursor..].chars().next() {
+                        state.search_cursor += c.len_utf8();
+                    }
+                }
+                KeyCode::Home => state.search_cursor = 0,
+                KeyCode::End => state.search_cursor = state.search_buf.len(),
+                KeyCode::Backspace if state.search_cursor > 0 => {
+                    let prev = state.search_buf[..state.search_cursor]
+                        .chars()
+                        .next_back()
+                        .expect("cursor > 0 implies at least one char before");
+                    let new_cursor = state.search_cursor - prev.len_utf8();
+                    state.search_buf.remove(new_cursor);
+                    state.search_cursor = new_cursor;
+                }
+                KeyCode::Enter => {
+                    let pattern = std::mem::take(&mut state.search_buf);
+                    state.search_cursor = 0;
+                    state.mode = Mode::Normal;
+                    run_search(state, pattern);
+                }
+                _ => {}
+            },
+        }
+
+        // Diff-based undo recorder: any keypress that mutated the input
+        // buffer text between snapshot and now pushes the old snapshot
+        // onto the undo stack and clears the redo stack. Comparison is
+        // string-only — pure cursor motion (`h`, `l`, `w`, `0`, `$`,
+        // etc.) doesn't get its own undo step, matching vim. `u` /
+        // `Ctrl-r` set `skip_input_undo_record` so their own swap
+        // doesn't become a recorded edit.
+        if state.skip_input_undo_record {
+            state.skip_input_undo_record = false;
+        } else if state.input != pre_input_snapshot.0 {
+            state.input_undo.push(pre_input_snapshot);
+            if state.input_undo.len() > INPUT_UNDO_CAP {
+                state.input_undo.remove(0);
+            }
+            state.input_redo.clear();
         }
 
         refresh_suggestion(state, agent);
@@ -1177,6 +1383,14 @@ async fn submit_input<B: ratatui::backend::Backend>(
     state.input_cursor = 0;
     state.recall_idx = None;
     state.mode = Mode::Insert;
+    // The input is gone — there's nothing meaningful for `u` to
+    // restore into anymore. Clearing keeps a post-submit `u` from
+    // silently re-populating the box with the prompt that just went
+    // out (which would also reintroduce orphan ghost-text / menu
+    // state). The Up/Down recall ring is the right way to get the
+    // last prompt back.
+    state.input_undo.clear();
+    state.input_redo.clear();
     // The dropdown menu, ghost-text completion, and any drag-select
     // highlight all key off the now-empty input — clearing them
     // immediately keeps a stale frame from showing up between submit
@@ -1321,7 +1535,16 @@ fn execute_ex(state: &mut State, agent: &mut Agent, cmd: &str) {
     let arg = parts.next().unwrap_or("").trim();
     match name {
         "noh" | "nohlsearch" => {
+            // Clear both the drag-select highlight and the active
+            // search-result highlight, mirroring vim's `:noh` which
+            // hides hlsearch matches without forgetting the pattern.
+            // We also drop the pattern itself — there's no `:set
+            // hlsearch` knob to flip it back on, so a fresh `/` is
+            // how you re-highlight.
             state.selection = None;
+            state.search_pattern = None;
+            state.search_matches.clear();
+            state.search_idx = None;
         }
         "r" | "read" => {
             if arg.is_empty() {
@@ -1789,7 +2012,7 @@ fn refresh_menu(state: &mut State, agent: &Agent) {
             )
         }
         Mode::Command => compute_ex_menu(&state.command_buf),
-        Mode::Normal | Mode::Visual | Mode::Replace => None,
+        Mode::Normal | Mode::Visual | Mode::Replace | Mode::Search => None,
     };
 
     state.menu = match (state.menu.take(), next) {
@@ -2747,6 +2970,51 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
         .scroll((offset, 0));
     f.render_widget(log, chunks[0]);
 
+    // Search-result highlight overlay: walk the inner chat area
+    // row-by-row, reconstruct the on-screen text from cell symbols, and
+    // mark every cell whose column range falls inside a match of
+    // `search_pattern`. Operates on what the user sees (post-wrap,
+    // post-paragraph) so we don't have to plumb the pattern through
+    // every render_entry call. Painted before the selection overlay so
+    // a drag-select highlight wins over a match highlight when they
+    // overlap.
+    if let Some(pat) = state.search_pattern.as_deref().filter(|p| !p.is_empty()) {
+        let inner = selection_inner_area(state.log_area);
+        if inner.width > 0 && inner.height > 0 {
+            let buf = f.buffer_mut();
+            let th2 = th;
+            for row in inner.y..inner.y + inner.height {
+                // (byte offset in row_text where this cell starts, col index)
+                let mut offsets: Vec<(usize, u16)> = Vec::new();
+                let mut row_text = String::new();
+                for col in inner.x..inner.x + inner.width {
+                    if let Some(cell) = buf.cell((col, row)) {
+                        let sym = cell.symbol();
+                        offsets.push((row_text.len(), col));
+                        row_text.push_str(sym);
+                    }
+                }
+                let mut start = 0usize;
+                while let Some(rel) = row_text[start..].find(pat) {
+                    let m_start = start + rel;
+                    let m_end = m_start + pat.len();
+                    for &(off, col) in &offsets {
+                        if off >= m_start && off < m_end {
+                            if let Some(cell) = buf.cell_mut((col, row)) {
+                                cell.set_bg(th2.yellow);
+                                cell.set_fg(th2.bg);
+                            }
+                        }
+                    }
+                    start = m_end;
+                    if start >= row_text.len() {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     // Scrollbar on the right edge of the chat block — only when there's
     // overflow. We render it into a 1-col strip that sits *just inside*
     // the right border (in the right-padding column when `h_pad > 0`)
@@ -2831,6 +3099,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
         Mode::Visual => ("> ", th.purple, &state.input, state.input_cursor),
         Mode::Command => (": ", th.yellow, &state.command_buf, state.command_cursor),
         Mode::Replace => ("> ", th.red, &state.input, state.input_cursor),
+        Mode::Search => ("/ ", th.blue, &state.search_buf, state.search_cursor),
     };
 
     let inside = chunks[3];
@@ -3046,6 +3315,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
         },
         Mode::Command => ("CMD", th.yellow),
         Mode::Replace => ("REP", th.red),
+        Mode::Search => ("SCH", th.blue),
     };
     // Chip-style mode badge: dark fg on the mode colour for contrast.
     let mut status_spans = vec![
@@ -3262,6 +3532,211 @@ fn rect_contains(r: Rect, col: u16, row: u16) -> bool {
     col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height
 }
 
+/// The full word that `cursor` sits inside, or `None` when the cursor
+/// is on whitespace / past end-of-buffer. Used by `*` and `#` to seed
+/// a search from whatever the user is hovering. "Word" = run of
+/// non-whitespace chars (same definition as `w`/`b`/`e`); we don't
+/// split on punctuation the way vim's strict iskeyword does, since
+/// the chat tends to surface compound tokens (paths, snake_case,
+/// kebab-case) that the user wants searched as one unit.
+fn word_under_cursor(s: &str, cursor: usize) -> Option<String> {
+    let suffix = &s[cursor..];
+    let first = suffix.chars().next()?;
+    if first.is_whitespace() {
+        return None;
+    }
+    let mut start = cursor;
+    for (i, c) in s[..cursor].char_indices().rev() {
+        if c.is_whitespace() {
+            break;
+        }
+        start = i;
+    }
+    let mut end = cursor;
+    for (i, c) in s[cursor..].char_indices() {
+        if c.is_whitespace() {
+            break;
+        }
+        end = cursor + i + c.len_utf8();
+    }
+    Some(s[start..end].to_string())
+}
+
+/// Sum of unwrapped Line rows produced by every history entry strictly
+/// before `entry_idx`, including the inter-entry spacers
+/// [`needs_spacer`] would insert. This is what `n` / `N` use to
+/// approximate the wrapped-line offset of the matched entry without
+/// re-running `Paragraph::line_count` over a partial history.
+///
+/// Wrap is ignored — short prose lines wrap to 1 visual row anyway,
+/// and a slightly-too-low scroll value just leaves the match a few
+/// rows below the top of the viewport. Cheaper than the exact count;
+/// the user can fine-tune with `j` / `k`.
+fn unwrapped_lines_before(
+    history: &[Entry],
+    entry_idx: usize,
+    frame: usize,
+    username: &str,
+) -> usize {
+    let mut count = 0usize;
+    let mut prev: Option<&Entry> = None;
+    for (i, entry) in history.iter().enumerate() {
+        if i == entry_idx {
+            break;
+        }
+        if let Some(p) = prev {
+            if needs_spacer(p, entry) {
+                count += 1;
+            }
+        }
+        count += render_entry(entry, frame, username).len();
+        prev = Some(entry);
+    }
+    count
+}
+
+/// Position scroll so the entry holding the current `search_idx` match
+/// is near the top of the visible chat window. Approximation only —
+/// uses unwrapped line counts and the previous frame's total — but
+/// gets the user close enough that the highlighted match is on screen.
+fn scroll_to_current_match(state: &mut State) {
+    let Some(idx) = state.search_idx else { return };
+    let Some(hit) = state.search_matches.get(idx) else {
+        return;
+    };
+    let entry_idx = hit.entry_idx;
+    let lines_before =
+        unwrapped_lines_before(&state.history, entry_idx, state.frame, &state.username);
+    let total = state.last_total_lines;
+    // `state.scroll` is "rows away from the bottom"; setting it to
+    // (total - lines_before) puts lines_before at the top of the
+    // viewport. saturating_sub guards the entry-at-bottom case where
+    // lines_before > total (shouldn't happen, but cheap to defend).
+    let target = total.saturating_sub(lines_before);
+    state.scroll = u16::try_from(target).unwrap_or(u16::MAX);
+    state.follow_bottom = false;
+    state.status = format!("match {} of {}", idx + 1, state.search_matches.len());
+}
+
+/// Vim `n`: advance to the next search match, wrapping past the end.
+/// No-op on an empty match list (with a status note).
+fn search_next(state: &mut State) {
+    if state.search_matches.is_empty() {
+        state.status = "no search results".into();
+        return;
+    }
+    let len = state.search_matches.len();
+    state.search_idx = Some(match state.search_idx {
+        Some(i) => (i + 1) % len,
+        None => 0,
+    });
+    scroll_to_current_match(state);
+}
+
+/// Vim `N`: back to the previous search match, wrapping past the start.
+fn search_prev(state: &mut State) {
+    if state.search_matches.is_empty() {
+        state.status = "no search results".into();
+        return;
+    }
+    let len = state.search_matches.len();
+    state.search_idx = Some(match state.search_idx {
+        Some(i) => (i + len - 1) % len,
+        None => len - 1,
+    });
+    scroll_to_current_match(state);
+}
+
+/// Scan `state.history` for every byte-offset occurrence of `pattern`,
+/// update `state.search_matches` + `state.search_pattern`, point
+/// `state.search_idx` at the first hit (or `None` when nothing
+/// matched), and write a status message. Substring matching only — no
+/// regex, no case folding. An empty `pattern` clears the search.
+fn run_search(state: &mut State, pattern: String) {
+    if pattern.is_empty() {
+        state.search_pattern = None;
+        state.search_matches.clear();
+        state.search_idx = None;
+        state.status = "search cleared".into();
+        return;
+    }
+    let mut hits = Vec::new();
+    for (entry_idx, entry) in state.history.iter().enumerate() {
+        let text = entry.searchable_text();
+        let plen = pattern.len();
+        let mut start = 0usize;
+        while let Some(rel) = text[start..].find(&pattern) {
+            hits.push(SearchHit {
+                entry_idx,
+                byte_offset: start + rel,
+                len: plen,
+            });
+            // Advance past this match to find the next one. Step by
+            // the pattern's full length so overlapping occurrences
+            // aren't double-counted (e.g. "aaa" with pattern "aa"
+            // yields one hit at offset 0, not two at 0 and 1).
+            start += rel + plen;
+            if start >= text.len() {
+                break;
+            }
+        }
+    }
+    let count = hits.len();
+    state.search_matches = hits;
+    state.search_pattern = Some(pattern.clone());
+    state.search_idx = if count == 0 { None } else { Some(0) };
+    state.status = if count == 0 {
+        format!("no matches for '{pattern}'")
+    } else {
+        format!("{count} match(es) for '{pattern}' · n/N to cycle")
+    };
+    if count > 0 {
+        scroll_to_current_match(state);
+    }
+}
+
+/// Pop the most recent snapshot off `input_undo`, save the current
+/// input on `input_redo`, and restore the popped snapshot. No-op when
+/// the undo stack is empty. `skip_input_undo_record` is set so the
+/// outer event loop's diff-based recorder doesn't capture this swap
+/// as a new edit.
+fn undo_input(state: &mut State) {
+    let Some(prev) = state.input_undo.pop() else {
+        state.status = "already at oldest input".into();
+        return;
+    };
+    state
+        .input_redo
+        .push((std::mem::take(&mut state.input), state.input_cursor));
+    if state.input_redo.len() > INPUT_UNDO_CAP {
+        state.input_redo.remove(0);
+    }
+    state.input = prev.0;
+    state.input_cursor = prev.1;
+    state.skip_input_undo_record = true;
+    state.recall_idx = None;
+}
+
+/// Pop the most recent snapshot off `input_redo`, save the current
+/// input on `input_undo`, and restore the popped snapshot. Mirror of
+/// [`undo_input`]; runs on Ctrl-r in Normal.
+fn redo_input(state: &mut State) {
+    let Some(next) = state.input_redo.pop() else {
+        state.status = "already at newest input".into();
+        return;
+    };
+    state
+        .input_undo
+        .push((std::mem::take(&mut state.input), state.input_cursor));
+    if state.input_undo.len() > INPUT_UNDO_CAP {
+        state.input_undo.remove(0);
+    }
+    state.input = next.0;
+    state.input_cursor = next.1;
+    state.skip_input_undo_record = true;
+    state.recall_idx = None;
+}
+
 /// Replace the input char at `state.input_cursor` with `c`. No-op when
 /// the cursor is at end-of-buffer or the input is empty (vim's `r`
 /// behaves the same way — there's no char to replace). Preserves
@@ -3404,6 +3879,10 @@ fn insert_paste(state: &mut State, text: &str) {
         Mode::Command => {
             state.command_buf.insert_str(state.command_cursor, text);
             state.command_cursor += text.len();
+        }
+        Mode::Search => {
+            state.search_buf.insert_str(state.search_cursor, text);
+            state.search_cursor += text.len();
         }
         Mode::Normal | Mode::Visual => {}
     }
@@ -5562,6 +6041,171 @@ mod tests {
         replace_char_at_cursor(&mut s, 'ä');
         assert_eq!(s.input, "hällo");
         assert_eq!(s.input_cursor, 1);
+    }
+
+    #[test]
+    fn word_under_cursor_extracts_full_word_around_cursor() {
+        // Cursor inside "world" returns the whole word.
+        assert_eq!(
+            word_under_cursor("hello world today", 7).as_deref(),
+            Some("world")
+        );
+        // Cursor at the first byte of "world".
+        assert_eq!(
+            word_under_cursor("hello world", 6).as_deref(),
+            Some("world")
+        );
+        // Cursor at the last byte of "hello".
+        assert_eq!(
+            word_under_cursor("hello world", 4).as_deref(),
+            Some("hello")
+        );
+    }
+
+    #[test]
+    fn word_under_cursor_returns_none_on_whitespace_or_end() {
+        assert!(word_under_cursor("hello world", 5).is_none(), "space");
+        assert!(word_under_cursor("hello", 5).is_none(), "EOB");
+        assert!(word_under_cursor("", 0).is_none(), "empty");
+    }
+
+    #[test]
+    fn search_next_wraps_at_end_of_match_list() {
+        let mut s = State::new("dummy", "dummy");
+        s.history.push(Entry::User("a a a".into()));
+        run_search(&mut s, "a".into());
+        assert_eq!(s.search_idx, Some(0));
+        search_next(&mut s);
+        assert_eq!(s.search_idx, Some(1));
+        search_next(&mut s);
+        assert_eq!(s.search_idx, Some(2));
+        search_next(&mut s);
+        assert_eq!(s.search_idx, Some(0), "wraps past end");
+    }
+
+    #[test]
+    fn search_prev_wraps_at_start_of_match_list() {
+        let mut s = State::new("dummy", "dummy");
+        s.history.push(Entry::User("a a a".into()));
+        run_search(&mut s, "a".into());
+        search_prev(&mut s);
+        assert_eq!(s.search_idx, Some(2), "wraps past start");
+        search_prev(&mut s);
+        assert_eq!(s.search_idx, Some(1));
+    }
+
+    #[test]
+    fn search_next_on_empty_match_list_is_noop() {
+        let mut s = State::new("dummy", "dummy");
+        s.history.push(Entry::User("foo".into()));
+        run_search(&mut s, "bar".into());
+        assert!(s.search_idx.is_none());
+        search_next(&mut s);
+        assert!(s.search_idx.is_none());
+        search_prev(&mut s);
+        assert!(s.search_idx.is_none());
+    }
+
+    #[test]
+    fn run_search_finds_every_non_overlapping_occurrence() {
+        let mut s = State::new("dummy", "dummy");
+        s.history.push(Entry::User("hello hello".into()));
+        s.history.push(Entry::Assistant {
+            text: "hello there".into(),
+            complete: true,
+        });
+        run_search(&mut s, "hello".into());
+        assert_eq!(s.search_pattern.as_deref(), Some("hello"));
+        assert_eq!(s.search_matches.len(), 3);
+        // First entry: matches at 0 and 6 (non-overlapping).
+        assert_eq!(s.search_matches[0].entry_idx, 0);
+        assert_eq!(s.search_matches[0].byte_offset, 0);
+        assert_eq!(s.search_matches[1].entry_idx, 0);
+        assert_eq!(s.search_matches[1].byte_offset, 6);
+        // Second entry: one match at 0.
+        assert_eq!(s.search_matches[2].entry_idx, 1);
+        assert_eq!(s.search_matches[2].byte_offset, 0);
+        assert_eq!(s.search_idx, Some(0));
+    }
+
+    #[test]
+    fn run_search_skips_overlapping_occurrences() {
+        let mut s = State::new("dummy", "dummy");
+        s.history.push(Entry::Info("aaaa".into()));
+        run_search(&mut s, "aa".into());
+        // "aa" in "aaaa" lands at offsets 0 and 2 — not 0, 1, 2.
+        assert_eq!(s.search_matches.len(), 2);
+        assert_eq!(s.search_matches[0].byte_offset, 0);
+        assert_eq!(s.search_matches[1].byte_offset, 2);
+    }
+
+    #[test]
+    fn run_search_empty_pattern_clears_state() {
+        let mut s = State::new("dummy", "dummy");
+        s.search_pattern = Some("stale".into());
+        s.search_matches.push(SearchHit {
+            entry_idx: 0,
+            byte_offset: 0,
+            len: 5,
+        });
+        s.search_idx = Some(0);
+        run_search(&mut s, String::new());
+        assert!(s.search_pattern.is_none());
+        assert!(s.search_matches.is_empty());
+        assert!(s.search_idx.is_none());
+    }
+
+    #[test]
+    fn run_search_zero_matches_yields_none_idx() {
+        let mut s = State::new("dummy", "dummy");
+        s.history.push(Entry::User("nothing here".into()));
+        run_search(&mut s, "absent".into());
+        assert_eq!(s.search_pattern.as_deref(), Some("absent"));
+        assert!(s.search_matches.is_empty());
+        assert!(s.search_idx.is_none());
+    }
+
+    #[test]
+    fn undo_pops_most_recent_snapshot_and_pushes_current_onto_redo() {
+        let mut s = State::new("dummy", "dummy");
+        s.input_undo.push(("hello".into(), 5));
+        s.input = "hello world".into();
+        s.input_cursor = 11;
+        undo_input(&mut s);
+        assert_eq!(s.input, "hello");
+        assert_eq!(s.input_cursor, 5);
+        assert_eq!(s.input_redo.len(), 1, "current state moved to redo");
+        assert_eq!(s.input_redo[0], ("hello world".into(), 11));
+        assert!(s.skip_input_undo_record, "swap shouldn't re-record");
+    }
+
+    #[test]
+    fn undo_on_empty_stack_is_noop() {
+        let mut s = State::new("dummy", "dummy");
+        s.input = "untouched".into();
+        s.input_cursor = 3;
+        undo_input(&mut s);
+        assert_eq!(s.input, "untouched");
+        assert_eq!(s.input_cursor, 3);
+        assert!(s.input_redo.is_empty(), "nothing to redo from a no-op");
+    }
+
+    #[test]
+    fn redo_reverses_undo_round_trip() {
+        let mut s = State::new("dummy", "dummy");
+        s.input = "abc".into();
+        s.input_cursor = 3;
+        s.input_undo.push(("ab".into(), 2));
+        undo_input(&mut s);
+        // After undo: input = "ab", cursor = 2.
+        assert_eq!(s.input, "ab");
+        assert_eq!(s.input_cursor, 2);
+        s.skip_input_undo_record = false;
+        redo_input(&mut s);
+        assert_eq!(s.input, "abc");
+        assert_eq!(s.input_cursor, 3);
+        assert!(s.input_redo.is_empty());
+        assert_eq!(s.input_undo.len(), 1, "round-tripped onto undo");
     }
 
     #[test]
