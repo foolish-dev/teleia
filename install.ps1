@@ -54,6 +54,37 @@ function Try-Prebuilt($target) {
     }
 }
 
+# Verify the downloaded binary against the release's SHA256SUMS. Releases
+# without that file skip the check (with a warning) so older tags still
+# install; a present-but-mismatched checksum aborts.
+function Verify-Prebuilt($target) {
+    $sumsUrl = if ($Tag -eq 'latest') {
+        "$Repo/releases/latest/download/SHA256SUMS"
+    } else {
+        "$Repo/releases/download/$Tag/SHA256SUMS"
+    }
+    $sumsPath = Join-Path $Tmp 'SHA256SUMS'
+    try {
+        Invoke-WebRequest -Uri $sumsUrl -OutFile $sumsPath -UseBasicParsing
+    } catch {
+        Write-Warning "no SHA256SUMS for this release — skipping integrity check"
+        return
+    }
+    $asset = "teleia-$target.exe"
+    $pattern = "  " + [regex]::Escape($asset) + "$"
+    $line = Select-String -Path $sumsPath -Pattern $pattern | Select-Object -First 1
+    if (-not $line) {
+        Write-Warning "$asset not listed in SHA256SUMS — skipping integrity check"
+        return
+    }
+    $expected = (($line.Line -split '\s+')[0]).ToLower()
+    $actual = (Get-FileHash -Algorithm SHA256 (Join-Path $Tmp 'teleia.exe')).Hash.ToLower()
+    if ($expected -ne $actual) {
+        throw "checksum mismatch for $asset (expected $expected, got $actual) — refusing to install"
+    }
+    Write-Host "integrity: sha256 verified"
+}
+
 # Bootstrap rustup non-interactively when cargo is missing. Honors
 # $env:AUTO_INSTALL = '1' (skip the prompt and go) and
 # $env:NO_AUTO_INSTALL = '1' (skip the bootstrap entirely). When neither
@@ -111,6 +142,7 @@ try {
     } else {
         $target = Detect-Target
         if ($target -and (Try-Prebuilt $target)) {
+            Verify-Prebuilt $target
             $done = $true
         }
     }

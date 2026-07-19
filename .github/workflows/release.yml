@@ -91,6 +91,10 @@ jobs:
             echo "no artifacts to release — every build target failed" >&2
             exit 1
           fi
+          # Publish a checksum manifest alongside the binaries so the
+          # installers can verify downloads. `teleia-*` keeps SHA256SUMS
+          # out of its own listing.
+          ( cd dist && sha256sum teleia-* > SHA256SUMS )
           gh release create "${GITHUB_REF_NAME}" \
             --title "${GITHUB_REF_NAME}" \
             --generate-notes \
