@@ -378,6 +378,48 @@ pub fn looks_like_ollama(base_url: &str) -> bool {
     base_url.contains("11434") || base_url.contains("ollama")
 }
 
+/// Cap on the un-drained streaming buffer. A single SSE event / NDJSON
+/// line larger than this means the backend is streaming without the
+/// expected delimiter — bail rather than grow a `String` toward OOM.
+const MAX_STREAM_BUF: usize = 16 * 1024 * 1024;
+
+/// Append `chunk` to `buf` as UTF-8, carrying any trailing bytes that
+/// form an *incomplete* multibyte sequence in `carry` until the next
+/// chunk arrives. `bytes_stream()` splits on transport boundaries that
+/// don't respect char boundaries; decoding each chunk with
+/// `from_utf8_lossy` in isolation would corrupt a character straddling a
+/// boundary into U+FFFD. This decodes only complete scalars and holds
+/// the rest back. Genuinely invalid bytes still become U+FFFD, matching
+/// lossy semantics.
+fn push_utf8_chunk(buf: &mut String, carry: &mut Vec<u8>, chunk: &[u8]) {
+    carry.extend_from_slice(chunk);
+    loop {
+        match std::str::from_utf8(carry) {
+            Ok(s) => {
+                buf.push_str(s);
+                carry.clear();
+                return;
+            }
+            Err(e) => {
+                let valid = e.valid_up_to();
+                buf.push_str(std::str::from_utf8(&carry[..valid]).expect("valid_up_to prefix"));
+                match e.error_len() {
+                    // Real invalid bytes: emit a replacement and skip them.
+                    Some(bad) => {
+                        buf.push('\u{FFFD}');
+                        carry.drain(..valid + bad);
+                    }
+                    // Incomplete tail: keep it for the next chunk.
+                    None => {
+                        carry.drain(..valid);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
 impl LlmClient {
     pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Self {
         Self::with_api_key(base_url, model, None)
@@ -393,7 +435,14 @@ impl LlmClient {
             model: model.into(),
             api_key,
             reasoning_effort: None,
-            http: reqwest::Client::new(),
+            // connect_timeout bounds the TCP/TLS handshake so a dead
+            // endpoint can't stall a request forever. Deliberately no
+            // overall `.timeout()` — chat/pull streams are long-lived and
+            // a whole-request cap would kill legitimate long generations.
+            http: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .build()
+                .expect("reqwest client init (TLS backend / resolver)"),
         }
     }
 
@@ -514,9 +563,10 @@ impl LlmClient {
 
             let mut bytes = resp.bytes_stream();
             let mut buf = String::new();
+            let mut carry: Vec<u8> = Vec::new();
             while let Some(chunk) = bytes.next().await {
                 let chunk = chunk.context("read pull chunk")?;
-                buf.push_str(&String::from_utf8_lossy(&chunk));
+                push_utf8_chunk(&mut buf, &mut carry, &chunk);
 
                 while let Some(pos) = buf.find('\n') {
                     let line: String = buf.drain(..=pos).collect();
@@ -525,6 +575,9 @@ impl LlmClient {
                     if let Ok(prog) = serde_json::from_str::<PullProgress>(line) {
                         yield prog;
                     }
+                }
+                if buf.len() > MAX_STREAM_BUF {
+                    Err(anyhow!("ollama pull stream line exceeded {MAX_STREAM_BUF} bytes"))?;
                 }
             }
         }
@@ -563,12 +616,13 @@ impl LlmClient {
 
             let mut bytes = resp.bytes_stream();
             let mut buf = String::new();
+            let mut carry: Vec<u8> = Vec::new();
             let mut accumulated: Vec<AccTool> = Vec::new();
             let mut last_usage: Option<Usage> = None;
 
             while let Some(chunk) = bytes.next().await {
                 let chunk = chunk.context("read stream chunk")?;
-                buf.push_str(&String::from_utf8_lossy(&chunk));
+                push_utf8_chunk(&mut buf, &mut carry, &chunk);
 
                 while let Some(pos) = buf.find("\n\n") {
                     let event: String = buf.drain(..pos + 2).collect();
@@ -595,6 +649,12 @@ impl LlmClient {
                             }
                         }
                     }
+                }
+                // Cap the residual after draining complete events, matching
+                // pull_model: a single undelimited event over the cap means
+                // the backend is misbehaving — bail before growing toward OOM.
+                if buf.len() > MAX_STREAM_BUF {
+                    Err(anyhow!("chat stream event exceeded {MAX_STREAM_BUF} bytes"))?;
                 }
             }
 
@@ -843,5 +903,31 @@ mod tests {
             with.get("reasoning_effort").and_then(|v| v.as_str()),
             Some("medium")
         );
+    }
+
+    #[test]
+    fn push_utf8_chunk_reassembles_split_multibyte() {
+        // Feed "café🚀" one byte at a time — the worst case for boundary
+        // splitting (é is 2 bytes, 🚀 is 4). A per-chunk from_utf8_lossy
+        // would corrupt every split scalar; the incremental decoder must
+        // reassemble them exactly.
+        let mut buf = String::new();
+        let mut carry = Vec::new();
+        for b in "café🚀".as_bytes() {
+            push_utf8_chunk(&mut buf, &mut carry, &[*b]);
+        }
+        assert_eq!(buf, "café🚀");
+        assert!(carry.is_empty());
+    }
+
+    #[test]
+    fn push_utf8_chunk_replaces_truly_invalid_bytes() {
+        // 0xFF is never valid UTF-8: it must become U+FFFD and not linger
+        // in the carry buffer (which would stall all following output).
+        let mut buf = String::new();
+        let mut carry = Vec::new();
+        push_utf8_chunk(&mut buf, &mut carry, &[b'a', 0xFF, b'b']);
+        assert_eq!(buf, "a\u{FFFD}b");
+        assert!(carry.is_empty());
     }
 }
