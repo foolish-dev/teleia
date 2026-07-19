@@ -17,6 +17,11 @@ impl Store {
             std::fs::create_dir_all(parent).with_context(|| format!("mkdir {parent:?}"))?;
         }
         let conn = Connection::open(path).with_context(|| format!("open {path:?}"))?;
+        // A second connection to the same file (e.g. the SIGUSR1 theme
+        // reload opens its own) can collide with an in-flight write.
+        // Without a busy timeout SQLite returns SQLITE_BUSY immediately
+        // rather than waiting, which can hard-error a turn's persistence.
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS sessions (
                 id TEXT PRIMARY KEY,
