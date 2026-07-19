@@ -70,6 +70,44 @@ try_prebuilt() {
     curl -fsSL --output "$TMP/teleia" "$url"
 }
 
+# Verify the downloaded binary against the release's SHA256SUMS. Releases
+# without that file skip the check (with a note) so older tags still
+# install; a present-but-mismatched checksum aborts rather than putting a
+# tampered/corrupt binary on PATH.
+verify_prebuilt() {
+    target="$1"
+    if [ "$TAG" = "latest" ]; then
+        sums_url="$REPO/releases/latest/download/SHA256SUMS"
+    else
+        sums_url="$REPO/releases/download/$TAG/SHA256SUMS"
+    fi
+    if ! curl -fsSL --output "$TMP/SHA256SUMS" "$sums_url" 2>/dev/null; then
+        echo "note: no SHA256SUMS for this release — skipping integrity check" >&2
+        return 0
+    fi
+    expected="$(grep " teleia-$target\$" "$TMP/SHA256SUMS" 2>/dev/null | awk '{print $1}' | head -n1)"
+    if [ -z "$expected" ]; then
+        echo "note: teleia-$target not listed in SHA256SUMS — skipping integrity check" >&2
+        return 0
+    fi
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual="$(sha256sum "$TMP/teleia" | awk '{print $1}')"
+    elif command -v shasum >/dev/null 2>&1; then
+        actual="$(shasum -a 256 "$TMP/teleia" | awk '{print $1}')"
+    else
+        echo "note: no sha256 tool available — skipping integrity check" >&2
+        return 0
+    fi
+    if [ "$expected" != "$actual" ]; then
+        echo "error: checksum mismatch for teleia-$target" >&2
+        echo "  expected: $expected" >&2
+        echo "  actual:   $actual" >&2
+        echo "refusing to install — download does not match the published SHA256SUMS." >&2
+        exit 1
+    fi
+    echo "integrity: sha256 verified"
+}
+
 # Bootstrap rustup non-interactively when cargo is missing. Honors
 # AUTO_INSTALL=1 (skip the prompt and go), NO_AUTO_INSTALL=1 (skip the
 # bootstrap entirely). When neither is set we prompt on /dev/tty; if no
@@ -108,7 +146,7 @@ from_source() {
 if [ "${FROM_SOURCE:-0}" = "1" ]; then
     from_source
 elif target="$(detect_target)" && try_prebuilt "$target" 2>/dev/null; then
-    :
+    verify_prebuilt "$target"
 else
     echo "no prebuilt for this platform — falling back to source build"
     from_source
