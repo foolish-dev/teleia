@@ -514,6 +514,11 @@ async fn main() -> Result<()> {
             _ => {}
         }
     }
+    if let Some(effort) = agent.get_pref("reasoning_effort") {
+        if matches!(effort.as_str(), "low" | "medium" | "high") {
+            agent.set_reasoning_effort(Some(effort));
+        }
+    }
     if args.theme == "tokyo-night" {
         apply_theme_from_agent(&agent);
     }
