@@ -513,11 +513,18 @@ async fn bash_tool(args: Value) -> Result<String> {
     let mut stdout = child.stdout.take().expect("stdout piped");
     // Drain in a separate task so we keep accumulating output regardless of
     // whether the child exits naturally or we kill it on timeout.
-    let drain = tokio::spawn(async move {
+    let mut drain = tokio::spawn(async move {
         let mut buf = Vec::new();
         let _ = stdout.read_to_end(&mut buf).await;
         buf
     });
+
+    // bash's own pid == its process-group id (set via setpgid in
+    // pre_exec). Capture it before waiting — child.id() returns None once
+    // the child is reaped — so the normal-exit path below can SIGKILL the
+    // whole group.
+    #[cfg(unix)]
+    let pgid = child.id();
 
     let mut timed_out = false;
     let exit_status = tokio::select! {
@@ -529,7 +536,31 @@ async fn bash_tool(args: Value) -> Result<String> {
         }
     };
 
-    let buf = drain.await.unwrap_or_default();
+    // On the normal-exit path the timeout arm's group-kill never ran, so
+    // any job bash backgrounded (`sleep 300 &`, a dev server, …) is still
+    // alive holding the inherited stdout pipe open — which keeps the
+    // drain's read_to_end from ever reaching EOF and hangs the tool far
+    // past its 30s budget. Reap the whole group here too so the pipe
+    // closes promptly (this also stops orphaned background jobs leaking).
+    #[cfg(unix)]
+    if !timed_out {
+        if let Some(pid) = pgid {
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGKILL);
+            }
+        }
+    }
+
+    // Backstop: bound the drain so a descendant that escaped bash's group
+    // (e.g. a daemon that called setsid but kept fd 1 open) still can't
+    // hang the tool indefinitely.
+    let buf = tokio::select! {
+        joined = &mut drain => joined.unwrap_or_default(),
+        _ = tokio::time::sleep(Duration::from_secs(5)) => {
+            drain.abort();
+            Vec::new()
+        }
+    };
     let mut out = String::from_utf8_lossy(&buf).into_owned();
     if timed_out {
         out.push_str("\n[bash timed out after 30s]");
@@ -1598,6 +1629,21 @@ mod tests {
             .expect("kill_child_tree should reap within 2s")
             .expect("child.wait succeeds after SIGKILL");
         assert!(!status.success());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bash_does_not_hang_when_command_backgrounds_a_job() {
+        // A backgrounded job inherits bash's stdout pipe. Before reaping
+        // the process group on the normal-exit path, read_to_end never saw
+        // EOF until the job died, hanging the tool far past its 30s budget.
+        // It must now return promptly with the foreground output.
+        let args = json!({ "command": "sleep 30 & echo started" }).to_string();
+        let result = tokio::time::timeout(Duration::from_secs(5), dispatch("bash", &args))
+            .await
+            .expect("bash must not hang on a backgrounded job")
+            .unwrap();
+        assert!(result.contains("started"));
     }
 
     struct DirCleanup(PathBuf);
