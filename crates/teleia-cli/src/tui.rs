@@ -52,12 +52,14 @@ const SLASH_COMMANDS: &[&str] = &[
     "clear",
     "copy",
     "delete",
+    "effort",
     "exit",
     "help",
     "key",
     "keys",
     "list",
     "load",
+    "loop",
     "lsps",
     "mcps",
     "model",
@@ -515,6 +517,11 @@ struct State {
     /// land in `buf` (echoed as `•`), Enter commits the key onto the
     /// agent, Esc cancels.
     pending_key_entry: Option<KeyEntry>,
+    /// Armed by `/loop N PROMPT` (a sync slash command that can't run
+    /// turns itself). `submit_input` takes it right after `handle_slash`
+    /// and hands it to `run_loop`, which re-submits the prompt `count`
+    /// times. Always `None` once a loop finishes or is stopped.
+    pending_loop: Option<LoopSpec>,
     /// Mirror of `agent.permission_mode()`. Kept in sync so the status
     /// bar + Shift+Tab cycle don't need to touch the agent for reads.
     permission_mode: PermissionMode,
@@ -599,6 +606,18 @@ pub struct PendingApproval {
     pub responder: tokio::sync::oneshot::Sender<ToolApproval>,
 }
 
+/// A bounded `/loop`: re-submit `prompt` as a chat turn up to `count`
+/// times. See [`run_loop`].
+struct LoopSpec {
+    count: usize,
+    prompt: String,
+}
+
+/// Hard cap on `/loop` iterations. Keeps a fat-fingered count (or a
+/// runaway in Auto mode) from spinning far longer than intended; a
+/// larger requested count is clamped to this and the banner shows it.
+const LOOP_MAX: usize = 100;
+
 pub struct KeyEntry {
     pub provider: String,
     pub env_var: String,
@@ -639,6 +658,7 @@ impl State {
             log_area: Rect::default(),
             pending_approval: None,
             pending_key_entry: None,
+            pending_loop: None,
             permission_mode: PermissionMode::default(),
             mcp_summary: None,
             lsp_summary: None,
@@ -1262,6 +1282,18 @@ async fn event_loop<B: ratatui::backend::Backend>(
                     state.command_cursor = 0;
                     state.mode = Mode::Normal;
                     execute_ex(state, agent, &cmd);
+                    // `:loop` arms pending_loop via handle_slash but the sync
+                    // ex path can't drive it — do it here, mirroring how
+                    // submit_input drives `/loop`. Taking it also guarantees
+                    // no stale spec survives to hijack a later submission.
+                    if let Some(spec) = state.pending_loop.take() {
+                        run_loop(terminal, state, agent, spec).await;
+                        state.tokens = agent.tokens();
+                        state.status = format!(
+                            "session {} · ready",
+                            &agent.session_id()[..agent.session_id().len().min(12)]
+                        );
+                    }
                 }
                 _ => {}
             },
@@ -1417,12 +1449,20 @@ async fn submit_input<B: ratatui::backend::Backend>(
     }
     if let Some(cmd) = trimmed.strip_prefix('/') {
         handle_slash(state, agent, cmd);
-        return;
+        // `/loop` arms `pending_loop` but can't run turns from the sync
+        // slash handler — drive it here, then fall through to the usual
+        // post-turn bookkeeping.
+        if let Some(spec) = state.pending_loop.take() {
+            run_loop(terminal, state, agent, spec).await;
+        } else {
+            return;
+        }
+    } else {
+        state.push(Entry::User(trimmed.to_string()));
+        state.working = true;
+        let _ = run_turn(terminal, state, agent, trimmed.to_string()).await;
+        state.working = false;
     }
-    state.push(Entry::User(trimmed.to_string()));
-    state.working = true;
-    run_turn(terminal, state, agent, trimmed.to_string()).await;
-    state.working = false;
     state.tokens = agent.tokens();
     state.status = format!(
         "session {} · ready",
@@ -1641,9 +1681,30 @@ fn translate_ex(cmd: &str) -> Result<String, String> {
         "build" | "ask" => "build".to_string(),
         "plan" => "plan".to_string(),
         "prompt" => format!("prompt {arg}"),
+        "effort" => format!("effort {arg}"),
+        "loop" => format!("loop {arg}"),
         other => return Err(format!("unknown ex command: :{other}")),
     };
     Ok(translated)
+}
+
+/// Parse a `/loop` argument into `(count, prompt)`. The first
+/// whitespace-delimited token is the iteration count (1..=[`LOOP_MAX`],
+/// clamped); everything after it is the prompt re-submitted each round.
+/// Returns a ready-to-show usage message on bad input.
+fn parse_loop(arg: &str) -> Result<(usize, String), String> {
+    const USAGE: &str = "usage: /loop N PROMPT  (N = 1–100 times, then the prompt to repeat)";
+    let mut parts = arg.splitn(2, char::is_whitespace);
+    let count_tok = parts.next().unwrap_or("").trim();
+    let prompt = parts.next().unwrap_or("").trim();
+    let count: usize = count_tok.parse().map_err(|_| USAGE.to_string())?;
+    if count == 0 {
+        return Err(USAGE.to_string());
+    }
+    if prompt.is_empty() {
+        return Err(USAGE.to_string());
+    }
+    Ok((count.min(LOOP_MAX), prompt.to_string()))
 }
 
 /// Update state.suggestion based on the current input. Hits the store only
@@ -1735,6 +1796,8 @@ fn arg_placeholder(cmd: &str) -> Option<&'static str> {
         "key" => Some(" PROVIDER"),
         "cd" => Some(" PATH"),
         "mcps" => Some(" [enable|disable NAME]"),
+        "effort" => Some(" [off|low|medium|high]"),
+        "loop" => Some(" N PROMPT"),
         _ => None,
     }
 }
@@ -1920,6 +1983,7 @@ const EX_COMMANDS: &[&str] = &[
     "copy",
     "delete",
     "edit",
+    "effort",
     "exit",
     "file",
     "help",
@@ -1928,6 +1992,7 @@ const EX_COMMANDS: &[&str] = &[
     "keys",
     "list",
     "load",
+    "loop",
     "lsps",
     "mcps",
     "model",
@@ -1953,6 +2018,8 @@ fn ex_arg_placeholder(cmd: &str) -> Option<&'static str> {
         "model" | "theme" | "colorscheme" => Some(" [NAME]"),
         "notify" | "transparent" => Some(" [on|off]"),
         "mcps" => Some(" [enable|disable NAME]"),
+        "effort" => Some(" [off|low|medium|high]"),
+        "loop" => Some(" N PROMPT"),
         _ => None,
     }
 }
@@ -2209,12 +2276,23 @@ fn delete_word_before_cursor(state: &mut State) {
     state.input_cursor = new_cursor;
 }
 
+/// Outcome of a single `run_turn`. `/loop` reads this to decide whether
+/// to keep iterating.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TurnOutcome {
+    /// Reached `TurnEnd` (or the stream ended) on its own.
+    Completed,
+    /// Ended early — user interrupt (Esc / Ctrl-C) or a draw/stream
+    /// error. `/loop` stops on this.
+    Stopped,
+}
+
 async fn run_turn<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     state: &mut State,
     agent: &mut Agent,
     input: String,
-) {
+) -> TurnOutcome {
     let stream = agent.turn(input);
     pin_mut!(stream);
     loop {
@@ -2227,7 +2305,7 @@ async fn run_turn<B: ratatui::backend::Backend>(
 
         if let Err(e) = terminal.draw(|f| draw(f, state)) {
             state.push(Entry::Error(format!("draw: {e:#}")));
-            return;
+            return TurnOutcome::Stopped;
         }
 
         // Drain whatever input events have piled up — without this, the
@@ -2244,8 +2322,14 @@ async fn run_turn<B: ratatui::backend::Backend>(
                     if k.modifiers.contains(KeyModifiers::CONTROL)
                         && matches!(k.code, KeyCode::Char('c')) =>
                 {
+                    // Clear any outstanding tool-approval prompt before
+                    // bailing. Otherwise the flag stays set, draw() keeps
+                    // the approval prompt commandeering the input box, and
+                    // it's wedged for the rest of the session. Dropping the
+                    // responder denies the abandoned tool call.
+                    state.pending_approval = None;
                     state.push(Entry::Info("(interrupted)".into()));
-                    return;
+                    return TurnOutcome::Stopped;
                 }
                 Event::Key(k) if state.pending_approval.is_some() => {
                     // Single-keystroke gate: y/n/a (Esc = deny).
@@ -2263,7 +2347,7 @@ async fn run_turn<B: ratatui::backend::Backend>(
                 }
                 Event::Key(k) if matches!(k.code, KeyCode::Esc) => {
                     state.push(Entry::Info("(interrupted)".into()));
-                    return;
+                    return TurnOutcome::Stopped;
                 }
                 Event::Key(k) => {
                     // Let the user keep typing into the input box while a
@@ -2299,18 +2383,46 @@ async fn run_turn<B: ratatui::backend::Backend>(
                     Some(Ok(e)) => {
                         let is_end = matches!(e, TurnEvent::TurnEnd);
                         state.apply(e);
-                        if is_end { return; }
+                        if is_end { return TurnOutcome::Completed; }
                     }
                     Some(Err(e)) => {
                         state.push(Entry::Error(e.to_string()));
-                        return;
+                        return TurnOutcome::Stopped;
                     }
-                    None => return,
+                    None => return TurnOutcome::Completed,
                 }
             }
             _ = tokio::time::sleep(Duration::from_millis(33)) => {
                 // periodic redraw so deltas land smoothly
             }
+        }
+    }
+}
+
+/// Drive a bounded `/loop`: re-submit `spec.prompt` as a chat turn up to
+/// `spec.count` times. Each iteration appends to the same session, so the
+/// model sees its prior work as context. Esc / Ctrl-C during any turn
+/// (or a stream error) returns [`TurnOutcome::Stopped`] and halts the
+/// loop early.
+async fn run_loop<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+    state: &mut State,
+    agent: &mut Agent,
+    spec: LoopSpec,
+) {
+    for i in 0..spec.count {
+        state.push(Entry::Info(format!("loop {}/{}", i + 1, spec.count)));
+        state.push(Entry::User(spec.prompt.clone()));
+        state.working = true;
+        let outcome = run_turn(terminal, state, agent, spec.prompt.clone()).await;
+        state.working = false;
+        if outcome == TurnOutcome::Stopped {
+            state.push(Entry::Info(format!(
+                "loop stopped after {}/{}",
+                i + 1,
+                spec.count
+            )));
+            break;
         }
     }
 }
@@ -2789,9 +2901,46 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
         "quit" | "exit" | "q" => {
             state.should_quit = true;
         }
+        "effort" => {
+            if arg.is_empty() {
+                let cur = agent.reasoning_effort().unwrap_or("off");
+                state.push(Entry::Info(format!(
+                    "reasoning effort: {cur}  ·  /effort [off|low|medium|high]"
+                )));
+            } else {
+                match arg {
+                    "off" | "none" => {
+                        agent.set_reasoning_effort(None);
+                        agent.set_pref("reasoning_effort", "off");
+                        state.push(Entry::Info("reasoning effort: off".into()));
+                    }
+                    "low" | "medium" | "high" => {
+                        agent.set_reasoning_effort(Some(arg.to_string()));
+                        agent.set_pref("reasoning_effort", arg);
+                        state.push(Entry::Info(format!(
+                            "reasoning effort: {arg} (reasoning-capable models only)"
+                        )));
+                    }
+                    other => state.push(Entry::Error(format!(
+                        "unknown effort '{other}' (use: off · low · medium · high)"
+                    ))),
+                }
+            }
+        }
+        "loop" => {
+            // Only arms the loop; `submit_input` takes `pending_loop`
+            // and drives the turns, since `handle_slash` is sync and
+            // can't run a turn without freezing the event loop.
+            match parse_loop(arg) {
+                Ok((count, prompt)) => {
+                    state.pending_loop = Some(LoopSpec { count, prompt });
+                }
+                Err(msg) => state.push(Entry::Error(msg)),
+            }
+        }
         "help" | "?" => {
             state.push(Entry::Info(
-                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /key PROVIDER · /keys · /mcps · /lsps · /tools · /plan · /build · /auto · /prompt [NAME] · /theme [NAME] · /notify [on|off] · /transparent [on|off] · /copy · /cd PATH · /pwd · /version · /show · /help · /quit"
+                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /effort [off|low|medium|high] · /key PROVIDER · /keys · /mcps · /lsps · /tools · /plan · /build · /auto · /loop N PROMPT · /prompt [NAME] · /theme [NAME] · /notify [on|off] · /transparent [on|off] · /copy · /cd PATH · /pwd · /version · /show · /help · /quit"
                     .into(),
             ));
         }
@@ -5462,6 +5611,38 @@ mod tests {
         assert_eq!(translate_ex("d foo").unwrap(), "delete foo");
         assert_eq!(translate_ex("bd foo").unwrap(), "delete foo");
         assert_eq!(translate_ex("delete foo").unwrap(), "delete foo");
+    }
+
+    #[test]
+    fn ex_translates_effort_and_loop() {
+        assert_eq!(translate_ex("effort high").unwrap(), "effort high");
+        assert_eq!(
+            translate_ex("loop 5 fix the tests").unwrap(),
+            "loop 5 fix the tests"
+        );
+    }
+
+    #[test]
+    fn parse_loop_accepts_count_and_prompt() {
+        assert_eq!(
+            parse_loop("3 fix the tests"),
+            Ok((3, "fix the tests".to_string()))
+        );
+        assert_eq!(parse_loop("1 go"), Ok((1, "go".to_string())));
+    }
+
+    #[test]
+    fn parse_loop_clamps_to_max() {
+        let (count, _) = parse_loop("100000 spin").unwrap();
+        assert_eq!(count, LOOP_MAX);
+    }
+
+    #[test]
+    fn parse_loop_rejects_bad_input() {
+        assert!(parse_loop("").is_err()); // nothing at all
+        assert!(parse_loop("5").is_err()); // count but no prompt
+        assert!(parse_loop("0 go").is_err()); // zero iterations
+        assert!(parse_loop("foo bar").is_err()); // non-numeric count
     }
 
     #[test]

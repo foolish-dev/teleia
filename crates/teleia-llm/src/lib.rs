@@ -118,6 +118,8 @@ struct ChatRequest<'a> {
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream_options: Option<StreamOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<&'a str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -170,6 +172,11 @@ pub struct LlmClient {
     base_url: String,
     model: String,
     api_key: Option<String>,
+    /// Reasoning effort sent as the OpenAI-standard `reasoning_effort`
+    /// request field (`low` / `medium` / `high`). `None` omits it, so
+    /// non-reasoning models and Ollama are unaffected unless the user
+    /// opts in via `/effort`.
+    reasoning_effort: Option<String>,
     http: reqwest::Client,
 }
 
@@ -385,6 +392,7 @@ impl LlmClient {
             base_url: base_url.into(),
             model: model.into(),
             api_key,
+            reasoning_effort: None,
             http: reqwest::Client::new(),
         }
     }
@@ -421,6 +429,17 @@ impl LlmClient {
 
     pub fn set_api_key(&mut self, key: Option<String>) {
         self.api_key = key.filter(|k| !k.is_empty());
+    }
+
+    pub fn reasoning_effort(&self) -> Option<&str> {
+        self.reasoning_effort.as_deref()
+    }
+
+    /// Set the `reasoning_effort` sent on chat requests. `None` (or an
+    /// empty string) clears it, restoring the default of omitting the
+    /// field entirely.
+    pub fn set_reasoning_effort(&mut self, effort: Option<String>) {
+        self.reasoning_effort = effort.filter(|e| !e.is_empty());
     }
 
     /// List models Ollama has cached locally. Returns the `name` field of
@@ -525,6 +544,7 @@ impl LlmClient {
                 tools,
                 stream: true,
                 stream_options: Some(StreamOptions { include_usage: true }),
+                reasoning_effort: self.reasoning_effort.as_deref(),
             };
 
             let mut req = self.http.post(&url).json(&body);
@@ -793,5 +813,35 @@ mod tests {
         client.set_model("groq:llama-3.3-70b-versatile".to_string());
         assert!(client.base_url().contains("groq.com"));
         assert_eq!(client.model(), "llama-3.3-70b-versatile");
+    }
+
+    #[test]
+    fn set_reasoning_effort_round_trips_and_filters_empty() {
+        let mut client = LlmClient::new("http://127.0.0.1:0/v1", "m");
+        assert_eq!(client.reasoning_effort(), None);
+        client.set_reasoning_effort(Some("high".to_string()));
+        assert_eq!(client.reasoning_effort(), Some("high"));
+        // An empty string clears it back to the omit-the-field default.
+        client.set_reasoning_effort(Some(String::new()));
+        assert_eq!(client.reasoning_effort(), None);
+    }
+
+    #[test]
+    fn chat_request_omits_reasoning_effort_unless_set() {
+        let base = |effort| ChatRequest {
+            model: "m",
+            messages: &[],
+            tools: None,
+            stream: true,
+            stream_options: None,
+            reasoning_effort: effort,
+        };
+        let without = serde_json::to_value(base(None)).unwrap();
+        assert!(without.get("reasoning_effort").is_none());
+        let with = serde_json::to_value(base(Some("medium"))).unwrap();
+        assert_eq!(
+            with.get("reasoning_effort").and_then(|v| v.as_str()),
+            Some("medium")
+        );
     }
 }

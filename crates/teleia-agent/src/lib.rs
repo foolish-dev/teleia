@@ -467,6 +467,14 @@ impl Agent {
         self.llm.set_model(model);
     }
 
+    pub fn reasoning_effort(&self) -> Option<&str> {
+        self.llm.reasoning_effort()
+    }
+
+    pub fn set_reasoning_effort(&mut self, effort: Option<String>) {
+        self.llm.set_reasoning_effort(effort);
+    }
+
     pub fn has_api_key(&self) -> bool {
         self.llm.api_key().map(|k| !k.is_empty()).unwrap_or(false)
     }
@@ -756,5 +764,15 @@ mod tests {
         }
 
         let _ = std::fs::remove_file(&store_path);
+    }
+
+    #[test]
+    fn reasoning_effort_round_trips_through_agent() {
+        let mut agent = fake_agent();
+        assert_eq!(agent.reasoning_effort(), None);
+        agent.set_reasoning_effort(Some("low".to_string()));
+        assert_eq!(agent.reasoning_effort(), Some("low"));
+        agent.set_reasoning_effort(None);
+        assert_eq!(agent.reasoning_effort(), None);
     }
 }
