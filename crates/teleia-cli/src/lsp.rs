@@ -182,7 +182,16 @@ impl LspClient {
                     }
                     return Ok(msg.get("result").cloned().unwrap_or(Value::Null));
                 }
-                _ => continue,
+                _ => {
+                    // A server->client *request* (has `method` and `id`)
+                    // must be answered or a server that blocks on our reply
+                    // deadlocks the turn. Answer MethodNotFound; plain
+                    // notifications (no `id`) are still ignored.
+                    if let Some(reply) = method_not_found_reply(&msg) {
+                        let _ = self.write_frame(&reply).await;
+                    }
+                    continue;
+                }
             }
         }
     }
@@ -299,14 +308,42 @@ impl LspClient {
                 }
             }
         }
-        let n =
-            content_length.ok_or_else(|| anyhow!("LSP `{}` sent no Content-Length", self.name))?;
+        let n = checked_frame_len(content_length, &self.name)?;
         let mut buf = vec![0u8; n];
         self.stdout.read_exact(&mut buf).await?;
         let v: Value = serde_json::from_slice(&buf)
             .with_context(|| format!("LSP `{}` returned non-JSON body", self.name))?;
         Ok(v)
     }
+}
+
+/// Bound the server-declared LSP frame size before allocating it, so a
+/// bogus or corrupt `Content-Length` can't trigger a huge one-shot
+/// allocation that OOM-aborts the process. 64 MiB is far above any real
+/// LSP payload.
+const MAX_LSP_FRAME: usize = 64 * 1024 * 1024;
+
+fn checked_frame_len(content_length: Option<usize>, name: &str) -> Result<usize> {
+    let n = content_length.ok_or_else(|| anyhow!("LSP `{name}` sent no Content-Length"))?;
+    if n > MAX_LSP_FRAME {
+        return Err(anyhow!(
+            "LSP `{name}` frame too large: {n} bytes (cap {MAX_LSP_FRAME})"
+        ));
+    }
+    Ok(n)
+}
+
+/// If `msg` is a server->client *request* (has both `method` and `id`),
+/// build the JSON-RPC MethodNotFound reply that unblocks a server which
+/// waits on our response. Returns `None` for responses and notifications.
+fn method_not_found_reply(msg: &Value) -> Option<Value> {
+    msg.get("method")?;
+    let id = msg.get("id").cloned()?;
+    Some(json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": { "code": -32601, "message": "method not found" }
+    }))
 }
 
 impl Drop for LspClient {
@@ -651,6 +688,26 @@ mod tests {
         let out = format_diagnostic("file:///work/src/main.rs", &d);
         // LSP is 0-based, displayed 1-based → 10:5.
         assert_eq!(out, "/work/src/main.rs:10:5 error [rustc]: no method foo");
+    }
+
+    #[test]
+    fn checked_frame_len_rejects_oversized_and_missing() {
+        assert_eq!(checked_frame_len(Some(1024), "srv").unwrap(), 1024);
+        assert!(checked_frame_len(Some(MAX_LSP_FRAME + 1), "srv").is_err());
+        assert!(checked_frame_len(None, "srv").is_err());
+    }
+
+    #[test]
+    fn method_not_found_reply_only_for_server_requests() {
+        // server->client request (method + id) → MethodNotFound reply
+        let req = json!({ "jsonrpc": "2.0", "id": 7, "method": "workspace/configuration" });
+        let reply = method_not_found_reply(&req).expect("server request must be answered");
+        assert_eq!(reply["id"], json!(7));
+        assert_eq!(reply["error"]["code"], json!(-32601));
+        // notification (method, no id) → ignored
+        assert!(method_not_found_reply(&json!({ "method": "window/logMessage" })).is_none());
+        // response (id, no method) → ignored
+        assert!(method_not_found_reply(&json!({ "id": 3, "result": {} })).is_none());
     }
 
     #[test]
