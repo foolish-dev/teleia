@@ -213,7 +213,16 @@ impl McpClient {
                     }
                     return Ok(msg.get("result").cloned().unwrap_or(Value::Null));
                 }
-                _ => continue,
+                _ => {
+                    // A server->client *request* (has `method` and `id`)
+                    // must be answered or a server that blocks on our reply
+                    // deadlocks the turn. Answer MethodNotFound; plain
+                    // notifications (no `id`) are still ignored.
+                    if let Some(reply) = method_not_found_reply(&msg) {
+                        let _ = self.send(&reply).await;
+                    }
+                    continue;
+                }
             }
         }
     }
@@ -243,6 +252,19 @@ impl McpClient {
         }
         Ok(buf)
     }
+}
+
+/// If `msg` is a server->client *request* (has both `method` and `id`),
+/// build the JSON-RPC MethodNotFound reply that unblocks a server which
+/// waits on our response. Returns `None` for responses and notifications.
+fn method_not_found_reply(msg: &Value) -> Option<Value> {
+    msg.get("method")?;
+    let id = msg.get("id").cloned()?;
+    Some(json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": { "code": -32601, "message": "method not found" }
+    }))
 }
 
 impl Drop for McpClient {
@@ -527,6 +549,19 @@ mod tests {
             ]
         });
         assert_eq!(flatten_resource_contents(&v), "first\n\nsecond");
+    }
+
+    #[test]
+    fn method_not_found_reply_only_for_server_requests() {
+        // server->client request (method + id) → MethodNotFound reply
+        let req = json!({ "jsonrpc": "2.0", "id": 5, "method": "sampling/createMessage" });
+        let reply = method_not_found_reply(&req).expect("server request must be answered");
+        assert_eq!(reply["id"], json!(5));
+        assert_eq!(reply["error"]["code"], json!(-32601));
+        // notification (method, no id) → ignored
+        assert!(method_not_found_reply(&json!({ "method": "notifications/message" })).is_none());
+        // response (id, no method) → ignored
+        assert!(method_not_found_reply(&json!({ "id": 1, "result": {} })).is_none());
     }
 
     #[test]
