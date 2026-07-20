@@ -1771,6 +1771,14 @@ fn compute_suggestion(input: &str, aliases: &[String]) -> Option<Suggestion> {
     None
 }
 
+/// Values offered by `/effort` completion: `off` plus the settable
+/// reasoning tiers. Single source of truth: `teleia_agent::REASONING_EFFORTS`.
+fn effort_values() -> Vec<&'static str> {
+    std::iter::once("off")
+        .chain(teleia_agent::REASONING_EFFORTS.iter().copied())
+        .collect()
+}
+
 fn arg_suggestion(cmd: &str, arg: &str, aliases: &[String]) -> Option<Suggestion> {
     match cmd {
         "load" | "delete" | "rm" => {
@@ -1779,6 +1787,15 @@ fn arg_suggestion(cmd: &str, arg: &str, aliases: &[String]) -> Option<Suggestion
                 .find(|name| name.starts_with(arg) && name.as_str() != arg)?;
             Some(Suggestion {
                 completion: matching[arg.len()..].to_string(),
+                placeholder: String::new(),
+            })
+        }
+        "effort" => {
+            let value = effort_values()
+                .into_iter()
+                .find(|v| v.starts_with(arg) && *v != arg)?;
+            Some(Suggestion {
+                completion: value[arg.len()..].to_string(),
                 placeholder: String::new(),
             })
         }
@@ -1908,6 +1925,21 @@ fn compute_menu(
                 items,
                 selected: 0,
                 kind: MenuKind::Theme,
+            });
+        }
+        if cmd == "effort" {
+            let items: Vec<String> = effort_values()
+                .into_iter()
+                .filter(|v| v.starts_with(arg))
+                .map(String::from)
+                .collect();
+            if items.is_empty() {
+                return None;
+            }
+            return Some(Menu {
+                items,
+                selected: 0,
+                kind: MenuKind::Theme, // single-arg replacement
             });
         }
         if cmd == "mcps" {
@@ -5991,6 +6023,30 @@ mod tests {
         let m = compute_menu("/transparent of", &[], &[], &[]).unwrap();
         assert_eq!(m.kind, MenuKind::Theme);
         assert_eq!(m.items, vec!["off"]);
+    }
+
+    #[test]
+    fn menu_effort_offers_all_tiers() {
+        let m = compute_menu("/effort ", &[], &[], &[]).unwrap();
+        assert_eq!(m.kind, MenuKind::Theme);
+        assert_eq!(
+            m.items,
+            vec!["off", "low", "medium", "high", "xhigh", "max", "leetcode"]
+        );
+    }
+
+    #[test]
+    fn menu_effort_filters_by_prefix() {
+        // Both "low" and "leetcode" start with "l".
+        let m = compute_menu("/effort l", &[], &[], &[]).unwrap();
+        assert_eq!(m.items, vec!["low", "leetcode"]);
+    }
+
+    #[test]
+    fn suggestion_effort_completes_a_tier() {
+        let s = compute_suggestion("/effort le", &[]).unwrap();
+        assert_eq!(s.completion, "etcode");
+        assert!(compute_suggestion("/effort zzz", &[]).is_none());
     }
 
     #[test]
