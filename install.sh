@@ -197,8 +197,8 @@ fi
 # Ollama hint: teleia's default model is local; nudge toward setup.
 if [ "${NO_OLLAMA_HINT:-0}" != "1" ]; then
     if command -v ollama >/dev/null 2>&1; then
-        echo "next: 'ollama pull hf.co/FoolDev/Thanatos-27B:Q4_K_M' to grab the default local model, or run 'teleia --model claude-opus-4-7'"
+        echo "next: 'ollama pull hf.co/FoolDev/Thanatos-27B:Q4_K_M' to grab the default local model, or run 'teleia --model claude-fable-5'"
     else
-        echo "next: install Ollama (https://ollama.com) for local models, or run 'teleia --model claude-opus-4-7'"
+        echo "next: install Ollama (https://ollama.com) for local models, or run 'teleia --model claude-fable-5'"
     fi
 fi
