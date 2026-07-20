@@ -205,11 +205,12 @@ fn save_auto_alias_named(store: &Store, session_id: &str, base: &str) {
     }
 }
 
-/// Settable reasoning-effort tiers, ascending. Sent verbatim as the
-/// OpenAI-standard `reasoning_effort` on chat requests (`off` clears it).
-/// `xhigh`/`max` are the newer high tiers; `leetcode` is the top rung. All
-/// pass through unchanged — reasoning-incapable models and Ollama ignore
-/// the field.
+/// Settable reasoning-effort tiers, ascending (`off` clears the field).
+/// `xhigh`/`max` are the newer high tiers; `leetcode` is the top rung. Sent
+/// as the OpenAI-standard `reasoning_effort`; the non-standard labels
+/// `xhigh` and `leetcode` are mapped to `max` on the wire (teleia-llm's
+/// `wire_reasoning_effort`) so a strict backend doesn't reject them.
+/// Reasoning-incapable models and Ollama ignore the field.
 pub const REASONING_EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max", "leetcode"];
 
 /// Whether `s` is a settable reasoning-effort tier (i.e. not `off`). The
