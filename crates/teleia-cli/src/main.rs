@@ -43,6 +43,7 @@ const DEFAULT_OLLAMA_MODELS: &[&str] = &[
 #[rustfmt::skip]
 const KNOWN_CLOUD_MODELS: &[&str] = &[
     // ---------- Anthropic ----------
+    "claude-fable-5",
     "claude-opus-4-7",
     "claude-sonnet-4-6",
     "claude-haiku-4-5-20251001",

@@ -61,7 +61,7 @@ On a source build with no Rust toolchain present, the installer otherwise prompt
 teleia
 
 # cloud — uses $ANTHROPIC_API_KEY, or prompts and saves the key
-teleia --model claude-opus-4-7
+teleia --model claude-fable-5
 
 # resume the last session
 teleia --resume     # alias: --continue, -r
