@@ -137,6 +137,19 @@ struct ChatRequest<'a> {
     reasoning_effort: Option<&'a str>,
 }
 
+/// Map a teleia effort label to the wire value sent as `reasoning_effort`.
+/// teleia exposes finer labels than backends accept: `xhigh` and the
+/// top-tier `leetcode` have no standard wire value, so they request the
+/// highest real tier, `max`, rather than 400ing (e.g. a backend that only
+/// accepts none/low/medium/high/max). Standard tiers pass through
+/// unchanged; reasoning-incapable backends and Ollama ignore the field.
+fn wire_reasoning_effort(label: &str) -> &str {
+    match label {
+        "xhigh" | "leetcode" => "max",
+        other => other,
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct StreamOptions {
     include_usage: bool,
@@ -612,7 +625,7 @@ impl LlmClient {
                 tools,
                 stream: true,
                 stream_options: Some(StreamOptions { include_usage: true }),
-                reasoning_effort: self.reasoning_effort.as_deref(),
+                reasoning_effort: self.reasoning_effort.as_deref().map(wire_reasoning_effort),
             };
 
             let mut req = self.http.post(&url).json(&body);
@@ -918,6 +931,18 @@ mod tests {
             with.get("reasoning_effort").and_then(|v| v.as_str()),
             Some("medium")
         );
+    }
+
+    #[test]
+    fn wire_reasoning_effort_maps_nonstandard_tiers_to_max() {
+        // Standard tiers pass through untouched.
+        for e in ["low", "medium", "high", "max"] {
+            assert_eq!(wire_reasoning_effort(e), e);
+        }
+        // teleia's extra labels have no wire value — they request `max` so
+        // a strict backend (none/low/medium/high/max) doesn't 400.
+        assert_eq!(wire_reasoning_effort("xhigh"), "max");
+        assert_eq!(wire_reasoning_effort("leetcode"), "max");
     }
 
     #[test]
