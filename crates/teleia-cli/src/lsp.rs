@@ -103,7 +103,14 @@ impl LspClient {
             next_id: 1,
             open_docs: HashSet::new(),
         };
-        client.initialize().await?;
+        // Bound the handshake: a server that spawns but never answers
+        // `initialize` (or stays stdout-silent) would otherwise hang boot
+        // indefinitely, since spawn_all awaits each spawn serially. On
+        // timeout the error flows into spawn_all's warnings, demoting a
+        // boot hang to a `/lsps` warning.
+        tokio::time::timeout(std::time::Duration::from_secs(10), client.initialize())
+            .await
+            .map_err(|_| anyhow!("LSP `{name}` handshake timed out after 10s"))??;
         Ok(client)
     }
 
@@ -175,23 +182,19 @@ impl LspClient {
         // matching response arrives.
         loop {
             let msg = self.read_frame().await?;
-            match msg.get("id").and_then(Value::as_u64) {
-                Some(rid) if rid == id => {
-                    if let Some(err) = msg.get("error") {
-                        return Err(anyhow!("LSP `{}` returned error: {err}", self.name));
-                    }
-                    return Ok(msg.get("result").cloned().unwrap_or(Value::Null));
+            if is_response_to(&msg, id) {
+                if let Some(err) = msg.get("error") {
+                    return Err(anyhow!("LSP `{}` returned error: {err}", self.name));
                 }
-                _ => {
-                    // A server->client *request* (has `method` and `id`)
-                    // must be answered or a server that blocks on our reply
-                    // deadlocks the turn. Answer MethodNotFound; plain
-                    // notifications (no `id`) are still ignored.
-                    if let Some(reply) = method_not_found_reply(&msg) {
-                        let _ = self.write_frame(&reply).await;
-                    }
-                    continue;
-                }
+                return Ok(msg.get("result").cloned().unwrap_or(Value::Null));
+            }
+            // Not our response. A server->client *request* (has `method` and
+            // `id`) must be answered or a server that blocks on our reply
+            // deadlocks the turn — including one whose `id` collides with
+            // ours, which `is_response_to` deliberately excludes. Answer
+            // MethodNotFound; plain notifications (no `id`) are ignored.
+            if let Some(reply) = method_not_found_reply(&msg) {
+                let _ = self.write_frame(&reply).await;
             }
         }
     }
@@ -344,6 +347,15 @@ fn method_not_found_reply(msg: &Value) -> Option<Value> {
         "id": id,
         "error": { "code": -32601, "message": "method not found" }
     }))
+}
+
+/// True iff `msg` is the response to our request `id`: it carries a
+/// matching `id` and no `method`. A server-initiated *request* also has an
+/// `id` (plus a `method`); without the `method` check, one whose id
+/// happened to collide with ours would be mis-read as our response —
+/// dropping the real reply and leaving the server's request unanswered.
+fn is_response_to(msg: &Value, id: u64) -> bool {
+    msg.get("id").and_then(Value::as_u64) == Some(id) && msg.get("method").is_none()
 }
 
 impl Drop for LspClient {
@@ -708,6 +720,25 @@ mod tests {
         assert!(method_not_found_reply(&json!({ "method": "window/logMessage" })).is_none());
         // response (id, no method) → ignored
         assert!(method_not_found_reply(&json!({ "id": 3, "result": {} })).is_none());
+    }
+
+    #[test]
+    fn is_response_to_excludes_colliding_server_request() {
+        // Our response: matching id, no method.
+        assert!(is_response_to(&json!({ "id": 4, "result": {} }), 4));
+        // Different id → not ours.
+        assert!(!is_response_to(&json!({ "id": 5, "result": {} }), 4));
+        // A server->client request whose id collides with ours: must NOT
+        // be mistaken for our response (it has a `method`).
+        assert!(!is_response_to(
+            &json!({ "id": 4, "method": "workspace/configuration" }),
+            4
+        ));
+        // A notification (no id) is never our response.
+        assert!(!is_response_to(
+            &json!({ "method": "window/logMessage" }),
+            4
+        ));
     }
 
     #[test]
