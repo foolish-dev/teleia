@@ -886,6 +886,54 @@ pub async fn run(
     result
 }
 
+/// Ctrl-C at the idle prompt: discard whatever is being typed and return
+/// `false`; return `true` (quit) only when there is nothing to clear, so a
+/// stray Ctrl-C can't nuke the session. Mirrors each mode's Esc-cancel.
+/// (During a running turn, Ctrl-C is handled separately as a hard
+/// interrupt.) The caller `continue`s, skipping the post-key menu refresh,
+/// so the dropdown/ghost-text are cleared here.
+fn ctrl_c_should_quit(state: &mut State) -> bool {
+    state.menu = None;
+    state.suggestion = None;
+    match state.mode {
+        Mode::Command => {
+            state.mode = Mode::Normal;
+            state.command_buf.clear();
+            state.command_cursor = 0;
+            false
+        }
+        Mode::Search => {
+            state.mode = Mode::Normal;
+            state.search_buf.clear();
+            state.search_cursor = 0;
+            false
+        }
+        _ if !state.input.is_empty() => {
+            // Record undo first, so an accidental clear is recoverable with
+            // `u` — same as Ctrl-u. (The caller `continue`s past the normal
+            // edit recorder.)
+            record_input_undo(state);
+            state.input.clear();
+            state.input_cursor = 0;
+            state.recall_idx = None;
+            false
+        }
+        _ => true,
+    }
+}
+
+/// Snapshot the current input onto the undo stack (capped, clearing redo),
+/// so a following `u` restores it. Mirrors the main edit recorder.
+fn record_input_undo(state: &mut State) {
+    state
+        .input_undo
+        .push((state.input.clone(), state.input_cursor));
+    if state.input_undo.len() > INPUT_UNDO_CAP {
+        state.input_undo.remove(0);
+    }
+    state.input_redo.clear();
+}
+
 async fn event_loop<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     state: &mut State,
@@ -918,7 +966,10 @@ async fn event_loop<B: ratatui::backend::Backend>(
         }
 
         if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
-            return Ok(());
+            if ctrl_c_should_quit(state) {
+                return Ok(());
+            }
+            continue;
         }
 
         // Hidden-input API-key entry takes precedence over normal mode
@@ -6430,6 +6481,49 @@ mod tests {
         assert_eq!(s.search_idx, Some(2), "wraps past start");
         search_prev(&mut s);
         assert_eq!(s.search_idx, Some(1));
+    }
+
+    #[test]
+    fn ctrl_c_clears_a_typed_prompt_instead_of_quitting() {
+        let mut s = State::new("dummy", "dummy");
+        s.input = "half a thought".into();
+        s.input_cursor = s.input.len();
+        assert!(
+            !ctrl_c_should_quit(&mut s),
+            "should not quit with text typed"
+        );
+        assert!(s.input.is_empty());
+        assert_eq!(s.input_cursor, 0);
+        // The cleared prompt is recoverable with `u`.
+        assert_eq!(
+            s.input_undo.last().map(|(t, _)| t.as_str()),
+            Some("half a thought")
+        );
+    }
+
+    #[test]
+    fn ctrl_c_on_empty_prompt_quits() {
+        let mut s = State::new("dummy", "dummy");
+        assert!(s.input.is_empty());
+        assert!(ctrl_c_should_quit(&mut s), "empty prompt should quit");
+    }
+
+    #[test]
+    fn ctrl_c_cancels_command_and_search_modes_to_normal() {
+        let mut s = State::new("dummy", "dummy");
+        s.mode = Mode::Command;
+        s.command_buf = "wq".into();
+        s.command_cursor = 2;
+        assert!(!ctrl_c_should_quit(&mut s));
+        assert_eq!(s.mode, Mode::Normal);
+        assert!(s.command_buf.is_empty());
+
+        s.mode = Mode::Search;
+        s.search_buf = "needle".into();
+        s.search_cursor = 6;
+        assert!(!ctrl_c_should_quit(&mut s));
+        assert_eq!(s.mode, Mode::Normal);
+        assert!(s.search_buf.is_empty());
     }
 
     #[test]
