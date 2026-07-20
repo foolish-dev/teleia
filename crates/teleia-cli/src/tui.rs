@@ -785,6 +785,9 @@ impl State {
                     }
                 }
             }
+            TurnEvent::Notice(msg) => {
+                self.push(Entry::Info(format!("⚠ {msg}")));
+            }
             TurnEvent::TurnEnd => {}
             TurnEvent::ToolApprovalRequest {
                 name,
@@ -6553,6 +6556,16 @@ mod tests {
             matches!(&s.history[0], Entry::Reasoning { text, complete: true } if text == "hmm")
         );
         assert!(matches!(&s.history[1], Entry::Assistant { text, complete: true } if text == "42"));
+    }
+
+    #[test]
+    fn notice_event_surfaces_as_a_warning_info_entry() {
+        let mut s = State::new("dummy", "dummy");
+        s.apply(TurnEvent::Notice("cut off at context limit".into()));
+        assert!(matches!(
+            s.history.last(),
+            Some(Entry::Info(t)) if t.contains("cut off at context limit") && t.starts_with('⚠')
+        ));
     }
 
     #[test]

@@ -67,6 +67,9 @@ pub enum TurnEvent {
         name: String,
         output: String,
     },
+    /// A one-off informational note surfaced in the transcript (e.g. the
+    /// model's response was truncated at the context limit).
+    Notice(String),
     TurnEnd,
 }
 
@@ -602,6 +605,7 @@ impl Agent {
                 yield TurnEvent::AssistantStart;
                 let mut content_buf = String::new();
                 let mut tool_calls = Vec::new();
+                let mut truncated = false;
 
                 {
                     let stream = self.llm.stream(&self.messages, Some(&self.tools));
@@ -617,8 +621,9 @@ impl Agent {
                             ChatEvent::ReasoningDelta(text) => {
                                 yield TurnEvent::ReasoningDelta(text);
                             }
-                            ChatEvent::Done { tool_calls: tcs, usage } => {
+                            ChatEvent::Done { tool_calls: tcs, usage, finish_reason } => {
                                 tool_calls = tcs;
+                                truncated = finish_reason.as_deref() == Some("length");
                                 if let Some(u) = usage {
                                     self.tokens.prompt = self
                                         .tokens
@@ -635,6 +640,11 @@ impl Agent {
                 }
 
                 yield TurnEvent::AssistantEnd;
+                if truncated {
+                    yield TurnEvent::Notice(
+                        "response cut off at the model's context limit (num_ctx) — raise it or lower /effort for a complete answer".to_string(),
+                    );
+                }
 
                 let assistant_msg = Message::Assistant {
                     content: (!content_buf.is_empty()).then_some(content_buf.clone()),
