@@ -369,6 +369,13 @@ struct EditStep {
 }
 
 fn apply_edit(buf: &str, step: &EditStep) -> Result<(String, usize)> {
+    // An empty needle matches at every char boundary: `replace_all`
+    // would interleave new_string between every character (shredding the
+    // file), and even the single-shot path prepends silently. Reject it
+    // — a common model hallucination when it means "insert at the start".
+    if step.old_string.is_empty() {
+        return Err(anyhow!("old_string is empty"));
+    }
     let occurrences = buf.matches(&step.old_string).count();
     if occurrences == 0 {
         return Err(anyhow!("old_string not found"));
@@ -1451,6 +1458,25 @@ mod tests {
         let result = dispatch("edit", &args).await.unwrap();
         assert!(result.contains("3 replacements"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "x x x");
+    }
+
+    #[tokio::test]
+    async fn edit_rejects_empty_old_string_without_touching_file() {
+        let path = tmp_path("edit-empty.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "hi").unwrap();
+        let args = json!({
+            "path": path.to_str().unwrap(),
+            "old_string": "",
+            "new_string": "X",
+            "replace_all": true
+        })
+        .to_string();
+        let err = dispatch("edit", &args).await.unwrap_err().to_string();
+        assert!(err.contains("empty"));
+        // File must be untouched — an empty needle would otherwise shred
+        // it to "XhXiX".
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hi");
     }
 
     #[tokio::test]

@@ -488,6 +488,7 @@ impl Agent {
         user_input: String,
     ) -> impl Stream<Item = Result<TurnEvent>> + 'a {
         try_stream! {
+            self.reconcile_orphaned_tool_calls()?;
             self.push(Message::User { content: user_input })?;
 
             loop {
@@ -634,6 +635,49 @@ impl Agent {
         }
     }
 
+    /// Repair history left inconsistent by an interrupted tool round.
+    ///
+    /// `turn()` persists the assistant message (with its `tool_calls`)
+    /// before it pushes the matching tool results. A Ctrl-C / Esc at a
+    /// Build-mode approval prompt, or a dropped stream mid-dispatch,
+    /// leaves some `tool_calls` without results — both in memory and in
+    /// sqlite (plus the auto-saved `last` alias). Anthropic and strict
+    /// OpenAI-compatible backends reject a dangling `tool_use`, so every
+    /// later turn 400s and the breakage survives `--resume`. Synthesize a
+    /// placeholder result for each unfulfilled call so the conversation
+    /// stays valid. The interrupted round is always the last assistant
+    /// message that carried `tool_calls`; results already recorded follow
+    /// it, so anything of its ids missing from that tail is an orphan.
+    fn reconcile_orphaned_tool_calls(&mut self) -> Result<()> {
+        let Some(idx) = self.messages.iter().rposition(
+            |m| matches!(m, Message::Assistant { tool_calls, .. } if !tool_calls.is_empty()),
+        ) else {
+            return Ok(());
+        };
+        let Message::Assistant { tool_calls, .. } = &self.messages[idx] else {
+            return Ok(());
+        };
+        let ids: Vec<String> = tool_calls.iter().map(|c| c.id.clone()).collect();
+        let fulfilled: BTreeSet<&str> = self.messages[idx + 1..]
+            .iter()
+            .filter_map(|m| match m {
+                Message::Tool { tool_call_id, .. } => Some(tool_call_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        let missing: Vec<String> = ids
+            .into_iter()
+            .filter(|id| !fulfilled.contains(id.as_str()))
+            .collect();
+        for id in missing {
+            self.push(Message::Tool {
+                tool_call_id: id,
+                content: "interrupted: tool was not run".to_string(),
+            })?;
+        }
+        Ok(())
+    }
+
     fn push(&mut self, message: Message) -> Result<()> {
         self.store.append(&self.session_id, self.seq, &message)?;
         self.seq += 1;
@@ -647,6 +691,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use teleia_llm::{ToolCall, ToolCallFunction};
 
     fn tmp_store() -> Store {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -774,5 +819,127 @@ mod tests {
         assert_eq!(agent.reasoning_effort(), Some("low"));
         agent.set_reasoning_effort(None);
         assert_eq!(agent.reasoning_effort(), None);
+    }
+
+    fn tool_call(id: &str) -> ToolCall {
+        ToolCall {
+            id: id.to_string(),
+            kind: "function".to_string(),
+            function: ToolCallFunction {
+                name: "bash".to_string(),
+                arguments: "{}".to_string(),
+            },
+        }
+    }
+
+    fn tool_result_ids(msgs: &[Message]) -> Vec<String> {
+        msgs.iter()
+            .filter_map(|m| match m {
+                Message::Tool { tool_call_id, .. } => Some(tool_call_id.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn reconcile_backfills_a_fully_interrupted_round_and_persists() {
+        let mut agent = fake_agent();
+        agent
+            .push(Message::User {
+                content: "go".into(),
+            })
+            .unwrap();
+        agent
+            .push(Message::Assistant {
+                content: None,
+                tool_calls: vec![tool_call("a"), tool_call("b")],
+            })
+            .unwrap();
+
+        agent.reconcile_orphaned_tool_calls().unwrap();
+
+        // Both orphaned calls get a synthetic result, in order.
+        assert_eq!(tool_result_ids(&agent.messages), vec!["a", "b"]);
+        let contents: Vec<&str> = agent
+            .messages
+            .iter()
+            .filter_map(|m| match m {
+                Message::Tool { content, .. } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(contents.iter().all(|c| c.contains("interrupted")));
+        // The repair is persisted, so --resume reads a valid history.
+        let reloaded = agent.store.load(&agent.session_id).unwrap();
+        assert_eq!(tool_result_ids(&reloaded), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn reconcile_backfills_only_the_missing_ids_after_a_partial_round() {
+        let mut agent = fake_agent();
+        agent
+            .push(Message::User {
+                content: "go".into(),
+            })
+            .unwrap();
+        agent
+            .push(Message::Assistant {
+                content: None,
+                tool_calls: vec![tool_call("a"), tool_call("b"), tool_call("c")],
+            })
+            .unwrap();
+        // Only the first tool ran before the interrupt.
+        agent
+            .push(Message::Tool {
+                tool_call_id: "a".into(),
+                content: "ran a".into(),
+            })
+            .unwrap();
+
+        agent.reconcile_orphaned_tool_calls().unwrap();
+
+        assert_eq!(tool_result_ids(&agent.messages), vec!["a", "b", "c"]);
+        // a keeps its real result; it is not duplicated or overwritten.
+        let a_result = agent.messages.iter().find_map(|m| match m {
+            Message::Tool {
+                tool_call_id,
+                content,
+            } if tool_call_id == "a" => Some(content.clone()),
+            _ => None,
+        });
+        assert_eq!(a_result.as_deref(), Some("ran a"));
+    }
+
+    #[test]
+    fn reconcile_is_a_noop_on_a_complete_history() {
+        let mut agent = fake_agent();
+        agent
+            .push(Message::User {
+                content: "go".into(),
+            })
+            .unwrap();
+        agent
+            .push(Message::Assistant {
+                content: None,
+                tool_calls: vec![tool_call("a")],
+            })
+            .unwrap();
+        agent
+            .push(Message::Tool {
+                tool_call_id: "a".into(),
+                content: "ran a".into(),
+            })
+            .unwrap();
+        agent
+            .push(Message::Assistant {
+                content: Some("done".into()),
+                tool_calls: vec![],
+            })
+            .unwrap();
+        let before = agent.messages.len();
+
+        agent.reconcile_orphaned_tool_calls().unwrap();
+
+        assert_eq!(agent.messages.len(), before);
     }
 }

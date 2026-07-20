@@ -801,8 +801,12 @@ fn render_pull_line(prog: &PullProgress, spinner: &str) {
 
     let line = match (prog.completed, prog.total) {
         (Some(done), Some(total)) if total > 0 => {
-            let pct = (done * 100 / total) as usize;
-            let filled = pct * BAR_WIDTH / 100;
+            // Clamp: a misbehaving pull server can report completed > total,
+            // which would drive `filled` past BAR_WIDTH and underflow the
+            // `BAR_WIDTH - filled` subtraction (release builds wrap and abort
+            // in the huge `repeat`).
+            let pct = ((done * 100 / total) as usize).min(100);
+            let filled = (pct * BAR_WIDTH / 100).min(BAR_WIDTH);
             let bar = format!("[{}{}]", "█".repeat(filled), "░".repeat(BAR_WIDTH - filled));
             format!(
                 "\r  {spinner} {status} {digest_short} {bar} {pct:>3}% ({done}/{total})  ",
@@ -894,5 +898,23 @@ fn human_bytes(n: u64) -> String {
         format!("{:.1}KB", n as f64 / KB as f64)
     } else {
         format!("{n}B")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_pull_line_survives_completed_over_total() {
+        // A misbehaving server reporting completed > total must not
+        // underflow BAR_WIDTH - filled (which aborts release builds).
+        let prog = PullProgress {
+            status: "pulling".into(),
+            digest: Some("sha256:deadbeefcafe0000".into()),
+            total: Some(50),
+            completed: Some(100),
+        };
+        render_pull_line(&prog, "-");
     }
 }

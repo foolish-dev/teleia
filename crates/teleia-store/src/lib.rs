@@ -144,8 +144,13 @@ impl Store {
         let mut out = Vec::new();
         for row in rows {
             let payload = row?;
-            let message: Message = serde_json::from_str(&payload)?;
-            out.push(message);
+            // Skip a single corrupt/legacy/truncated row rather than
+            // aborting the whole load — one bad row must not make an
+            // otherwise-valid session unresumable (`--resume` unwraps this).
+            match serde_json::from_str::<Message>(&payload) {
+                Ok(message) => out.push(message),
+                Err(e) => eprintln!("skipping unreadable message in session {session_id}: {e}"),
+            }
         }
         Ok(out)
     }
@@ -337,5 +342,46 @@ mod tests {
         assert!(
             matches!(&messages[1], Message::Assistant { content: Some(c), .. } if c == "hello")
         );
+    }
+
+    #[test]
+    fn load_skips_corrupt_row_and_keeps_the_rest() {
+        let path = tmp_db();
+        let _cleanup = Cleanup(path.clone());
+        let store = Store::open_at(&path).unwrap();
+        let session = store.create_session("m").unwrap();
+
+        store
+            .append(
+                &session,
+                0,
+                &Message::User {
+                    content: "one".into(),
+                },
+            )
+            .unwrap();
+        // A corrupt/legacy payload lands between two valid messages.
+        store
+            .conn
+            .execute(
+                "INSERT INTO messages (session_id, seq, payload) VALUES (?1, ?2, ?3)",
+                params![session, 1_i64, "{not valid json"],
+            )
+            .unwrap();
+        store
+            .append(
+                &session,
+                2,
+                &Message::User {
+                    content: "two".into(),
+                },
+            )
+            .unwrap();
+
+        // One bad row must not sink the whole session.
+        let messages = store.load(&session).unwrap();
+        assert_eq!(messages.len(), 2);
+        assert!(matches!(&messages[0], Message::User { content } if content == "one"));
+        assert!(matches!(&messages[1], Message::User { content } if content == "two"));
     }
 }
