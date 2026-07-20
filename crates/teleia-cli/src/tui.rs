@@ -303,6 +303,13 @@ fn current_theme_name() -> &'static str {
 
 enum Entry {
     User(String),
+    /// The model's reasoning/"thinking" stream, rendered dimmed and kept
+    /// distinct from the answer. Present for reasoning models; a
+    /// reasoning-only turn keeps this so it isn't blank.
+    Reasoning {
+        text: String,
+        complete: bool,
+    },
     Assistant {
         text: String,
         complete: bool,
@@ -327,6 +334,7 @@ impl Entry {
     fn searchable_text(&self) -> &str {
         match self {
             Entry::User(t) => t,
+            Entry::Reasoning { text, .. } => text,
             Entry::Assistant { text, .. } => text,
             Entry::Tool { output, .. } => output,
             Entry::Info(t) | Entry::Error(t) => t,
@@ -696,10 +704,27 @@ impl State {
     fn apply(&mut self, evt: TurnEvent) {
         match evt {
             TurnEvent::AssistantStart => {
-                self.push(Entry::Assistant {
-                    text: String::new(),
+                // The answer/reasoning bubbles are created lazily by the
+                // first delta, so a reasoning-first turn renders the
+                // thinking above the answer (and an all-reasoning turn
+                // never leaves a stray empty answer bubble).
+            }
+            TurnEvent::ReasoningDelta(text) => {
+                if let Some(Entry::Reasoning {
+                    text: t,
                     complete: false,
-                });
+                }) = self.history.last_mut()
+                {
+                    t.push_str(&text);
+                } else {
+                    self.push(Entry::Reasoning {
+                        text,
+                        complete: false,
+                    });
+                }
+                if self.follow_bottom {
+                    self.scroll = 0;
+                }
             }
             TurnEvent::AssistantDelta(text) => {
                 if let Some(Entry::Assistant {
@@ -719,8 +744,20 @@ impl State {
                 }
             }
             TurnEvent::AssistantEnd => {
-                if let Some(Entry::Assistant { complete, text }) = self.history.last_mut() {
-                    *complete = true;
+                // Mark this phase's trailing reasoning + answer entries
+                // complete, then drop an empty answer bubble — a
+                // reasoning-only turn keeps its thinking so it isn't blank.
+                for entry in self.history.iter_mut().rev() {
+                    match entry {
+                        Entry::Assistant { complete, .. } | Entry::Reasoning { complete, .. }
+                            if !*complete =>
+                        {
+                            *complete = true;
+                        }
+                        _ => break,
+                    }
+                }
+                if let Some(Entry::Assistant { text, .. }) = self.history.last() {
                     if text.is_empty() {
                         self.history.pop();
                     }
@@ -5201,6 +5238,27 @@ fn render_entry(entry: &Entry, frame: usize, username: &str) -> Vec<Line<'static
                 )));
             }
         }
+        Entry::Reasoning { text, complete } => {
+            let header = if *complete {
+                "τέλεια · thinking"
+            } else if (frame / 10).is_multiple_of(2) {
+                "τέλεια · thinking ▌"
+            } else {
+                "τέλεια · thinking  "
+            };
+            out.push(Line::from(Span::styled(
+                header,
+                Style::default()
+                    .fg(th.dim)
+                    .add_modifier(Modifier::ITALIC | Modifier::BOLD),
+            )));
+            for line in text.lines() {
+                out.push(Line::from(Span::styled(
+                    line.to_string(),
+                    Style::default().fg(th.dim).add_modifier(Modifier::ITALIC),
+                )));
+            }
+        }
         Entry::Assistant { text, complete } => {
             // Blink "▌" while streaming. Frame ticks every ~50ms; /10 gives
             // ~2 Hz.
@@ -6372,6 +6430,47 @@ mod tests {
         assert_eq!(s.search_idx, Some(2), "wraps past start");
         search_prev(&mut s);
         assert_eq!(s.search_idx, Some(1));
+    }
+
+    #[test]
+    fn reasoning_only_turn_is_not_blank() {
+        // Regression: a reasoning model whose whole turn is thinking (empty
+        // `content`) must not render blank — the thinking stays visible.
+        let mut s = State::new("dummy", "dummy");
+        s.apply(TurnEvent::AssistantStart);
+        s.apply(TurnEvent::ReasoningDelta("weighing ".into()));
+        s.apply(TurnEvent::ReasoningDelta("options".into()));
+        s.apply(TurnEvent::AssistantEnd);
+        assert!(matches!(
+            s.history.last(),
+            Some(Entry::Reasoning { text, complete: true }) if text == "weighing options"
+        ));
+    }
+
+    #[test]
+    fn reasoning_then_answer_keeps_thinking_above_the_reply() {
+        let mut s = State::new("dummy", "dummy");
+        s.apply(TurnEvent::AssistantStart);
+        s.apply(TurnEvent::ReasoningDelta("hmm".into()));
+        s.apply(TurnEvent::AssistantDelta("42".into()));
+        s.apply(TurnEvent::AssistantEnd);
+        assert_eq!(s.history.len(), 2);
+        assert!(
+            matches!(&s.history[0], Entry::Reasoning { text, complete: true } if text == "hmm")
+        );
+        assert!(matches!(&s.history[1], Entry::Assistant { text, complete: true } if text == "42"));
+    }
+
+    #[test]
+    fn content_only_turn_has_no_reasoning_entry() {
+        let mut s = State::new("dummy", "dummy");
+        s.apply(TurnEvent::AssistantStart);
+        s.apply(TurnEvent::AssistantDelta("hi".into()));
+        s.apply(TurnEvent::AssistantEnd);
+        assert_eq!(s.history.len(), 1);
+        assert!(
+            matches!(s.history.last(), Some(Entry::Assistant { text, complete: true }) if text == "hi")
+        );
     }
 
     #[test]

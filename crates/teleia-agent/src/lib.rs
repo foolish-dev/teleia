@@ -46,6 +46,9 @@ fn system_prompt() -> String {
 pub enum TurnEvent {
     AssistantStart,
     AssistantDelta(String),
+    /// A chunk of the model's reasoning/"thinking", shown separately from
+    /// the answer and not stored in the message history.
+    ReasoningDelta(String),
     AssistantEnd,
     /// Sent before each tool dispatch when the agent isn't in auto
     /// mode. The TUI must send a [`ToolApproval`] through `responder`
@@ -608,6 +611,11 @@ impl Agent {
                             ChatEvent::ContentDelta(text) => {
                                 content_buf.push_str(&text);
                                 yield TurnEvent::AssistantDelta(text);
+                            }
+                            // Reasoning is display-only: shown live but not
+                            // accumulated into the answer or the stored message.
+                            ChatEvent::ReasoningDelta(text) => {
+                                yield TurnEvent::ReasoningDelta(text);
                             }
                             ChatEvent::Done { tool_calls: tcs, usage } => {
                                 tool_calls = tcs;
