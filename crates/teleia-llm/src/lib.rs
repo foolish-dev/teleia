@@ -118,6 +118,8 @@ pub struct PullProgress {
 #[derive(Debug, Clone)]
 pub enum ChatEvent {
     ContentDelta(String),
+    /// A chunk of the model's reasoning/"thinking" (see [`ChunkDelta`]).
+    ReasoningDelta(String),
     Done {
         tool_calls: Vec<ToolCall>,
         usage: Option<Usage>,
@@ -173,6 +175,13 @@ struct StreamChoice {
 struct ChunkDelta {
     #[serde(default)]
     content: Option<String>,
+    /// Reasoning/"thinking" channel. Reasoning models stream their
+    /// chain-of-thought here with `content` empty until they finish
+    /// thinking — Ollama uses `reasoning`, DeepSeek-style backends use
+    /// `reasoning_content`. Without surfacing it, a turn that is all
+    /// reasoning (or gets cut off mid-think) renders blank.
+    #[serde(default, alias = "reasoning_content")]
+    reasoning: Option<String>,
     #[serde(default)]
     tool_calls: Vec<ToolCallDelta>,
 }
@@ -672,6 +681,11 @@ impl LlmClient {
                                     yield ChatEvent::ContentDelta(text);
                                 }
                             }
+                            if let Some(text) = choice.delta.reasoning {
+                                if !text.is_empty() {
+                                    yield ChatEvent::ReasoningDelta(text);
+                                }
+                            }
                             for tcd in choice.delta.tool_calls {
                                 accumulate(&mut accumulated, tcd);
                             }
@@ -736,6 +750,18 @@ fn accumulate(acc: &mut Vec<AccTool>, delta: ToolCallDelta) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chunk_delta_parses_reasoning_and_its_alias() {
+        // Ollama streams the thinking channel as `reasoning` with `content`
+        // empty; DeepSeek-style backends use `reasoning_content`. Both must
+        // land in the reasoning field so the turn isn't rendered blank.
+        let d: ChunkDelta = serde_json::from_str(r#"{"content":"","reasoning":"think"}"#).unwrap();
+        assert_eq!(d.content.as_deref(), Some(""));
+        assert_eq!(d.reasoning.as_deref(), Some("think"));
+        let aliased: ChunkDelta = serde_json::from_str(r#"{"reasoning_content":"deep"}"#).unwrap();
+        assert_eq!(aliased.reasoning.as_deref(), Some("deep"));
+    }
 
     fn delta(
         index: usize,
