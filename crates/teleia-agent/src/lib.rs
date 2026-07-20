@@ -487,11 +487,37 @@ impl Agent {
         &'a mut self,
         user_input: String,
     ) -> impl Stream<Item = Result<TurnEvent>> + 'a {
+        // Cap the tool-call rounds in a single turn. A model that emits a
+        // tool call every round (or a hostile MCP tool that keeps prompting
+        // one) would otherwise loop forever, burning paid round-trips and
+        // growing the session unbounded, stoppable only by a human pressing
+        // Esc. This is the inner per-turn cap; the TUI's `/loop` has its own
+        // outer re-submission cap.
+        const MAX_TOOL_STEPS: usize = 100;
         try_stream! {
             self.reconcile_orphaned_tool_calls()?;
             self.push(Message::User { content: user_input })?;
 
+            let mut steps = 0usize;
             loop {
+                if steps >= MAX_TOOL_STEPS {
+                    // History ends on a tool result here (a valid stop), so
+                    // note it and end the turn; the next user turn can pick
+                    // up if the halt was premature.
+                    let note = format!(
+                        "stopped after {MAX_TOOL_STEPS} tool steps without a final answer — ask me to continue if that was premature"
+                    );
+                    yield TurnEvent::AssistantStart;
+                    yield TurnEvent::AssistantDelta(note.clone());
+                    yield TurnEvent::AssistantEnd;
+                    self.push(Message::Assistant {
+                        content: Some(note),
+                        tool_calls: Vec::new(),
+                    })?;
+                    yield TurnEvent::TurnEnd;
+                    return;
+                }
+
                 yield TurnEvent::AssistantStart;
                 let mut content_buf = String::new();
                 let mut tool_calls = Vec::new();
@@ -631,6 +657,7 @@ impl Agent {
                         content: output,
                     })?;
                 }
+                steps += 1;
             }
         }
     }
