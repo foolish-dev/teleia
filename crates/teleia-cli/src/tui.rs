@@ -1796,7 +1796,7 @@ fn arg_placeholder(cmd: &str) -> Option<&'static str> {
         "key" => Some(" PROVIDER"),
         "cd" => Some(" PATH"),
         "mcps" => Some(" [enable|disable NAME]"),
-        "effort" => Some(" [off|low|medium|high]"),
+        "effort" => Some(" [off|low|medium|high|xhigh|max|ultracode]"),
         "loop" => Some(" N PROMPT"),
         _ => None,
     }
@@ -2018,7 +2018,7 @@ fn ex_arg_placeholder(cmd: &str) -> Option<&'static str> {
         "model" | "theme" | "colorscheme" => Some(" [NAME]"),
         "notify" | "transparent" => Some(" [on|off]"),
         "mcps" => Some(" [enable|disable NAME]"),
-        "effort" => Some(" [off|low|medium|high]"),
+        "effort" => Some(" [off|low|medium|high|xhigh|max|ultracode]"),
         "loop" => Some(" N PROMPT"),
         _ => None,
     }
@@ -2905,7 +2905,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
             if arg.is_empty() {
                 let cur = agent.reasoning_effort().unwrap_or("off");
                 state.push(Entry::Info(format!(
-                    "reasoning effort: {cur}  ·  /effort [off|low|medium|high]"
+                    "reasoning effort: {cur}  ·  /effort [off|low|medium|high|xhigh|max|ultracode]"
                 )));
             } else {
                 match arg {
@@ -2914,7 +2914,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                         agent.set_pref("reasoning_effort", "off");
                         state.push(Entry::Info("reasoning effort: off".into()));
                     }
-                    "low" | "medium" | "high" => {
+                    other if teleia_agent::is_reasoning_effort(other) => {
                         agent.set_reasoning_effort(Some(arg.to_string()));
                         agent.set_pref("reasoning_effort", arg);
                         state.push(Entry::Info(format!(
@@ -2922,7 +2922,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                         )));
                     }
                     other => state.push(Entry::Error(format!(
-                        "unknown effort '{other}' (use: off · low · medium · high)"
+                        "unknown effort '{other}' (use: off · low · medium · high · xhigh · max · ultracode)"
                     ))),
                 }
             }
@@ -2940,7 +2940,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
         }
         "help" | "?" => {
             state.push(Entry::Info(
-                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /effort [off|low|medium|high] · /key PROVIDER · /keys · /mcps · /lsps · /tools · /plan · /build · /auto · /loop N PROMPT · /prompt [NAME] · /theme [NAME] · /notify [on|off] · /transparent [on|off] · /copy · /cd PATH · /pwd · /version · /show · /help · /quit"
+                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /effort [off|low|medium|high|xhigh|max|ultracode] · /key PROVIDER · /keys · /mcps · /lsps · /tools · /plan · /build · /auto · /loop N PROMPT · /prompt [NAME] · /theme [NAME] · /notify [on|off] · /transparent [on|off] · /copy · /cd PATH · /pwd · /version · /show · /help · /quit"
                     .into(),
             ));
         }
