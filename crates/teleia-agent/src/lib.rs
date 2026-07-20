@@ -146,6 +146,65 @@ fn is_readonly_tool(name: &str) -> bool {
     )
 }
 
+/// Format a Unix timestamp (seconds) as `s-YYYY-MM-DD-HHMMSS` in UTC.
+/// Pure integer math (Howard Hinnant's civil-from-days) so it needs no
+/// date crate and renders identically on every platform teleia ships to —
+/// unlike a libc `strftime`, which we'd have to `cfg`-gate off Windows.
+/// The result is sortable (lexicographic == chronological) and unique per
+/// second, which is enough to give each session a durable alias.
+fn format_session_stamp(unix_secs: u64) -> String {
+    let days = (unix_secs / 86_400) as i64;
+    let sod = unix_secs % 86_400;
+    let (hh, mm, ss) = (sod / 3600, (sod % 3600) / 60, sod % 60);
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let year = if m <= 2 { y + 1 } else { y };
+    format!("s-{year:04}-{m:02}-{d:02}-{hh:02}{mm:02}{ss:02}")
+}
+
+/// A durable, human-recognizable alias for a session created now, so every
+/// session stays browsable in `/list` and loadable via `/load` without a
+/// manual `/save` — in addition to the rolling `last`/`prev` bookmarks.
+fn auto_session_alias() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format_session_stamp(secs)
+}
+
+/// Save the durable auto-alias for a session created now.
+fn save_auto_alias(store: &Store, session_id: &str) {
+    save_auto_alias_named(store, session_id, &auto_session_alias());
+}
+
+/// Save `session_id` under `base`, or the first free `base-N` if another
+/// session already holds `base`. The stamp is second-precision, so a burst
+/// (e.g. rapid `/reset`) would otherwise reuse the name and
+/// `INSERT OR REPLACE` would orphan the earlier session — exactly what this
+/// alias exists to prevent.
+fn save_auto_alias_named(store: &Store, session_id: &str, base: &str) {
+    // `resolve_alias` errs when the name is free; take the first free one.
+    if store.resolve_alias(base).is_err() {
+        let _ = store.save_alias(base, session_id);
+        return;
+    }
+    for n in 2..1000 {
+        let name = format!("{base}-{n}");
+        if store.resolve_alias(&name).is_err() {
+            let _ = store.save_alias(&name, session_id);
+            return;
+        }
+    }
+}
+
 pub struct Agent {
     llm: LlmClient,
     tools: Vec<ToolDef>,
@@ -177,8 +236,11 @@ impl Agent {
     pub fn new(llm: LlmClient, store: Store) -> Result<Self> {
         let session_id = store.create_session(llm.model())?;
         // Auto-bookmark every new session as `last` so the next launch
-        // can `--resume` without the user needing to type `/save`.
+        // can `--resume` without the user needing to type `/save`. Also
+        // give it a durable timestamped alias so it stays browsable in
+        // `/list` after `last` rolls to the next session.
         let _ = store.save_alias("last", &session_id);
+        save_auto_alias(&store, &session_id);
         let mut agent = Self {
             llm,
             tools: teleia_tools::definitions(),
@@ -423,6 +485,7 @@ impl Agent {
         let _ = self.store.save_alias("prev", &self.session_id);
         let session_id = self.store.create_session(self.llm.model())?;
         let _ = self.store.save_alias("last", &session_id);
+        save_auto_alias(&self.store, &session_id);
         self.session_id = session_id;
         self.messages.clear();
         self.seq = 0;
@@ -968,5 +1031,45 @@ mod tests {
         agent.reconcile_orphaned_tool_calls().unwrap();
 
         assert_eq!(agent.messages.len(), before);
+    }
+
+    #[test]
+    fn format_session_stamp_renders_utc_civil_date() {
+        assert_eq!(format_session_stamp(0), "s-1970-01-01-000000");
+        assert_eq!(format_session_stamp(946_684_800), "s-2000-01-01-000000");
+        // Leap day exercises the civil-from-days algorithm.
+        assert_eq!(format_session_stamp(951_782_400), "s-2000-02-29-000000");
+        // Non-zero time-of-day (+1h1m1s).
+        assert_eq!(format_session_stamp(1_609_462_861), "s-2021-01-01-010101");
+    }
+
+    #[test]
+    fn new_session_gets_a_durable_auto_alias() {
+        let agent = fake_agent();
+        let aliases = agent.list_aliases().unwrap();
+        // A timestamped `s-…` alias points at this session, alongside `last`.
+        let auto = aliases
+            .iter()
+            .find(|(name, _, _)| name.starts_with("s-"))
+            .expect("a durable s- auto-alias must exist");
+        assert_eq!(auto.1, agent.session_id);
+        assert!(aliases
+            .iter()
+            .any(|(n, id, _)| n == "last" && *id == agent.session_id));
+    }
+
+    #[test]
+    fn same_second_sessions_disambiguate_instead_of_orphaning() {
+        // Deterministically force the collision path with a fixed base
+        // name: two sessions that share one second must both stay
+        // reachable — the first keeps the base, the second gets `-2`.
+        let store = tmp_store();
+        let s1 = store.create_session("m").unwrap();
+        let s2 = store.create_session("m").unwrap();
+        let base = "s-2026-07-20-164233";
+        save_auto_alias_named(&store, &s1, base);
+        save_auto_alias_named(&store, &s2, base);
+        assert_eq!(store.resolve_alias(base).unwrap(), s1);
+        assert_eq!(store.resolve_alias(&format!("{base}-2")).unwrap(), s2);
     }
 }
