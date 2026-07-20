@@ -123,6 +123,9 @@ pub enum ChatEvent {
     Done {
         tool_calls: Vec<ToolCall>,
         usage: Option<Usage>,
+        /// The final `finish_reason`. `Some("length")` means the response
+        /// was truncated at the token/context limit.
+        finish_reason: Option<String>,
     },
 }
 
@@ -169,6 +172,10 @@ struct StreamChunk {
 struct StreamChoice {
     #[serde(default)]
     delta: ChunkDelta,
+    /// Why generation stopped, on the final chunk: `"stop"` (natural end),
+    /// `"length"` (hit the token/context limit — truncated), etc.
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -656,6 +663,7 @@ impl LlmClient {
             let mut carry: Vec<u8> = Vec::new();
             let mut accumulated: Vec<AccTool> = Vec::new();
             let mut last_usage: Option<Usage> = None;
+            let mut last_finish: Option<String> = None;
 
             while let Some(chunk) = bytes.next().await {
                 let chunk = chunk.context("read stream chunk")?;
@@ -689,6 +697,9 @@ impl LlmClient {
                             for tcd in choice.delta.tool_calls {
                                 accumulate(&mut accumulated, tcd);
                             }
+                            if choice.finish_reason.is_some() {
+                                last_finish = choice.finish_reason;
+                            }
                         }
                     }
                 }
@@ -705,7 +716,7 @@ impl LlmClient {
                 kind: a.kind,
                 function: ToolCallFunction { name: a.name, arguments: a.arguments },
             }).collect();
-            yield ChatEvent::Done { tool_calls, usage: last_usage };
+            yield ChatEvent::Done { tool_calls, usage: last_usage, finish_reason: last_finish };
         }
     }
 }
@@ -761,6 +772,16 @@ mod tests {
         assert_eq!(d.reasoning.as_deref(), Some("think"));
         let aliased: ChunkDelta = serde_json::from_str(r#"{"reasoning_content":"deep"}"#).unwrap();
         assert_eq!(aliased.reasoning.as_deref(), Some("deep"));
+    }
+
+    #[test]
+    fn stream_choice_parses_finish_reason() {
+        let c: StreamChoice =
+            serde_json::from_str(r#"{"delta":{"content":""},"finish_reason":"length"}"#).unwrap();
+        assert_eq!(c.finish_reason.as_deref(), Some("length"));
+        // Absent on non-final chunks.
+        let mid: StreamChoice = serde_json::from_str(r#"{"delta":{"content":"x"}}"#).unwrap();
+        assert_eq!(mid.finish_reason, None);
     }
 
     fn delta(
