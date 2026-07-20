@@ -176,9 +176,9 @@ try {
     # Ollama hint.
     if ($env:NO_OLLAMA_HINT -ne '1') {
         if (Get-Command ollama -ErrorAction SilentlyContinue) {
-            Write-Host "next: 'ollama pull hf.co/FoolDev/Thanatos-27B:Q4_K_M' to grab the default local model, or run 'teleia --model claude-opus-4-7'"
+            Write-Host "next: 'ollama pull hf.co/FoolDev/Thanatos-27B:Q4_K_M' to grab the default local model, or run 'teleia --model claude-fable-5'"
         } else {
-            Write-Host "next: install Ollama (https://ollama.com) for local models, or run 'teleia --model claude-opus-4-7'"
+            Write-Host "next: install Ollama (https://ollama.com) for local models, or run 'teleia --model claude-fable-5'"
         }
     }
 } finally {
