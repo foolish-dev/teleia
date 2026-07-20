@@ -207,10 +207,10 @@ fn save_auto_alias_named(store: &Store, session_id: &str, base: &str) {
 
 /// Settable reasoning-effort tiers, ascending. Sent verbatim as the
 /// OpenAI-standard `reasoning_effort` on chat requests (`off` clears it).
-/// `xhigh`/`max` are the newer high tiers; `ultracode` is the top rung —
-/// teleia has no workflow-orchestration layer, so it passes through like
-/// the rest. Reasoning-incapable models and Ollama ignore the field.
-pub const REASONING_EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max", "ultracode"];
+/// `xhigh`/`max` are the newer high tiers; `leetcode` is the top rung. All
+/// pass through unchanged — reasoning-incapable models and Ollama ignore
+/// the field.
+pub const REASONING_EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max", "leetcode"];
 
 /// Whether `s` is a settable reasoning-effort tier (i.e. not `off`). The
 /// single source of truth for both the `/effort` command and the startup
@@ -1089,7 +1089,7 @@ mod tests {
 
     #[test]
     fn reasoning_effort_allowlist_covers_new_tiers() {
-        for e in ["low", "medium", "high", "xhigh", "max", "ultracode"] {
+        for e in ["low", "medium", "high", "xhigh", "max", "leetcode"] {
             assert!(is_reasoning_effort(e), "{e} should be a valid tier");
         }
         // `off` is handled separately (it clears the field), and garbage
@@ -1104,7 +1104,7 @@ mod tests {
         let mut agent = fake_agent();
         agent.set_reasoning_effort(Some("xhigh".to_string()));
         assert_eq!(agent.reasoning_effort(), Some("xhigh"));
-        agent.set_reasoning_effort(Some("ultracode".to_string()));
-        assert_eq!(agent.reasoning_effort(), Some("ultracode"));
+        agent.set_reasoning_effort(Some("leetcode".to_string()));
+        assert_eq!(agent.reasoning_effort(), Some("leetcode"));
     }
 }
