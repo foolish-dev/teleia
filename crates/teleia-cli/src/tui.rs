@@ -525,6 +525,10 @@ struct State {
     /// Mirror of `agent.permission_mode()`. Kept in sync so the status
     /// bar + Shift+Tab cycle don't need to touch the agent for reads.
     permission_mode: PermissionMode,
+    /// Mirror of `agent.reasoning_effort()` for the status bar. `Some` only
+    /// when a tier is active; the top tier `leetcode` renders as an
+    /// animated rainbow badge.
+    reasoning_effort: Option<String>,
     /// Pre-formatted summary of MCP servers booted at startup. `None`
     /// when no `[mcps.NAME]` entries were configured. Rendered by `/mcps`.
     mcp_summary: Option<String>,
@@ -660,6 +664,7 @@ impl State {
             pending_key_entry: None,
             pending_loop: None,
             permission_mode: PermissionMode::default(),
+            reasoning_effort: None,
             mcp_summary: None,
             lsp_summary: None,
             update_check: None,
@@ -791,6 +796,7 @@ pub async fn run(
 
     let mut state = State::new(agent.session_id(), agent.model());
     state.permission_mode = agent.permission_mode();
+    state.reasoning_effort = agent.reasoning_effort().map(String::from);
     state.mcp_summary = mcp_summary;
     state.lsp_summary = lsp_summary;
     state.update_check = update_check;
@@ -2944,11 +2950,13 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                     "off" | "none" => {
                         agent.set_reasoning_effort(None);
                         agent.set_pref("reasoning_effort", "off");
+                        state.reasoning_effort = None;
                         state.push(Entry::Info("reasoning effort: off".into()));
                     }
                     other if teleia_agent::is_reasoning_effort(other) => {
                         agent.set_reasoning_effort(Some(arg.to_string()));
                         agent.set_pref("reasoning_effort", arg);
+                        state.reasoning_effort = Some(arg.to_string());
                         state.push(Entry::Info(format!(
                             "reasoning effort: {arg} (reasoning-capable models only)"
                         )));
@@ -2980,6 +2988,19 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
             state.push(Entry::Error(format!("unknown command: /{other}")));
         }
     }
+}
+
+/// Per-character colours for the animated `leetcode` effort badge at a
+/// given frame. A six-hue palette cycled by char index + frame, so the
+/// colours flow across the word as a rainbow wave — one hue every couple
+/// of frames (the event loop redraws ~20fps even when idle).
+fn leetcode_badge(th: &Theme, frame: usize) -> Vec<(char, Color)> {
+    let palette = [th.red, th.yellow, th.green, th.cyan, th.blue, th.purple];
+    "leetcode"
+        .chars()
+        .enumerate()
+        .map(|(i, ch)| (ch, palette[(i + frame / 2) % palette.len()]))
+        .collect()
 }
 
 fn draw(f: &mut ratatui::Frame, state: &mut State) {
@@ -3567,6 +3588,17 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
             .bg(chip_bg)
             .add_modifier(Modifier::BOLD),
     ));
+    // Animated rainbow badge for the top effort tier. Only `leetcode`
+    // gets the flourish; the frame counter makes the hues flow.
+    if state.reasoning_effort.as_deref() == Some("leetcode") {
+        status_spans.push(Span::styled(" · ", Style::default().fg(th.dim)));
+        for (ch, color) in leetcode_badge(&th, state.frame) {
+            status_spans.push(Span::styled(
+                ch.to_string(),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ));
+        }
+    }
     status_spans.push(Span::raw("   "));
     // Replace the right-side mode hints while a turn is in flight: the
     // normal mode keys are dropped mid-stream anyway, and surfacing the
@@ -6047,6 +6079,17 @@ mod tests {
         let s = compute_suggestion("/effort le", &[]).unwrap();
         assert_eq!(s.completion, "etcode");
         assert!(compute_suggestion("/effort zzz", &[]).is_none());
+    }
+
+    #[test]
+    fn leetcode_badge_spells_the_word_and_animates() {
+        let f0 = leetcode_badge(&TOKYO_NIGHT, 0);
+        let word: String = f0.iter().map(|(c, _)| c).collect();
+        assert_eq!(word, "leetcode");
+        // Colours flow: two frames on, the palette has advanced, so at
+        // least one character's colour differs.
+        let f2 = leetcode_badge(&TOKYO_NIGHT, 2);
+        assert!(f0.iter().zip(&f2).any(|(a, b)| a.1 != b.1));
     }
 
     #[test]
