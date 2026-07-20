@@ -516,7 +516,7 @@ async fn main() -> Result<()> {
         }
     }
     if let Some(effort) = agent.get_pref("reasoning_effort") {
-        if matches!(effort.as_str(), "low" | "medium" | "high") {
+        if teleia_agent::is_reasoning_effort(&effort) {
             agent.set_reasoning_effort(Some(effort));
         }
     }
