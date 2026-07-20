@@ -16,7 +16,7 @@ pub enum Message {
         content: String,
     },
     Assistant {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default, serialize_with = "serialize_content_or_empty")]
         content: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         tool_calls: Vec<ToolCall>,
@@ -38,6 +38,21 @@ pub struct ToolCall {
 
 fn default_tool_type() -> String {
     "function".to_string()
+}
+
+/// Serialize an assistant message's `content` as a plain string, writing
+/// `""` for `None` rather than omitting the field or emitting `null`.
+/// OpenAI-compatible backends written in Go — notably Ollama (reproduced
+/// on 0.30.8) — type-switch on the JSON `content` value and reject a
+/// missing/`null` content with `400 invalid message content type: <nil>`.
+/// That permanently wedges any session whose history contains an empty
+/// assistant turn (no text, no tool calls). An empty string is accepted by
+/// every provider we route to.
+fn serialize_content_or_empty<S>(content: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(content.as_deref().unwrap_or(""))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -903,6 +918,58 @@ mod tests {
             with.get("reasoning_effort").and_then(|v| v.as_str()),
             Some("medium")
         );
+    }
+
+    #[test]
+    fn assistant_content_always_serializes_as_a_string() {
+        // Regression: Ollama's OpenAI-compat layer rejects a message whose
+        // `content` is absent/null with `invalid message content type:
+        // <nil>`. Every assistant variant must emit a string `content`.
+
+        // Degenerate empty turn (model produced no text and no tool calls) —
+        // the exact shape that wedged a persisted session.
+        let empty = Message::Assistant {
+            content: None,
+            tool_calls: Vec::new(),
+        };
+        let v = serde_json::to_value(&empty).unwrap();
+        assert_eq!(v.get("content").and_then(Value::as_str), Some(""));
+
+        // Tool-call-only turn: content still present as "".
+        let tc = ToolCall {
+            id: "call_1".into(),
+            kind: "function".into(),
+            function: ToolCallFunction {
+                name: "read".into(),
+                arguments: "{}".into(),
+            },
+        };
+        let tool_turn = Message::Assistant {
+            content: None,
+            tool_calls: vec![tc],
+        };
+        let v = serde_json::to_value(&tool_turn).unwrap();
+        assert_eq!(v.get("content").and_then(Value::as_str), Some(""));
+        assert!(v.get("tool_calls").and_then(Value::as_array).is_some());
+
+        // Normal text turn: content passes through unchanged.
+        let text = Message::Assistant {
+            content: Some("hi".into()),
+            tool_calls: Vec::new(),
+        };
+        let v = serde_json::to_value(&text).unwrap();
+        assert_eq!(v.get("content").and_then(Value::as_str), Some("hi"));
+    }
+
+    #[test]
+    fn persisted_content_less_assistant_heals_on_reserialize() {
+        // A session persisted before the fix stored `{"role":"assistant"}`.
+        // Loading and re-sending it must now yield a string `content` so the
+        // stuck session recovers without touching the sqlite store.
+        let stored = r#"{"role":"assistant"}"#;
+        let msg: Message = serde_json::from_str(stored).unwrap();
+        let v = serde_json::to_value(&msg).unwrap();
+        assert_eq!(v.get("content").and_then(Value::as_str), Some(""));
     }
 
     #[test]
