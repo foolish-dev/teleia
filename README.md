@@ -13,7 +13,7 @@
   <a href="https://huggingface.co/FoolDev/Thanatos-27B"><img alt="FoolDev/Thanatos-27B on Hugging Face" src="https://img.shields.io/badge/%F0%9F%A4%97-FoolDev%2FThanatos--27B-bb9af7?logo=huggingface&logoColor=1a1b26&labelColor=24283b"></a>
 </p>
 
-**λ τέλεια — a minimal TUI coding agent (rewritten in Rust btw).** One binary, no daemon. Talks to a local Ollama or any of twenty cloud chat-completions endpoints (≈210 named models in the dropdown). Runs thirty-nine built-in tools (read/write/edit/multi_edit/rm + bash + list/glob/grep + head/tail/tree/stat/diff/which/fetch/wc/sha256/date + apply_patch/mkdir/mv/cp/touch/symlink + lint/format/typecheck/test + git/env + replace/json/base64/hexdump/du/realpath + web_search + todo_write), hosts MCP servers, persists sessions to SQLite, resumes where you left off, and paints an OS-aware welcome banner on launch.
+**λ τέλεια — a minimal TUI coding agent (rewritten in Rust btw).** One binary, no daemon. Talks to a local Ollama or any of twenty cloud chat-completions endpoints (≈210 named models in the dropdown). Runs eighty-five built-in tools (read/write/edit/multi_edit/rm + bash + list/glob/grep/find + head/tail/tree/stat/diff/which/fetch/wc/sha256/date + apply_patch/mkdir/mv/cp/touch/symlink/readlink/hardlink/chmod/truncate/mktemp/pathinfo/du/realpath + slice/sort/cut/comm/column/tr/expand/dedent/strings/count_matches + lint/format/typecheck/test/test_one + git/cargo_metadata/cargo_tree/cloc + env/nproc/os_release/epoch/calc/kill + replace/json/jsonl/json_diff/json_merge/dotenv_parse/ini_to_json/ndjson_to_json + base64/base32/hex/url_encode/md5/sha1/crc32/hash/hmac_sha256/hash_verify/jwt_decode/hexdump + web_search/download/http_request/tcp_check/dns_resolve + todo_write), hosts MCP servers, persists sessions to SQLite, resumes where you left off, and paints an OS-aware welcome banner on launch.
 
 <p align="center">
   <img src="assets/screenshot.svg" alt="τέλεια TUI session" width="780">
@@ -79,7 +79,7 @@ Three stances control tool execution — cycle with `Shift+Tab` or set explicitl
 
 | mode      | chip    | behaviour                                                                  | trigger              |
 | --------- | ------- | -------------------------------------------------------------------------- | -------------------- |
-| **PLAN**  | blue    | only read-only tools (`read` / `list` / `glob` / `grep` / `head` / `tail` / `tree` / `stat` / `diff` / `which` / `fetch` / `wc` / `sha256` / `date` / `lint` / `typecheck` / `test` / `env` / `json` / `base64` / `hexdump` / `du` / `realpath` / `web_search`, plus `git`'s read-only subcommands `status`/`diff`/`log`) run; mutating tools short-circuit with a synthetic "blocked: plan mode" result | `/plan`, `--plan`    |
+| **PLAN**  | blue    | only read-only tools (`read` / `list` / `glob` / `grep` / `head` / `tail` / `tree` / `stat` / `diff` / `which` / `fetch` / `wc` / `sha256` / `date` / `lint` / `typecheck` / `test` / `env` / `json` / `base64` / `hexdump` / `du` / `realpath` / `web_search` / `find` / `readlink` / `pathinfo` / `slice` / `sort` / `cut` / `comm` / `column` / `tr` / `expand` / `dedent` / `strings` / `count_matches` / `nproc` / `os_release` / `epoch` / `calc` / `tcp_check` / `dns_resolve` / `cargo_metadata` / `cargo_tree` / `cloc` / `json_diff` / `json_merge` / `jsonl` / `dotenv_parse` / `ini_to_json` / `ndjson_to_json` / `md5` / `sha1` / `crc32` / `hash` / `hmac_sha256` / `hex` / `base32` / `url_encode` / `hash_verify` / `jwt_decode`, plus `git`'s read-only subcommands `status`/`diff`/`log`/`show`/`blame`/`diff_stat`) run; mutating tools short-circuit with a synthetic "blocked: plan mode" result | `/plan`, `--plan`    |
 | **BUILD** | green (default) | every tool call pauses for `y` allow / `n` deny / `a` allow-all (auto)                          | `/build`, default    |
 | **AUTO**  | red     | every tool dispatches immediately, no prompts                              | `/auto`, `--auto`    |
 
@@ -208,7 +208,7 @@ Twenty-eight built-ins, dispatched in a tool-call loop that runs until the model
 | `format`    | `rustfmt` / `ruff format` (→ `black`) / `prettier` / `gofmt` (writes in place)    |
 | `typecheck` | `cargo check` / `mypy` / `tsc --noEmit` / `go build` by extension                 |
 | `test`      | `cargo test` / `pytest` / `go test ./...` / `npm test` by extension               |
-| `git`       | bounded subcommands: `status` / `diff` / `log` / `add` / `commit`                 |
+| `git`       | bounded subcommands: `status` / `diff` / `log` / `add` / `commit` / `show` / `blame` / `diff_stat` |
 | `symlink`   | create a symlink (refuse-to-clobber)                                              |
 | `env`       | read one env var by `name`, or list all as sorted `KEY=VALUE`                     |
 | `replace`   | regex find/replace in one file (`$1` capture refs); `all: false` for first-only  |
@@ -218,6 +218,49 @@ Twenty-eight built-ins, dispatched in a tool-call loop that runs until the model
 | `du`        | recursive byte size of a file or directory tree (symlinks not followed)          |
 | `realpath`  | canonicalize a path (resolves `.` / `..` / symlinks; must exist)                 |
 | `web_search` | Brave Search API (`BRAVE_API_KEY` env) → numbered title / url / snippet results  |
+| `find`      | recursive search by name-glob / path-regex / type / size / mtime / depth          |
+| `readlink`  | read a symlink's raw target                                                       |
+| `hardlink`  | create a hard link (refuse-to-clobber)                                            |
+| `chmod`     | set Unix mode bits (`755`); on Windows toggles the read-only attribute            |
+| `truncate`  | set a file's length (grow with zeros / shrink)                                    |
+| `mktemp`    | create a unique temp file (or dir) and return its path                           |
+| `pathinfo`  | split a path into parent / filename / stem / extension                           |
+| `slice`     | extract an inclusive 1-based line range (optional line numbers)                  |
+| `sort`      | sort a file's lines (numeric / reverse / unique)                                 |
+| `cut`       | extract delimited fields / character ranges per line                             |
+| `comm`      | compare two sorted files → common / only-in-A / only-in-B                        |
+| `strings`   | printable ASCII runs from a binary (min length)                                  |
+| `column`    | align whitespace/delimited columns into a table                                  |
+| `tr`        | translate or delete character sets                                               |
+| `expand`    | tabs ↔ spaces (expand / unexpand)                                                |
+| `dedent`    | strip common leading indentation                                                 |
+| `count_matches` | count regex matches in a file (total / per-line)                             |
+| `epoch`     | convert between Unix timestamps and ISO-8601                                     |
+| `calc`      | evaluate an arithmetic expression (+ - * / % ** parens)                          |
+| `nproc`     | logical CPU count                                                                |
+| `os_release` | OS / arch / family summary                                                       |
+| `kill`      | send a signal to a pid (unix); terminate on Windows                             |
+| `tcp_check` | test TCP connectivity to host:port with a timeout                                |
+| `dns_resolve` | resolve a hostname to IP addresses                                              |
+| `download`  | fetch a URL to a file                                                            |
+| `http_request` | HTTP request with method / headers / body → status + headers + body            |
+| `cargo_metadata` | `cargo metadata` as JSON                                                     |
+| `cargo_tree` | `cargo tree` dependency graph                                                    |
+| `test_one`  | run a single test by name (cargo / pytest / go / npm)                           |
+| `cloc`      | count lines of code by language across a tree                                    |
+| `json_diff` | structural diff of two JSON files                                                |
+| `json_merge` | deep-merge two JSON files                                                        |
+| `jsonl`     | extract a JSON Pointer from each line of a JSONL file                            |
+| `dotenv_parse` | parse a `.env` file to JSON                                                    |
+| `ini_to_json` | parse INI to JSON                                                               |
+| `ndjson_to_json` | fold NDJSON into a JSON array                                                |
+| `md5` / `sha1` / `crc32` | hand-rolled checksums of a file or literal string                      |
+| `hash`      | SHA-2 (`sha224` / `sha384` / `sha512`) digest                                    |
+| `hmac_sha256` | HMAC-SHA256 of a message under a key (webhook signatures)                       |
+| `hash_verify` | check a file/string against an expected SHA-256                                 |
+| `hex` / `base32` | encode/decode a string (hex / RFC 4648 base32)                              |
+| `url_encode` | percent-encode/decode a string (RFC 3986)                                        |
+| `jwt_decode` | decode a JWT's header + payload (no signature check)                            |
 | `todo_write` | replace the session todo list (`pending` / `in_progress` / `completed`); resets on restart |
 
 ## Providers
