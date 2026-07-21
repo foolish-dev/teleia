@@ -627,8 +627,34 @@ impl LlmClient {
         }
     }
 
-    /// Stream chat completions as `ChatEvent`s. The final event is always `Done`.
+    /// True when requests should use Anthropic's native Messages API
+    /// (`/v1/messages`, `x-api-key` auth, content-block messages, native
+    /// tool_use/tool_result, prompt caching) rather than the OpenAI-compatible
+    /// `/chat/completions` path. Keyed on the host so a `claude-*` model
+    /// routed at a proxy (which speaks OpenAI-compat) still takes the OpenAI
+    /// path; only Anthropic's own endpoint gets the native protocol.
+    pub fn uses_anthropic_api(&self) -> bool {
+        self.base_url.contains("api.anthropic.com")
+    }
+
+    /// Stream chat completions as `ChatEvent`s. The final event is always
+    /// `Done`. Dispatches to the native Anthropic Messages API for Anthropic
+    /// endpoints and the OpenAI-compatible `/chat/completions` path for
+    /// everything else; both surface the same `ChatEvent`s so the agent loop
+    /// is protocol-agnostic.
     pub fn stream<'a>(
+        &'a self,
+        messages: &'a [Message],
+        tools: Option<&'a [ToolDef]>,
+    ) -> impl Stream<Item = Result<ChatEvent>> + 'a {
+        if self.uses_anthropic_api() {
+            self.stream_anthropic(messages, tools).boxed()
+        } else {
+            self.stream_openai(messages, tools).boxed()
+        }
+    }
+
+    fn stream_openai<'a>(
         &'a self,
         messages: &'a [Message],
         tools: Option<&'a [ToolDef]>,
@@ -719,6 +745,401 @@ impl LlmClient {
             yield ChatEvent::Done { tool_calls, usage: last_usage, finish_reason: last_finish };
         }
     }
+
+    /// Stream from Anthropic's native Messages API (`/v1/messages`). Converts
+    /// teleia's flat message list to Anthropic's content-block shape, parses
+    /// the SSE event stream (text / thinking / tool_use / usage), and emits
+    /// the same `ChatEvent`s as the OpenAI path. `stop_reason: "max_tokens"`
+    /// maps to `finish_reason: "length"` so the truncation notice still fires.
+    fn stream_anthropic<'a>(
+        &'a self,
+        messages: &'a [Message],
+        tools: Option<&'a [ToolDef]>,
+    ) -> impl Stream<Item = Result<ChatEvent>> + 'a {
+        try_stream! {
+            let url = format!("{}/messages", self.base_url.trim_end_matches('/'));
+            let body = build_anthropic_body(&self.model, messages, tools);
+
+            let mut req = self
+                .http
+                .post(&url)
+                .header("anthropic-version", ANTHROPIC_VERSION)
+                .json(&body);
+            if let Some(key) = &self.api_key {
+                req = req.header("x-api-key", key.as_str());
+            }
+            let resp = req.send().await.with_context(|| format!("POST {url}"))?;
+
+            let status = resp.status();
+            if !status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                Err(anyhow!("anthropic returned {status}: {body}"))?;
+                return;
+            }
+
+            let mut bytes = resp.bytes_stream();
+            let mut buf = String::new();
+            let mut carry: Vec<u8> = Vec::new();
+            let mut tools_acc: Vec<AccTool> = Vec::new();
+            let mut cur_tool: Option<usize> = None;
+            let mut usage = Usage::default();
+            let mut finish: Option<String> = None;
+
+            while let Some(chunk) = bytes.next().await {
+                let chunk = chunk.context("read stream chunk")?;
+                push_utf8_chunk(&mut buf, &mut carry, &chunk);
+
+                while let Some(pos) = buf.find("\n\n") {
+                    let event: String = buf.drain(..pos + 2).collect();
+                    for line in event.lines() {
+                        let Some(payload) = line.strip_prefix("data:") else { continue; };
+                        let payload = payload.trim();
+                        if payload.is_empty() { continue; }
+                        let ev: AnthropicEvent = match serde_json::from_str(payload) {
+                            Ok(e) => e,
+                            Err(_) => continue,
+                        };
+                        match ev {
+                            AnthropicEvent::MessageStart { message } => {
+                                if let Some(u) = message.usage {
+                                    usage.prompt_tokens = u.input_tokens
+                                        + u.cache_read_input_tokens
+                                        + u.cache_creation_input_tokens;
+                                }
+                            }
+                            AnthropicEvent::ContentBlockStart { content_block } => match content_block {
+                                AnthropicBlockStart::ToolUse { id, name } => {
+                                    tools_acc.push(AccTool {
+                                        id,
+                                        kind: "function".into(),
+                                        name,
+                                        arguments: String::new(),
+                                    });
+                                    cur_tool = Some(tools_acc.len() - 1);
+                                }
+                                AnthropicBlockStart::Other => cur_tool = None,
+                            },
+                            AnthropicEvent::ContentBlockDelta { delta } => match delta {
+                                AnthropicBlockDelta::TextDelta { text } => {
+                                    if !text.is_empty() {
+                                        yield ChatEvent::ContentDelta(text);
+                                    }
+                                }
+                                AnthropicBlockDelta::ThinkingDelta { thinking } => {
+                                    if !thinking.is_empty() {
+                                        yield ChatEvent::ReasoningDelta(thinking);
+                                    }
+                                }
+                                AnthropicBlockDelta::InputJsonDelta { partial_json } => {
+                                    if let Some(i) = cur_tool {
+                                        tools_acc[i].arguments.push_str(&partial_json);
+                                    }
+                                }
+                                AnthropicBlockDelta::Other => {}
+                            },
+                            AnthropicEvent::MessageDelta { delta, usage: u } => {
+                                if let Some(reason) = delta.stop_reason {
+                                    // Only "length" is acted on downstream (the
+                                    // truncation notice); other reasons pass through
+                                    // verbatim and are ignored.
+                                    finish = Some(if reason == "max_tokens" {
+                                        "length".to_string()
+                                    } else {
+                                        reason
+                                    });
+                                }
+                                if let Some(u) = u {
+                                    usage.completion_tokens = u.output_tokens;
+                                }
+                            }
+                            AnthropicEvent::Error { error } => {
+                                Err(anyhow!(
+                                    "anthropic stream error: {}: {}",
+                                    error.kind,
+                                    error.message
+                                ))?;
+                            }
+                            AnthropicEvent::Other => {}
+                        }
+                    }
+                }
+                if buf.len() > MAX_STREAM_BUF {
+                    Err(anyhow!("chat stream event exceeded {MAX_STREAM_BUF} bytes"))?;
+                }
+            }
+
+            // A tool_use with no input deltas must still dispatch with valid
+            // JSON, not an empty string.
+            for t in tools_acc.iter_mut() {
+                if t.arguments.trim().is_empty() {
+                    t.arguments = "{}".into();
+                }
+            }
+            let tool_calls = tools_acc
+                .into_iter()
+                .map(|a| ToolCall {
+                    id: a.id,
+                    kind: a.kind,
+                    function: ToolCallFunction { name: a.name, arguments: a.arguments },
+                })
+                .collect();
+            yield ChatEvent::Done { tool_calls, usage: Some(usage), finish_reason: finish };
+        }
+    }
+}
+
+/// Anthropic Messages API version pinned in the `anthropic-version` header.
+const ANTHROPIC_VERSION: &str = "2023-06-01";
+
+/// Output-token ceiling for the native Anthropic path. Anthropic *requires*
+/// `max_tokens` (the OpenAI path sends none). 8192 is accepted by every
+/// current Claude model without a beta header, so it never 400s on capability
+/// grounds; hitting it surfaces as a `length` truncation notice, same as the
+/// OpenAI path.
+const ANTHROPIC_MAX_TOKENS: u32 = 8192;
+
+/// Build the JSON body for a native Anthropic `/v1/messages` request. `system`
+/// is lifted out of the message list into the top-level field (with a cache
+/// breakpoint); a second breakpoint on the final message caches the growing
+/// history across the agent's tool-call loop.
+fn build_anthropic_body(model: &str, messages: &[Message], tools: Option<&[ToolDef]>) -> Value {
+    let (system, mut msgs) = to_anthropic_messages(messages);
+    if let Some(last) = msgs.last_mut() {
+        set_cache_control(last);
+    }
+    let mut body = serde_json::json!({
+        "model": model,
+        "max_tokens": ANTHROPIC_MAX_TOKENS,
+        "messages": msgs,
+        "stream": true,
+    });
+    if let Some(sys) = system {
+        body["system"] = sys;
+    }
+    if let Some(tools) = tools {
+        if !tools.is_empty() {
+            body["tools"] = Value::Array(to_anthropic_tools(tools));
+        }
+    }
+    body
+}
+
+/// Convert teleia's flat message list into Anthropic's `(system, messages)`
+/// shape. `System` turns are concatenated into the returned system value;
+/// consecutive same-role turns are merged into one message with multiple
+/// content blocks — Anthropic requires strict user/assistant alternation, so
+/// parallel `Tool` results (all user-role `tool_result` blocks) must share one
+/// user turn.
+fn to_anthropic_messages(messages: &[Message]) -> (Option<Value>, Vec<Value>) {
+    let mut system_parts: Vec<String> = Vec::new();
+    let mut out: Vec<Value> = Vec::new();
+
+    for m in messages {
+        match m {
+            Message::System { content } => system_parts.push(content.clone()),
+            Message::User { content } => {
+                push_block(
+                    &mut out,
+                    "user",
+                    serde_json::json!({ "type": "text", "text": content }),
+                );
+            }
+            Message::Assistant {
+                content,
+                tool_calls,
+            } => {
+                let mut blocks: Vec<Value> = Vec::new();
+                if let Some(text) = content {
+                    if !text.is_empty() {
+                        blocks.push(serde_json::json!({ "type": "text", "text": text }));
+                    }
+                }
+                for tc in tool_calls {
+                    blocks.push(serde_json::json!({
+                        "type": "tool_use",
+                        "id": tc.id,
+                        "name": tc.function.name,
+                        "input": parse_tool_input(&tc.function.arguments),
+                    }));
+                }
+                // An assistant turn must be non-empty.
+                if blocks.is_empty() {
+                    blocks.push(serde_json::json!({ "type": "text", "text": "" }));
+                }
+                for b in blocks {
+                    push_block(&mut out, "assistant", b);
+                }
+            }
+            Message::Tool {
+                tool_call_id,
+                content,
+            } => {
+                push_block(
+                    &mut out,
+                    "user",
+                    serde_json::json!({
+                        "type": "tool_result",
+                        "tool_use_id": tool_call_id,
+                        "content": content,
+                    }),
+                );
+            }
+        }
+    }
+
+    let system = (!system_parts.is_empty()).then(|| {
+        serde_json::json!([{
+            "type": "text",
+            "text": system_parts.join("\n\n"),
+            "cache_control": { "type": "ephemeral" },
+        }])
+    });
+    (system, out)
+}
+
+/// Append a content block to `out`, merging into the trailing message when it
+/// already has `role` (keeping user/assistant strictly alternating), else
+/// starting a new message.
+fn push_block(out: &mut Vec<Value>, role: &str, block: Value) {
+    if let Some(last) = out.last_mut() {
+        if last["role"] == role {
+            last["content"]
+                .as_array_mut()
+                .expect("message content is an array")
+                .push(block);
+            return;
+        }
+    }
+    out.push(serde_json::json!({ "role": role, "content": [block] }));
+}
+
+/// Anthropic's `tool_use.input` is a JSON object; teleia stores tool-call
+/// arguments as a raw JSON string. Parse it back, defaulting to `{}` for an
+/// empty or malformed value so the request stays well-formed.
+fn parse_tool_input(arguments: &str) -> Value {
+    let trimmed = arguments.trim();
+    if trimmed.is_empty() {
+        return serde_json::json!({});
+    }
+    serde_json::from_str(trimmed).unwrap_or_else(|_| serde_json::json!({}))
+}
+
+/// Convert teleia's OpenAI-style `ToolDef`s to Anthropic tool specs
+/// (`name` / `description` / `input_schema`). A cache breakpoint on the last
+/// tool caches the whole (stable) tool catalogue.
+fn to_anthropic_tools(tools: &[ToolDef]) -> Vec<Value> {
+    let mut out: Vec<Value> = tools
+        .iter()
+        .map(|t| {
+            serde_json::json!({
+                "name": t.function.name,
+                "description": t.function.description,
+                "input_schema": t.function.parameters,
+            })
+        })
+        .collect();
+    if let Some(last) = out.last_mut() {
+        last["cache_control"] = serde_json::json!({ "type": "ephemeral" });
+    }
+    out
+}
+
+/// Mark a message as a cache breakpoint by tagging its last content block —
+/// everything up to and including it is served from Anthropic's prompt cache
+/// on the next request.
+fn set_cache_control(msg: &mut Value) {
+    if let Some(last) = msg["content"].as_array_mut().and_then(|b| b.last_mut()) {
+        last["cache_control"] = serde_json::json!({ "type": "ephemeral" });
+    }
+}
+
+/// A single Server-Sent Event from Anthropic's streaming Messages API. Only
+/// the fields teleia consumes are modelled; `#[serde(other)]` swallows the
+/// event types it ignores (`ping`, `message_stop`, `content_block_stop`).
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum AnthropicEvent {
+    MessageStart {
+        message: AnthropicMessageStart,
+    },
+    ContentBlockStart {
+        content_block: AnthropicBlockStart,
+    },
+    ContentBlockDelta {
+        delta: AnthropicBlockDelta,
+    },
+    MessageDelta {
+        delta: AnthropicMessageDelta,
+        #[serde(default)]
+        usage: Option<AnthropicUsage>,
+    },
+    Error {
+        error: AnthropicApiError,
+    },
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnthropicMessageStart {
+    #[serde(default)]
+    usage: Option<AnthropicUsage>,
+}
+
+/// The `content_block` of a `content_block_start`. Only `tool_use` starts are
+/// load-bearing (they open a tool call whose input streams as
+/// `input_json_delta`); text / thinking / redacted_thinking collapse to
+/// `Other`.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum AnthropicBlockStart {
+    ToolUse {
+        id: String,
+        name: String,
+    },
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum AnthropicBlockDelta {
+    TextDelta {
+        text: String,
+    },
+    ThinkingDelta {
+        thinking: String,
+    },
+    InputJsonDelta {
+        partial_json: String,
+    },
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnthropicMessageDelta {
+    #[serde(default)]
+    stop_reason: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct AnthropicUsage {
+    #[serde(default)]
+    input_tokens: u32,
+    #[serde(default)]
+    output_tokens: u32,
+    #[serde(default)]
+    cache_creation_input_tokens: u32,
+    #[serde(default)]
+    cache_read_input_tokens: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnthropicApiError {
+    #[serde(rename = "type")]
+    kind: String,
+    message: String,
 }
 
 struct AccTool {
@@ -761,6 +1182,7 @@ fn accumulate(acc: &mut Vec<AccTool>, delta: ToolCallDelta) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn chunk_delta_parses_reasoning_and_its_alias() {
@@ -1068,5 +1490,200 @@ mod tests {
         push_utf8_chunk(&mut buf, &mut carry, &[b'a', 0xFF, b'b']);
         assert_eq!(buf, "a\u{FFFD}b");
         assert!(carry.is_empty());
+    }
+
+    fn tc(id: &str, name: &str, args: &str) -> ToolCall {
+        ToolCall {
+            id: id.into(),
+            kind: "function".into(),
+            function: ToolCallFunction {
+                name: name.into(),
+                arguments: args.into(),
+            },
+        }
+    }
+
+    #[test]
+    fn to_anthropic_messages_extracts_system_and_coalesces_tool_results() {
+        // Two parallel tool calls → two tool_results. Anthropic requires
+        // strict user/assistant alternation, so both results must land in a
+        // SINGLE user turn, not two consecutive user messages (which 400).
+        let msgs = vec![
+            Message::System {
+                content: "be terse".into(),
+            },
+            Message::User {
+                content: "hi".into(),
+            },
+            Message::Assistant {
+                content: Some("on it".into()),
+                tool_calls: vec![
+                    tc("t1", "read", r#"{"path":"a"}"#),
+                    tc("t2", "read", r#"{"path":"b"}"#),
+                ],
+            },
+            Message::Tool {
+                tool_call_id: "t1".into(),
+                content: "A".into(),
+            },
+            Message::Tool {
+                tool_call_id: "t2".into(),
+                content: "B".into(),
+            },
+        ];
+        let (system, out) = to_anthropic_messages(&msgs);
+
+        let system = system.expect("system lifted out");
+        assert_eq!(system[0]["text"], "be terse");
+        assert_eq!(system[0]["cache_control"]["type"], "ephemeral");
+
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0]["role"], "user");
+        assert_eq!(out[0]["content"][0]["text"], "hi");
+
+        assert_eq!(out[1]["role"], "assistant");
+        assert_eq!(out[1]["content"][0]["type"], "text");
+        assert_eq!(out[1]["content"][1]["type"], "tool_use");
+        assert_eq!(out[1]["content"][1]["id"], "t1");
+        assert_eq!(out[1]["content"][1]["input"]["path"], "a");
+        assert_eq!(out[1]["content"][2]["id"], "t2");
+
+        assert_eq!(out[2]["role"], "user");
+        let results = out[2]["content"].as_array().unwrap();
+        assert_eq!(results.len(), 2, "both tool_results share one user turn");
+        assert_eq!(results[0]["type"], "tool_result");
+        assert_eq!(results[0]["tool_use_id"], "t1");
+        assert_eq!(results[1]["tool_use_id"], "t2");
+    }
+
+    #[test]
+    fn build_anthropic_body_sets_required_fields_and_cache_breakpoints() {
+        let msgs = vec![
+            Message::System {
+                content: "sys".into(),
+            },
+            Message::User {
+                content: "hello".into(),
+            },
+        ];
+        let tools = vec![ToolDef::new(
+            "read",
+            "read a file",
+            json!({ "type": "object" }),
+        )];
+        let body = build_anthropic_body("claude-x", &msgs, Some(&tools));
+
+        assert_eq!(body["model"], "claude-x");
+        assert_eq!(body["max_tokens"], 8192);
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["system"][0]["text"], "sys");
+        assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(body["tools"][0]["name"], "read");
+        assert_eq!(body["tools"][0]["input_schema"]["type"], "object");
+        assert_eq!(body["tools"][0]["cache_control"]["type"], "ephemeral");
+
+        let last = body["messages"].as_array().unwrap().last().unwrap();
+        let last_block = last["content"].as_array().unwrap().last().unwrap();
+        assert_eq!(last_block["cache_control"]["type"], "ephemeral");
+    }
+
+    #[test]
+    fn parse_tool_input_defaults_empty_and_malformed_to_object() {
+        assert_eq!(parse_tool_input(""), json!({}));
+        assert_eq!(parse_tool_input("   "), json!({}));
+        assert_eq!(parse_tool_input("not json"), json!({}));
+        assert_eq!(parse_tool_input(r#"{"a":1}"#), json!({ "a": 1 }));
+    }
+
+    #[test]
+    fn anthropic_events_parse_the_streamed_shapes() {
+        // message_start carries input usage (incl. cache hits).
+        let ev: AnthropicEvent = serde_json::from_str(
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":5}}}"#,
+        )
+        .unwrap();
+        match ev {
+            AnthropicEvent::MessageStart { message } => {
+                let u = message.usage.unwrap();
+                assert_eq!(u.input_tokens, 10);
+                assert_eq!(u.cache_read_input_tokens, 5);
+            }
+            _ => panic!("expected message_start"),
+        }
+
+        // tool_use block start opens a tool call.
+        let ev: AnthropicEvent = serde_json::from_str(
+            r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tu","name":"read","input":{}}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            ev,
+            AnthropicEvent::ContentBlockStart {
+                content_block: AnthropicBlockStart::ToolUse { id, name }
+            } if id == "tu" && name == "read"
+        ));
+
+        // text / thinking / input_json deltas.
+        let text: AnthropicEvent = serde_json::from_str(
+            r#"{"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            text,
+            AnthropicEvent::ContentBlockDelta { delta: AnthropicBlockDelta::TextDelta { text } } if text == "hi"
+        ));
+        let think: AnthropicEvent = serde_json::from_str(
+            r#"{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"hmm"}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            think,
+            AnthropicEvent::ContentBlockDelta { delta: AnthropicBlockDelta::ThinkingDelta { thinking } } if thinking == "hmm"
+        ));
+        let json_delta: AnthropicEvent = serde_json::from_str(
+            r#"{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\"p\":1}"}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            json_delta,
+            AnthropicEvent::ContentBlockDelta { delta: AnthropicBlockDelta::InputJsonDelta { partial_json } } if partial_json == r#"{"p":1}"#
+        ));
+
+        // message_delta: stop_reason + cumulative output usage.
+        let ev: AnthropicEvent = serde_json::from_str(
+            r#"{"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":42}}"#,
+        )
+        .unwrap();
+        match ev {
+            AnthropicEvent::MessageDelta { delta, usage } => {
+                assert_eq!(delta.stop_reason.as_deref(), Some("max_tokens"));
+                assert_eq!(usage.unwrap().output_tokens, 42);
+            }
+            _ => panic!("expected message_delta"),
+        }
+
+        // Ignored event types collapse to Other rather than erroring the parse.
+        assert!(matches!(
+            serde_json::from_str::<AnthropicEvent>(r#"{"type":"ping"}"#).unwrap(),
+            AnthropicEvent::Other
+        ));
+        assert!(matches!(
+            serde_json::from_str::<AnthropicEvent>(r#"{"type":"content_block_stop","index":0}"#)
+                .unwrap(),
+            AnthropicEvent::Other
+        ));
+
+        // Mid-stream errors surface.
+        let ev: AnthropicEvent = serde_json::from_str(
+            r#"{"type":"error","error":{"type":"overloaded_error","message":"busy"}}"#,
+        )
+        .unwrap();
+        match ev {
+            AnthropicEvent::Error { error } => {
+                assert_eq!(error.kind, "overloaded_error");
+                assert_eq!(error.message, "busy");
+            }
+            _ => panic!("expected error"),
+        }
     }
 }
