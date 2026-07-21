@@ -310,6 +310,54 @@ pub fn definitions() -> Vec<ToolDef> {
                 "name": { "type": "string", "description": "Single variable to read; omit to list all" }
             } }),
         ),
+        ToolDef::new(
+            "replace",
+            "Regex find-and-replace inside a single file, written in place. Unlike `edit` (literal, unique-match), this substitutes a Rust regex; `replacement` may reference capture groups as `$1` / `$name`. Replaces every match unless `all` is false (then only the first). Returns the occurrence count.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" },
+                "pattern": { "type": "string", "description": "Rust regex to match" },
+                "replacement": { "type": "string", "description": "Replacement text; `$1`/`$name` expand capture groups" },
+                "all": { "type": "boolean", "description": "Replace every match (default true); false replaces only the first" }
+            }, "required": ["path", "pattern", "replacement"] }),
+        ),
+        ToolDef::new(
+            "json",
+            "Extract a value from a JSON file by RFC 6901 JSON Pointer (e.g. `/dependencies/serde`, `/scripts/0`). An empty pointer returns the whole document. Result is pretty-printed JSON. Cheaper and more precise than reading + eyeballing a big JSON file.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" },
+                "pointer": { "type": "string", "description": "JSON Pointer; empty string selects the root document" }
+            }, "required": ["path", "pointer"] }),
+        ),
+        ToolDef::new(
+            "base64",
+            "Base64-encode or -decode a UTF-8 string. Encodes `data` by default; set `decode: true` to decode. Standard alphabet, with `=` padding. Handy for JWT segments, data URIs, and small blobs without shelling out.",
+            json!({ "type": "object", "properties": {
+                "data": { "type": "string" },
+                "decode": { "type": "boolean", "description": "Decode `data` instead of encoding it (default false)" }
+            }, "required": ["data"] }),
+        ),
+        ToolDef::new(
+            "hexdump",
+            "Hex + ASCII dump of a file's first N bytes (default 256, capped at 4096), 16 bytes per row with offsets — like `xxd`. For inspecting binaries or encoding issues without dumping raw bytes into the transcript.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" },
+                "bytes": { "type": "integer", "description": "How many leading bytes to dump (default 256, cap 4096)" }
+            }, "required": ["path"] }),
+        ),
+        ToolDef::new(
+            "du",
+            "Total size in bytes of a file, or of a directory tree (recursive, symlinks not followed). Reports the byte count and a human-readable figure.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" }
+            }, "required": ["path"] }),
+        ),
+        ToolDef::new(
+            "realpath",
+            "Canonicalize a path to its absolute form, resolving `.`, `..`, and symlinks. The path must exist.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" }
+            }, "required": ["path"] }),
+        ),
     ]
 }
 
@@ -350,6 +398,12 @@ pub async fn dispatch(name: &str, arguments: &str) -> Result<String> {
         "git" => git_tool(args).await,
         "symlink" => symlink_tool(args).await,
         "env" => env_tool(args).await,
+        "replace" => replace_tool(args).await,
+        "json" => json_tool(args).await,
+        "base64" => base64_tool(args).await,
+        "hexdump" => hexdump_tool(args).await,
+        "du" => du_tool(args).await,
+        "realpath" => realpath_tool(args).await,
         other => Err(anyhow!("unknown tool: {other}")),
     }
 }
@@ -1433,6 +1487,230 @@ async fn env_tool(args: Value) -> Result<String> {
     }
 }
 
+#[derive(Deserialize)]
+struct ReplaceArgs {
+    path: String,
+    pattern: String,
+    replacement: String,
+    #[serde(default = "default_true")]
+    all: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+async fn replace_tool(args: Value) -> Result<String> {
+    let ReplaceArgs {
+        path,
+        pattern,
+        replacement,
+        all,
+    } = serde_json::from_value(args)?;
+    let re = regex::Regex::new(&pattern).with_context(|| format!("invalid regex: {pattern}"))?;
+    let src = tokio::fs::read_to_string(&path)
+        .await
+        .with_context(|| format!("read {path}"))?;
+    let count = if all {
+        re.find_iter(&src).count()
+    } else {
+        re.find(&src).map_or(0, |_| 1)
+    };
+    let out = if all {
+        re.replace_all(&src, replacement.as_str())
+    } else {
+        re.replace(&src, replacement.as_str())
+    };
+    tokio::fs::write(&path, out.as_ref())
+        .await
+        .with_context(|| format!("write {path}"))?;
+    Ok(format!("replaced {count} occurrence(s) in {path}"))
+}
+
+#[derive(Deserialize)]
+struct JsonArgs {
+    path: String,
+    pointer: String,
+}
+
+async fn json_tool(args: Value) -> Result<String> {
+    let JsonArgs { path, pointer } = serde_json::from_value(args)?;
+    let text = tokio::fs::read_to_string(&path)
+        .await
+        .with_context(|| format!("read {path}"))?;
+    let doc: Value =
+        serde_json::from_str(&text).with_context(|| format!("parsing JSON from {path}"))?;
+    let found = if pointer.is_empty() {
+        &doc
+    } else {
+        doc.pointer(&pointer)
+            .ok_or_else(|| anyhow!("no value at pointer `{pointer}`"))?
+    };
+    Ok(serde_json::to_string_pretty(found)?)
+}
+
+#[derive(Deserialize)]
+struct Base64Args {
+    data: String,
+    #[serde(default)]
+    decode: bool,
+}
+
+async fn base64_tool(args: Value) -> Result<String> {
+    let Base64Args { data, decode } = serde_json::from_value(args)?;
+    if decode {
+        let bytes = base64_decode(&data)?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    } else {
+        Ok(base64_encode(data.as_bytes()))
+    }
+}
+
+const B64_ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn base64_encode(data: &[u8]) -> String {
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | (b[2] as u32);
+        out.push(B64_ALPHABET[(n >> 18 & 0x3f) as usize] as char);
+        out.push(B64_ALPHABET[(n >> 12 & 0x3f) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            B64_ALPHABET[(n >> 6 & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            B64_ALPHABET[(n & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+fn base64_decode(s: &str) -> Result<Vec<u8>> {
+    fn val(c: u8) -> Result<u32> {
+        match c {
+            b'A'..=b'Z' => Ok((c - b'A') as u32),
+            b'a'..=b'z' => Ok((c - b'a' + 26) as u32),
+            b'0'..=b'9' => Ok((c - b'0' + 52) as u32),
+            b'+' => Ok(62),
+            b'/' => Ok(63),
+            _ => Err(anyhow!("invalid base64 character: {:?}", c as char)),
+        }
+    }
+    let stripped: Vec<u8> = s.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    let body = stripped
+        .strip_suffix(b"==")
+        .unwrap_or(stripped.strip_suffix(b"=").unwrap_or(&stripped));
+    let mut out = Vec::with_capacity(body.len() / 4 * 3);
+    for chunk in body.chunks(4) {
+        if chunk.len() < 2 {
+            return Err(anyhow!("truncated base64 input"));
+        }
+        let mut n = 0u32;
+        for (i, &c) in chunk.iter().enumerate() {
+            n |= val(c)? << (18 - 6 * i);
+        }
+        out.push((n >> 16 & 0xff) as u8);
+        if chunk.len() >= 3 {
+            out.push((n >> 8 & 0xff) as u8);
+        }
+        if chunk.len() >= 4 {
+            out.push((n & 0xff) as u8);
+        }
+    }
+    Ok(out)
+}
+
+#[derive(Deserialize)]
+struct HexdumpArgs {
+    path: String,
+    #[serde(default)]
+    bytes: Option<usize>,
+}
+
+async fn hexdump_tool(args: Value) -> Result<String> {
+    let HexdumpArgs { path, bytes } = serde_json::from_value(args)?;
+    let cap = bytes.unwrap_or(256).min(4096);
+    let data = tokio::fs::read(&path)
+        .await
+        .with_context(|| format!("read {path}"))?;
+    let slice = &data[..data.len().min(cap)];
+    let mut out = String::new();
+    for (row, bytes) in slice.chunks(16).enumerate() {
+        let mut hex = String::new();
+        let mut ascii = String::new();
+        for (i, &b) in bytes.iter().enumerate() {
+            hex.push_str(&format!("{b:02x} "));
+            if i == 7 {
+                hex.push(' ');
+            }
+            ascii.push(if b.is_ascii_graphic() || b == b' ' {
+                b as char
+            } else {
+                '.'
+            });
+        }
+        out.push_str(&format!("{:08x}  {hex:<49}|{ascii}|\n", row * 16));
+    }
+    if data.len() > cap {
+        out.push_str(&format!("[truncated at {cap} of {} bytes]\n", data.len()));
+    }
+    if out.is_empty() {
+        out.push_str("(empty file)\n");
+    }
+    Ok(out)
+}
+
+async fn du_tool(args: Value) -> Result<String> {
+    let PathArgs { path } = serde_json::from_value(args)?;
+    let total = dir_size(std::path::Path::new(&path)).with_context(|| format!("sizing {path}"))?;
+    Ok(format!("{total} bytes ({}) {path}", human_bytes(total)))
+}
+
+/// Recursive byte total of `path`. A file contributes its own size; a
+/// directory sums its entries. Symlinks are counted by their own (link)
+/// size and never traversed, so cycles can't loop.
+fn dir_size(path: &std::path::Path) -> std::io::Result<u64> {
+    let md = std::fs::symlink_metadata(path)?;
+    if md.file_type().is_dir() {
+        let mut total = 0;
+        for entry in std::fs::read_dir(path)? {
+            total += dir_size(&entry?.path())?;
+        }
+        Ok(total)
+    } else {
+        Ok(md.len())
+    }
+}
+
+fn human_bytes(n: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut size = n as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{n} {}", UNITS[0])
+    } else {
+        format!("{size:.1} {}", UNITS[unit])
+    }
+}
+
+async fn realpath_tool(args: Value) -> Result<String> {
+    let PathArgs { path } = serde_json::from_value(args)?;
+    let canon = std::fs::canonicalize(&path).with_context(|| format!("canonicalize {path}"))?;
+    Ok(canon.display().to_string())
+}
+
 #[derive(Deserialize, Clone)]
 struct TodoItem {
     content: String,
@@ -2047,5 +2325,86 @@ mod tests {
         assert_eq!(dispatch("env", &hit).await.unwrap(), "present");
         let miss = json!({ "name": "TELEIA_DEFINITELY_UNSET_XYZZY" }).to_string();
         assert!(dispatch("env", &miss).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn replace_substitutes_regex_and_counts() {
+        let path = tmp_path("replace.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "foo bar foo baz foo").unwrap();
+        let all = json!({ "path": path.to_str().unwrap(), "pattern": "foo", "replacement": "X" })
+            .to_string();
+        let out = dispatch("replace", &all).await.unwrap();
+        assert!(out.contains("replaced 3 occurrence(s)"), "{out}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "X bar X baz X");
+        // all=false touches only the first match; capture groups expand.
+        std::fs::write(&path, "a1 a2").unwrap();
+        let first = json!({ "path": path.to_str().unwrap(), "pattern": "a(\\d)", "replacement": "[$1]", "all": false })
+            .to_string();
+        dispatch("replace", &first).await.unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[1] a2");
+    }
+
+    #[tokio::test]
+    async fn json_extracts_by_pointer_and_errors_on_miss() {
+        let path = tmp_path("data.json");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, r#"{"a":{"b":[10,20]}}"#).unwrap();
+        let hit = json!({ "path": path.to_str().unwrap(), "pointer": "/a/b/1" }).to_string();
+        assert_eq!(dispatch("json", &hit).await.unwrap(), "20");
+        let root = json!({ "path": path.to_str().unwrap(), "pointer": "" }).to_string();
+        assert!(dispatch("json", &root).await.unwrap().contains("\"b\""));
+        let miss = json!({ "path": path.to_str().unwrap(), "pointer": "/a/z" }).to_string();
+        assert!(dispatch("json", &miss).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn base64_round_trips_and_matches_known_vector() {
+        let enc = json!({ "data": "hello" }).to_string();
+        assert_eq!(dispatch("base64", &enc).await.unwrap(), "aGVsbG8=");
+        let dec = json!({ "data": "aGVsbG8=", "decode": true }).to_string();
+        assert_eq!(dispatch("base64", &dec).await.unwrap(), "hello");
+        // Two-pad boundary.
+        let enc2 = json!({ "data": "hi" }).to_string();
+        assert_eq!(dispatch("base64", &enc2).await.unwrap(), "aGk=");
+        let bad = json!({ "data": "not*base64", "decode": true }).to_string();
+        assert!(dispatch("base64", &bad).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn hexdump_renders_offsets_hex_and_ascii() {
+        let path = tmp_path("hex.bin");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, b"AB\x00").unwrap();
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        let out = dispatch("hexdump", &args).await.unwrap();
+        assert!(out.contains("00000000"), "{out}");
+        assert!(out.contains("41 42 00"), "{out}");
+        assert!(out.contains("|AB.|"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn du_sums_a_directory_tree() {
+        let dir = tmp_path("du-dir");
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("a.txt"), "12345").unwrap(); // 5 bytes
+        std::fs::write(dir.join("sub/b.txt"), "678").unwrap(); // 3 bytes
+        let args = json!({ "path": dir.to_str().unwrap() }).to_string();
+        let out = dispatch("du", &args).await.unwrap();
+        assert!(out.starts_with("8 bytes"), "{out}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn realpath_canonicalizes_existing_path() {
+        let path = tmp_path("real.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "x").unwrap();
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        let out = dispatch("realpath", &args).await.unwrap();
+        assert!(std::path::Path::new(&out).is_absolute(), "{out}");
+        assert!(out.ends_with("real.txt"), "{out}");
+        let missing = json!({ "path": "/definitely/not/here/xyzzy" }).to_string();
+        assert!(dispatch("realpath", &missing).await.is_err());
     }
 }
