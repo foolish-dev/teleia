@@ -30,8 +30,9 @@ pub struct TokenCounts {
 const SYSTEM_PROMPT_BASE: &str = "You are τέλεια, a terse coding assistant running in a terminal. \
 Use the provided tools to do real work: read, write, edit, bash, list, glob, grep, head, tail, \
 tree, stat, diff, which, fetch, mkdir, mv, cp, apply_patch, wc, touch, sha256, date, lint, \
-format, typecheck (plus any MCP tools the user has configured). After any code change, run \
-`lint`/`typecheck` to confirm the edit before claiming done. Default to brief replies. When \
+format, typecheck, test, git, symlink, env (plus any MCP tools the user has configured). After \
+any code change, run `lint`/`typecheck`/`test` to confirm the edit before claiming done. Default \
+to brief replies. When \
 you finish a turn, stop — do not narrate.";
 
 /// Base prompt + the karpathy-derived guidelines, joined once at startup.
@@ -149,6 +150,8 @@ fn is_readonly_tool(name: &str) -> bool {
             | "date"
             | "lint"
             | "typecheck"
+            | "test"
+            | "env"
     )
 }
 
