@@ -358,6 +358,14 @@ pub fn definitions() -> Vec<ToolDef> {
                 "path": { "type": "string" }
             }, "required": ["path"] }),
         ),
+        ToolDef::new(
+            "web_search",
+            "Search the web via the Brave Search API. Returns a numbered list of title / url / snippet results. Requires the `BRAVE_API_KEY` environment variable (create one at https://brave.com/search/api).",
+            json!({ "type": "object", "properties": {
+                "query": { "type": "string" },
+                "count": { "type": "integer", "description": "How many results to return (default 5, capped at 20)" }
+            }, "required": ["query"] }),
+        ),
     ]
 }
 
@@ -404,6 +412,7 @@ pub async fn dispatch(name: &str, arguments: &str) -> Result<String> {
         "hexdump" => hexdump_tool(args).await,
         "du" => du_tool(args).await,
         "realpath" => realpath_tool(args).await,
+        "web_search" => web_search_tool(args).await,
         other => Err(anyhow!("unknown tool: {other}")),
     }
 }
@@ -1008,6 +1017,96 @@ async fn fetch_tool(args: Value) -> Result<String> {
         ));
     }
     Ok(out)
+}
+
+#[derive(Deserialize)]
+struct WebSearchArgs {
+    query: String,
+    #[serde(default)]
+    count: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct BraveResponse {
+    web: Option<BraveWeb>,
+}
+
+#[derive(Deserialize)]
+struct BraveWeb {
+    #[serde(default)]
+    results: Vec<BraveResult>,
+}
+
+#[derive(Deserialize)]
+struct BraveResult {
+    title: String,
+    url: String,
+    #[serde(default)]
+    description: String,
+}
+
+async fn web_search_tool(args: Value) -> Result<String> {
+    let WebSearchArgs { query, count } = serde_json::from_value(args)?;
+    let key = std::env::var("BRAVE_API_KEY").map_err(|_| {
+        anyhow!(
+            "BRAVE_API_KEY is not set — create a key at https://brave.com/search/api and export it"
+        )
+    })?;
+    let count = count.unwrap_or(5).clamp(1, 20).to_string();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()?;
+    let resp = client
+        .get("https://api.search.brave.com/res/v1/web/search")
+        .query(&[("q", query.as_str()), ("count", count.as_str())])
+        .header("X-Subscription-Token", &key)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .with_context(|| format!("searching for {query:?}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(anyhow!("brave search returned {status}: {body}"));
+    }
+    let parsed: BraveResponse = resp.json().await.context("parsing Brave response")?;
+    let results = parsed.web.map(|w| w.results).unwrap_or_default();
+    Ok(format_brave_results(&query, &results))
+}
+
+/// Render Brave results as a numbered `title / url / snippet` list. Split
+/// out from the request so it can be unit-tested without a network call.
+fn format_brave_results(query: &str, results: &[BraveResult]) -> String {
+    if results.is_empty() {
+        return format!("no results for {query:?}");
+    }
+    let mut out = String::new();
+    for (i, r) in results.iter().enumerate() {
+        out.push_str(&format!(
+            "{}. {}\n   {}\n   {}\n",
+            i + 1,
+            r.title,
+            r.url,
+            strip_html(&r.description)
+        ));
+    }
+    out.trim_end().to_string()
+}
+
+/// Strip HTML tags (Brave embeds `<strong>` highlight markup in snippets)
+/// without pulling in an HTML parser.
+fn strip_html(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_tag = false;
+    for c in s.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out
 }
 
 async fn mkdir_tool(args: Value) -> Result<String> {
@@ -2406,5 +2505,37 @@ mod tests {
         assert!(out.ends_with("real.txt"), "{out}");
         let missing = json!({ "path": "/definitely/not/here/xyzzy" }).to_string();
         assert!(dispatch("realpath", &missing).await.is_err());
+    }
+
+    #[test]
+    fn strip_html_drops_tags_and_keeps_text() {
+        assert_eq!(strip_html("a <strong>b</strong> c"), "a b c");
+        assert_eq!(strip_html("plain text"), "plain text");
+        assert_eq!(strip_html("<em>only</em>"), "only");
+    }
+
+    #[test]
+    fn format_brave_results_numbers_strips_and_handles_empty() {
+        let results = vec![
+            BraveResult {
+                title: "First".into(),
+                url: "https://a.example".into(),
+                description: "the <strong>match</strong> here".into(),
+            },
+            BraveResult {
+                title: "Second".into(),
+                url: "https://b.example".into(),
+                description: "plain".into(),
+            },
+        ];
+        let out = format_brave_results("q", &results);
+        assert!(out.contains("1. First"), "{out}");
+        assert!(out.contains("https://a.example"), "{out}");
+        assert!(
+            out.contains("the match here") && !out.contains("<strong>"),
+            "{out}"
+        );
+        assert!(out.contains("2. Second"), "{out}");
+        assert_eq!(format_brave_results("nope", &[]), "no results for \"nope\"");
     }
 }
