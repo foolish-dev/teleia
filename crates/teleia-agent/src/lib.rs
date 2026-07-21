@@ -31,10 +31,13 @@ const SYSTEM_PROMPT_BASE: &str = "You are τέλεια, a terse coding assistant
 Use the provided tools to do real work: read, write, edit, bash, list, glob, grep, head, tail, \
 tree, stat, diff, which, fetch, mkdir, mv, cp, apply_patch, wc, touch, sha256, date, lint, \
 format, typecheck, test, git, symlink, env, replace, json, base64, hexdump, du, realpath, \
-web_search (plus any MCP tools the user has configured). After any code change, run \
-`lint`/`typecheck`/`test` to \
-confirm the edit before claiming done. Default to brief replies. When you finish a turn, stop — \
-do not narrate.";
+web_search, md5, sha1, crc32, hash, hmac_sha256, hex, base32, url_encode, hash_verify, jwt_decode, \
+find, chmod, readlink, hardlink, pathinfo, mktemp, truncate, slice, sort, cut, comm, strings, \
+column, tr, expand, dedent, count_matches, epoch, calc, nproc, os_release, kill, tcp_check, \
+dns_resolve, download, http_request, cargo_metadata, cargo_tree, test_one, cloc, json_diff, \
+json_merge, jsonl, dotenv_parse, ini_to_json, ndjson_to_json (plus any MCP tools the user has \
+configured). After any code change, run `lint`/`typecheck`/`test` to confirm the edit before \
+claiming done. Default to brief replies. When you finish a turn, stop — do not narrate.";
 
 /// Base prompt + the karpathy-derived guidelines, joined once at startup.
 fn system_prompt() -> String {
@@ -159,6 +162,44 @@ fn is_readonly_tool(name: &str) -> bool {
             | "du"
             | "realpath"
             | "web_search"
+            | "md5"
+            | "sha1"
+            | "crc32"
+            | "hash"
+            | "hmac_sha256"
+            | "hex"
+            | "base32"
+            | "url_encode"
+            | "hash_verify"
+            | "jwt_decode"
+            | "find"
+            | "readlink"
+            | "pathinfo"
+            | "slice"
+            | "sort"
+            | "cut"
+            | "comm"
+            | "strings"
+            | "column"
+            | "tr"
+            | "expand"
+            | "dedent"
+            | "count_matches"
+            | "epoch"
+            | "calc"
+            | "nproc"
+            | "os_release"
+            | "tcp_check"
+            | "dns_resolve"
+            | "cargo_metadata"
+            | "cargo_tree"
+            | "cloc"
+            | "json_diff"
+            | "json_merge"
+            | "jsonl"
+            | "dotenv_parse"
+            | "ini_to_json"
+            | "ndjson_to_json"
     )
 }
 
@@ -174,7 +215,7 @@ fn is_readonly_call(name: &str, arguments: &str) -> bool {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(arguments) {
             return matches!(
                 v.get("subcommand").and_then(|s| s.as_str()),
-                Some("status" | "diff" | "log")
+                Some("status" | "diff" | "log" | "show" | "blame" | "diff_stat")
             );
         }
     }
@@ -885,6 +926,18 @@ mod tests {
         assert!(is_readonly_call(
             "git",
             &json!({"subcommand": "log"}).to_string()
+        ));
+        assert!(is_readonly_call(
+            "git",
+            &json!({"subcommand": "show"}).to_string()
+        ));
+        assert!(is_readonly_call(
+            "git",
+            &json!({"subcommand": "blame"}).to_string()
+        ));
+        assert!(is_readonly_call(
+            "git",
+            &json!({"subcommand": "diff_stat"}).to_string()
         ));
         assert!(!is_readonly_call(
             "git",
