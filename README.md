@@ -13,7 +13,7 @@
   <a href="https://huggingface.co/FoolDev/Thanatos-27B"><img alt="FoolDev/Thanatos-27B on Hugging Face" src="https://img.shields.io/badge/%F0%9F%A4%97-FoolDev%2FThanatos--27B-bb9af7?logo=huggingface&logoColor=1a1b26&labelColor=24283b"></a>
 </p>
 
-**λ τέλεια — a minimal TUI coding agent (rewritten in Rust btw).** One binary, no daemon. Talks to a local Ollama or any of twenty cloud chat-completions endpoints (≈210 named models in the dropdown). Runs thirty-eight built-in tools (read/write/edit/multi_edit/rm + bash + list/glob/grep + head/tail/tree/stat/diff/which/fetch/wc/sha256/date + apply_patch/mkdir/mv/cp/touch/symlink + lint/format/typecheck/test + git/env + replace/json/base64/hexdump/du/realpath + todo_write), hosts MCP servers, persists sessions to SQLite, resumes where you left off, and paints an OS-aware welcome banner on launch.
+**λ τέλεια — a minimal TUI coding agent (rewritten in Rust btw).** One binary, no daemon. Talks to a local Ollama or any of twenty cloud chat-completions endpoints (≈210 named models in the dropdown). Runs thirty-nine built-in tools (read/write/edit/multi_edit/rm + bash + list/glob/grep + head/tail/tree/stat/diff/which/fetch/wc/sha256/date + apply_patch/mkdir/mv/cp/touch/symlink + lint/format/typecheck/test + git/env + replace/json/base64/hexdump/du/realpath + web_search + todo_write), hosts MCP servers, persists sessions to SQLite, resumes where you left off, and paints an OS-aware welcome banner on launch.
 
 <p align="center">
   <img src="assets/screenshot.svg" alt="τέλεια TUI session" width="780">
@@ -79,7 +79,7 @@ Three stances control tool execution — cycle with `Shift+Tab` or set explicitl
 
 | mode      | chip    | behaviour                                                                  | trigger              |
 | --------- | ------- | -------------------------------------------------------------------------- | -------------------- |
-| **PLAN**  | blue    | only read-only tools (`read` / `list` / `glob` / `grep` / `head` / `tail` / `tree` / `stat` / `diff` / `which` / `fetch` / `wc` / `sha256` / `date` / `lint` / `typecheck` / `test` / `env` / `json` / `base64` / `hexdump` / `du` / `realpath`, plus `git`'s read-only subcommands `status`/`diff`/`log`) run; mutating tools short-circuit with a synthetic "blocked: plan mode" result | `/plan`, `--plan`    |
+| **PLAN**  | blue    | only read-only tools (`read` / `list` / `glob` / `grep` / `head` / `tail` / `tree` / `stat` / `diff` / `which` / `fetch` / `wc` / `sha256` / `date` / `lint` / `typecheck` / `test` / `env` / `json` / `base64` / `hexdump` / `du` / `realpath` / `web_search`, plus `git`'s read-only subcommands `status`/`diff`/`log`) run; mutating tools short-circuit with a synthetic "blocked: plan mode" result | `/plan`, `--plan`    |
 | **BUILD** | green (default) | every tool call pauses for `y` allow / `n` deny / `a` allow-all (auto)                          | `/build`, default    |
 | **AUTO**  | red     | every tool dispatches immediately, no prompts                              | `/auto`, `--auto`    |
 
@@ -217,6 +217,7 @@ Twenty-eight built-ins, dispatched in a tool-call loop that runs until the model
 | `hexdump`   | hex + ASCII dump of a file's first N bytes (default 256, cap 4096)               |
 | `du`        | recursive byte size of a file or directory tree (symlinks not followed)          |
 | `realpath`  | canonicalize a path (resolves `.` / `..` / symlinks; must exist)                 |
+| `web_search` | Brave Search API (`BRAVE_API_KEY` env) → numbered title / url / snippet results  |
 | `todo_write` | replace the session todo list (`pending` / `in_progress` / `completed`); resets on restart |
 
 ## Providers
