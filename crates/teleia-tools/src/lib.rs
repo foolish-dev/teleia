@@ -279,6 +279,37 @@ pub fn definitions() -> Vec<ToolDef> {
                 "path": { "type": "string", "description": "File or directory" }
             }, "required": ["path"] }),
         ),
+        ToolDef::new(
+            "test",
+            "Run the standard test runner for the path's language. Auto-detects via extension: .rs → cargo test, .py → pytest, .go → go test ./..., .js/.ts/.tsx → npm test. Returns combined stdout/stderr + exit code.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string", "description": "File or directory whose language selects the runner" }
+            }, "required": ["path"] }),
+        ),
+        ToolDef::new(
+            "git",
+            "Run a bounded set of git subcommands in the current repo. `subcommand` is one of status / diff / log / add / commit. `paths` scopes diff and is required by add; `message` is required by commit. Returns git's combined output.",
+            json!({ "type": "object", "properties": {
+                "subcommand": { "type": "string", "enum": ["status", "diff", "log", "add", "commit"] },
+                "paths": { "type": "array", "items": { "type": "string" }, "description": "Paths for add (required) or to scope diff (optional)" },
+                "message": { "type": "string", "description": "Commit message (required for commit)" }
+            }, "required": ["subcommand"] }),
+        ),
+        ToolDef::new(
+            "symlink",
+            "Create a symbolic link at `dst` pointing to `src`. Refuses if `dst` already exists (refuse-to-clobber).",
+            json!({ "type": "object", "properties": {
+                "src": { "type": "string", "description": "Link target (what the symlink points to)" },
+                "dst": { "type": "string", "description": "Path of the symlink to create" }
+            }, "required": ["src", "dst"] }),
+        ),
+        ToolDef::new(
+            "env",
+            "Read environment variables. With `name`, returns that variable's value (errors if unset). Without it, returns every variable as sorted `KEY=VALUE` lines.",
+            json!({ "type": "object", "properties": {
+                "name": { "type": "string", "description": "Single variable to read; omit to list all" }
+            } }),
+        ),
     ]
 }
 
@@ -315,6 +346,10 @@ pub async fn dispatch(name: &str, arguments: &str) -> Result<String> {
         "lint" => lint_tool(args).await,
         "format" => format_tool(args).await,
         "typecheck" => typecheck_tool(args).await,
+        "test" => test_tool(args).await,
+        "git" => git_tool(args).await,
+        "symlink" => symlink_tool(args).await,
+        "env" => env_tool(args).await,
         other => Err(anyhow!("unknown tool: {other}")),
     }
 }
@@ -1289,6 +1324,115 @@ async fn typecheck_tool(args: Value) -> Result<String> {
     }
 }
 
+async fn test_tool(args: Value) -> Result<String> {
+    let PathArgs { path } = serde_json::from_value(args)?;
+    let ext = ext_of(&path);
+    match ext.as_deref() {
+        // cargo test operates on the whole workspace; the path is
+        // informational only here, matching `typecheck`.
+        Some("rs") => run_command("cargo", &["test", "--all-targets"]).await,
+        Some("py") => run_command("pytest", &[&path]).await,
+        Some("go") => run_command("go", &["test", "./..."]).await,
+        Some("js") | Some("jsx") | Some("ts") | Some("tsx") => run_command("npm", &["test"]).await,
+        Some(other) => Err(anyhow!("no test runner known for .{other} files")),
+        None => Err(anyhow!("no extension on {path} — can't pick a test runner")),
+    }
+}
+
+#[derive(Deserialize)]
+struct GitArgs {
+    subcommand: GitSub,
+    #[serde(default)]
+    paths: Vec<String>,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum GitSub {
+    Status,
+    Diff,
+    Log,
+    Add,
+    Commit,
+}
+
+async fn git_tool(args: Value) -> Result<String> {
+    let GitArgs {
+        subcommand,
+        paths,
+        message,
+    } = serde_json::from_value(args)?;
+    let mut argv: Vec<&str> = match subcommand {
+        GitSub::Status => vec!["status", "--short", "--branch"],
+        GitSub::Diff => vec!["diff"],
+        GitSub::Log => vec!["log", "--oneline", "-n", "20"],
+        GitSub::Add => {
+            if paths.is_empty() {
+                return Err(anyhow!("git add requires `paths`"));
+            }
+            vec!["add"]
+        }
+        GitSub::Commit => {
+            let msg = message
+                .as_deref()
+                .ok_or_else(|| anyhow!("git commit requires `message`"))?;
+            return run_command("git", &["commit", "-m", msg]).await;
+        }
+    };
+    // add/diff take the caller's paths; status/log ignore them.
+    if matches!(subcommand, GitSub::Add | GitSub::Diff) {
+        argv.extend(paths.iter().map(String::as_str));
+    }
+    run_command("git", &argv).await
+}
+
+async fn symlink_tool(args: Value) -> Result<String> {
+    let MoveArgs { src, dst } = serde_json::from_value(args)?;
+    if std::fs::symlink_metadata(&dst).is_ok() {
+        return Err(anyhow!("destination already exists: {dst}"));
+    }
+    make_symlink(&src, &dst).with_context(|| format!("symlink {dst} -> {src}"))?;
+    Ok(format!("symlinked {dst} -> {src}"))
+}
+
+#[cfg(unix)]
+fn make_symlink(src: &str, dst: &str) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(src, dst)
+}
+
+#[cfg(windows)]
+fn make_symlink(src: &str, dst: &str) -> std::io::Result<()> {
+    if std::path::Path::new(src).is_dir() {
+        std::os::windows::fs::symlink_dir(src, dst)
+    } else {
+        std::os::windows::fs::symlink_file(src, dst)
+    }
+}
+
+#[derive(Deserialize)]
+struct EnvArgs {
+    #[serde(default)]
+    name: Option<String>,
+}
+
+async fn env_tool(args: Value) -> Result<String> {
+    let EnvArgs { name } = serde_json::from_value(args)?;
+    match name {
+        Some(n) => std::env::var(&n).map_err(|_| anyhow!("${n} is not set")),
+        None => {
+            let mut vars: Vec<(String, String)> = std::env::vars().collect();
+            vars.sort();
+            Ok(vars
+                .into_iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+                .join("\n"))
+        }
+    }
+}
+
 #[derive(Deserialize, Clone)]
 struct TodoItem {
     content: String,
@@ -1865,5 +2009,43 @@ mod tests {
         assert!(src.is_file());
         // Second call should refuse to clobber.
         assert!(dispatch("cp", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_tool_errors_on_unknown_extension() {
+        let args = json!({ "path": "foo.cobol" }).to_string();
+        assert!(dispatch("test", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn git_add_requires_paths_and_commit_requires_message() {
+        let add = json!({ "subcommand": "add" }).to_string();
+        assert!(dispatch("git", &add).await.is_err());
+        let commit = json!({ "subcommand": "commit" }).to_string();
+        assert!(dispatch("git", &commit).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn symlink_creates_link_and_refuses_to_clobber() {
+        let target = tmp_path("symlink-target.txt");
+        let link = tmp_path("symlink-link.txt");
+        let _c1 = Cleanup(target.clone());
+        let _c2 = Cleanup(link.clone());
+        std::fs::write(&target, "data").unwrap();
+        let args =
+            json!({ "src": target.to_str().unwrap(), "dst": link.to_str().unwrap() }).to_string();
+        assert!(dispatch("symlink", &args).await.is_ok());
+        assert_eq!(std::fs::read_to_string(&link).unwrap(), "data");
+        // Second call should refuse to clobber the existing link.
+        assert!(dispatch("symlink", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn env_reads_named_var_and_errors_when_unset() {
+        std::env::set_var("TELEIA_ENV_TEST_VAR", "present");
+        let hit = json!({ "name": "TELEIA_ENV_TEST_VAR" }).to_string();
+        assert_eq!(dispatch("env", &hit).await.unwrap(), "present");
+        let miss = json!({ "name": "TELEIA_DEFINITELY_UNSET_XYZZY" }).to_string();
+        assert!(dispatch("env", &miss).await.is_err());
     }
 }
