@@ -155,6 +155,25 @@ fn is_readonly_tool(name: &str) -> bool {
     )
 }
 
+/// Read-only classification for a concrete call, refining [`is_readonly_tool`]
+/// with argument-aware cases. `git` mutates only via `add`/`commit`, so its
+/// inspection subcommands (`status`/`diff`/`log`) are allowed in plan mode
+/// while the mutating ones stay gated.
+fn is_readonly_call(name: &str, arguments: &str) -> bool {
+    if is_readonly_tool(name) {
+        return true;
+    }
+    if name == "git" {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(arguments) {
+            return matches!(
+                v.get("subcommand").and_then(|s| s.as_str()),
+                Some("status" | "diff" | "log")
+            );
+        }
+    }
+    false
+}
+
 /// Format a Unix timestamp (seconds) as `s-YYYY-MM-DD-HHMMSS` in UTC.
 /// Pure integer math (Howard Hinnant's civil-from-days) so it needs no
 /// date crate and renders identically on every platform teleia ships to —
@@ -668,7 +687,11 @@ impl Agent {
                     // rather than execute; Build prompts per-call.
                     match self.permission_mode {
                         PermissionMode::Auto => {}
-                        PermissionMode::Plan if is_readonly_tool(&call.function.name) => {}
+                        PermissionMode::Plan
+                            if is_readonly_call(
+                                &call.function.name,
+                                &call.function.arguments,
+                            ) => {}
                         PermissionMode::Plan => {
                             let output = format!(
                                 "blocked: plan mode does not permit `{}`. Describe what you would do; the user can switch to build mode (Shift+Tab or /build) to execute.",
@@ -839,6 +862,37 @@ mod tests {
 
     fn fake_def(name: &str) -> ToolDef {
         ToolDef::new(name, format!("desc for {name}"), json!({"type": "object"}))
+    }
+
+    #[test]
+    fn is_readonly_call_gates_git_by_subcommand() {
+        // Inspection subcommands run in plan mode; mutating ones don't.
+        assert!(is_readonly_call(
+            "git",
+            &json!({"subcommand": "status"}).to_string()
+        ));
+        assert!(is_readonly_call(
+            "git",
+            &json!({"subcommand": "diff"}).to_string()
+        ));
+        assert!(is_readonly_call(
+            "git",
+            &json!({"subcommand": "log"}).to_string()
+        ));
+        assert!(!is_readonly_call(
+            "git",
+            &json!({"subcommand": "add"}).to_string()
+        ));
+        assert!(!is_readonly_call(
+            "git",
+            &json!({"subcommand": "commit"}).to_string()
+        ));
+        // Malformed / missing subcommand is treated as not-read-only.
+        assert!(!is_readonly_call("git", "not json"));
+        assert!(!is_readonly_call("git", "{}"));
+        // Plain read-only tools stay read-only; mutating ones stay gated.
+        assert!(is_readonly_call("read", "{}"));
+        assert!(!is_readonly_call("write", "{}"));
     }
 
     #[test]

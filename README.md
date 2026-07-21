@@ -79,7 +79,7 @@ Three stances control tool execution — cycle with `Shift+Tab` or set explicitl
 
 | mode      | chip    | behaviour                                                                  | trigger              |
 | --------- | ------- | -------------------------------------------------------------------------- | -------------------- |
-| **PLAN**  | blue    | only read-only tools (`read` / `list` / `glob` / `grep` / `head` / `tail` / `tree` / `stat` / `diff` / `which` / `fetch` / `wc` / `sha256` / `date` / `lint` / `typecheck` / `test` / `env`) run; mutating tools short-circuit with a synthetic "blocked: plan mode" result | `/plan`, `--plan`    |
+| **PLAN**  | blue    | only read-only tools (`read` / `list` / `glob` / `grep` / `head` / `tail` / `tree` / `stat` / `diff` / `which` / `fetch` / `wc` / `sha256` / `date` / `lint` / `typecheck` / `test` / `env`, plus `git`'s read-only subcommands `status`/`diff`/`log`) run; mutating tools short-circuit with a synthetic "blocked: plan mode" result | `/plan`, `--plan`    |
 | **BUILD** | green (default) | every tool call pauses for `y` allow / `n` deny / `a` allow-all (auto)                          | `/build`, default    |
 | **AUTO**  | red     | every tool dispatches immediately, no prompts                              | `/auto`, `--auto`    |
 
