@@ -701,6 +701,33 @@ impl State {
         // same content they were reading.
     }
 
+    /// Mark this turn's trailing streamed entries (reasoning / answer /
+    /// tool) complete, and drop an empty answer bubble. Called at the end
+    /// of a turn — normal completion (`AssistantEnd`) AND every interrupt /
+    /// error stop — so a halted turn never leaves a header blinking or a
+    /// tool spinner spinning forever, which falsely implies the model is
+    /// still working. Stops at the first already-complete/other entry, so
+    /// earlier turns are untouched.
+    fn finalize_trailing_stream(&mut self) {
+        for entry in self.history.iter_mut().rev() {
+            match entry {
+                Entry::Assistant { complete, .. }
+                | Entry::Reasoning { complete, .. }
+                | Entry::Tool { complete, .. }
+                    if !*complete =>
+                {
+                    *complete = true;
+                }
+                _ => break,
+            }
+        }
+        if let Some(Entry::Assistant { text, .. }) = self.history.last() {
+            if text.is_empty() {
+                self.history.pop();
+            }
+        }
+    }
+
     fn apply(&mut self, evt: TurnEvent) {
         match evt {
             TurnEvent::AssistantStart => {
@@ -744,24 +771,7 @@ impl State {
                 }
             }
             TurnEvent::AssistantEnd => {
-                // Mark this phase's trailing reasoning + answer entries
-                // complete, then drop an empty answer bubble — a
-                // reasoning-only turn keeps its thinking so it isn't blank.
-                for entry in self.history.iter_mut().rev() {
-                    match entry {
-                        Entry::Assistant { complete, .. } | Entry::Reasoning { complete, .. }
-                            if !*complete =>
-                        {
-                            *complete = true;
-                        }
-                        _ => break,
-                    }
-                }
-                if let Some(Entry::Assistant { text, .. }) = self.history.last() {
-                    if text.is_empty() {
-                        self.history.pop();
-                    }
-                }
+                self.finalize_trailing_stream();
             }
             TurnEvent::ToolStart { name, arguments } => {
                 self.push(Entry::Tool {
@@ -2457,6 +2467,7 @@ async fn run_turn<B: ratatui::backend::Backend>(
                     // it's wedged for the rest of the session. Dropping the
                     // responder denies the abandoned tool call.
                     state.pending_approval = None;
+                    state.finalize_trailing_stream();
                     state.push(Entry::Info("(interrupted)".into()));
                     return TurnOutcome::Stopped;
                 }
@@ -2475,6 +2486,7 @@ async fn run_turn<B: ratatui::backend::Backend>(
                     }
                 }
                 Event::Key(k) if matches!(k.code, KeyCode::Esc) => {
+                    state.finalize_trailing_stream();
                     state.push(Entry::Info("(interrupted)".into()));
                     return TurnOutcome::Stopped;
                 }
@@ -2515,6 +2527,7 @@ async fn run_turn<B: ratatui::backend::Backend>(
                         if is_end { return TurnOutcome::Completed; }
                     }
                     Some(Err(e)) => {
+                        state.finalize_trailing_stream();
                         state.push(Entry::Error(e.to_string()));
                         return TurnOutcome::Stopped;
                     }
@@ -6565,6 +6578,120 @@ mod tests {
         assert!(matches!(
             s.history.last(),
             Some(Entry::Info(t)) if t.contains("cut off at context limit") && t.starts_with('⚠')
+        ));
+    }
+
+    #[test]
+    fn finalize_completes_an_interrupted_reasoning_and_answer() {
+        // Interrupted mid-stream: reasoning + a partial answer, no
+        // AssistantEnd. Both must be finalized so their headers stop
+        // animating.
+        let mut s = State::new("dummy", "dummy");
+        s.apply(TurnEvent::AssistantStart);
+        s.apply(TurnEvent::ReasoningDelta("weighing".into()));
+        s.apply(TurnEvent::AssistantDelta("partial".into()));
+        assert!(matches!(
+            &s.history[0],
+            Entry::Reasoning {
+                complete: false,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &s.history[1],
+            Entry::Assistant {
+                complete: false,
+                ..
+            }
+        ));
+        s.finalize_trailing_stream();
+        assert!(matches!(
+            &s.history[0],
+            Entry::Reasoning { complete: true, .. }
+        ));
+        assert!(matches!(
+            &s.history[1],
+            Entry::Assistant { complete: true, .. }
+        ));
+    }
+
+    #[test]
+    fn finalize_completes_an_interrupted_tool_spinner() {
+        let mut s = State::new("dummy", "dummy");
+        s.apply(TurnEvent::ToolStart {
+            name: "read".into(),
+            arguments: "{}".into(),
+        });
+        assert!(matches!(
+            s.history.last(),
+            Some(Entry::Tool {
+                complete: false,
+                ..
+            })
+        ));
+        s.finalize_trailing_stream();
+        assert!(matches!(
+            s.history.last(),
+            Some(Entry::Tool { complete: true, .. })
+        ));
+    }
+
+    #[test]
+    fn finalize_pops_an_empty_answer_bubble_but_keeps_reasoning() {
+        // Interrupted after reasoning + an empty content delta: the blank
+        // answer bubble must be dropped so no header keeps blinking, while
+        // the reasoning is kept and completed.
+        let mut s = State::new("dummy", "dummy");
+        s.apply(TurnEvent::AssistantStart);
+        s.apply(TurnEvent::ReasoningDelta("weighing".into()));
+        s.apply(TurnEvent::AssistantDelta(String::new()));
+        assert_eq!(s.history.len(), 2);
+        assert!(matches!(
+            s.history.last(),
+            Some(Entry::Assistant { text, .. }) if text.is_empty()
+        ));
+        s.finalize_trailing_stream();
+        assert_eq!(s.history.len(), 1);
+        assert!(matches!(
+            s.history.last(),
+            Some(Entry::Reasoning { text, complete: true }) if text == "weighing"
+        ));
+    }
+
+    #[test]
+    fn finalize_stops_at_completed_prior_entries() {
+        // finalize walks back only over the current round's trailing
+        // incomplete entries and stops at the first completed one, so an
+        // earlier finished round (a completed tool + a completed answer) is
+        // left byte-for-byte intact.
+        let mut s = State::new("dummy", "dummy");
+        s.apply(TurnEvent::ToolStart {
+            name: "read".into(),
+            arguments: "{}".into(),
+        });
+        s.apply(TurnEvent::ToolEnd {
+            name: "read".into(),
+            output: "file contents".into(),
+        });
+        s.apply(TurnEvent::AssistantStart);
+        s.apply(TurnEvent::AssistantDelta("earlier answer".into()));
+        s.apply(TurnEvent::AssistantEnd);
+        // A new round, interrupted mid-answer (no AssistantEnd).
+        s.apply(TurnEvent::AssistantStart);
+        s.apply(TurnEvent::AssistantDelta("partial".into()));
+        s.finalize_trailing_stream();
+        assert_eq!(s.history.len(), 3);
+        assert!(matches!(
+            &s.history[2],
+            Entry::Assistant { text, complete: true } if text == "partial"
+        ));
+        assert!(matches!(
+            &s.history[1],
+            Entry::Assistant { text, complete: true } if text == "earlier answer"
+        ));
+        assert!(matches!(
+            &s.history[0],
+            Entry::Tool { output, complete: true, .. } if output == "file contents"
         ));
     }
 
