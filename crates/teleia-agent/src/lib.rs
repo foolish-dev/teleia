@@ -31,7 +31,7 @@ const SYSTEM_PROMPT_BASE: &str = "You are τέλεια, a terse coding assistant
 Use the provided tools to do real work: read, write, edit, bash, list, glob, grep, head, tail, \
 tree, stat, diff, which, fetch, mkdir, mv, cp, apply_patch, wc, touch, sha256, date, lint, \
 format, typecheck, test, git, symlink, env, replace, json, base64, hexdump, du, realpath, \
-web_search, md5, sha1, crc32, hash, hmac_sha256, hex, base32, url_encode, hash_verify, jwt_decode, \
+md5, sha1, crc32, hash, hmac_sha256, hex, base32, url_encode, hash_verify, jwt_decode, \
 find, chmod, readlink, hardlink, pathinfo, mktemp, truncate, slice, sort, cut, comm, strings, \
 column, tr, expand, dedent, count_matches, epoch, calc, nproc, os_release, kill, tcp_check, \
 dns_resolve, download, http_request, cargo_metadata, cargo_tree, test_one, cloc, json_diff, \
@@ -161,7 +161,6 @@ fn is_readonly_tool(name: &str) -> bool {
             | "hexdump"
             | "du"
             | "realpath"
-            | "web_search"
             | "md5"
             | "sha1"
             | "crc32"
