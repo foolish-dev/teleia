@@ -40,11 +40,10 @@ test that reproduces the bug first.
 
 ## 5. Auto-prompting loop
 Once the success criteria are set, drive the task to done on your own —
-plan, act, verify, then prompt yourself with the next step. Don't wait
-for a nudge between steps.
+plan, act, verify, then take the next step without waiting for a nudge.
 - After each change, run the verification loop above, read the result,
-  and continue from what it says — a failing check is the next prompt,
-  not a stopping point.
+  and continue from what it says — a failing check is your cue to keep
+  going, not a stopping point.
 - Don't pause to narrate progress or ask "shall I continue?" — continue.
 - Still stop for the cases the earlier principles reserve: real
   ambiguity, a decision only the user can make, or an irreversible or
