@@ -905,7 +905,7 @@ pub async fn run(
         .map(|u| (u.latest.clone(), u.current.clone(), u.url.clone()));
     if let Some((latest, current, url)) = new_release {
         let msg = format!(
-            "update available: teleia v{latest} (you're on v{current})\n  {url}\n  run /update for the upgrade command"
+            "update available: teleia v{latest} (you're on v{current})\n  {url}\n  upgrade in place: teleia --self-update"
         );
         state.push(Entry::Info(msg));
         if state.notify {
@@ -2795,7 +2795,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
             // check would block the event loop.
             let body = match &state.update_check {
                 Some(uc) if uc.newer => format!(
-                    "update available: teleia v{} (you're on v{})\n  {}\n\n  cargo install --git https://github.com/foolish-dev/teleia teleia-cli --force\n  # or re-run the install.sh one-liner",
+                    "update available: teleia v{} (you're on v{})\n  {}\n\n  teleia --self-update   # download, verify, and replace in place\n  # or: cargo install --git https://github.com/foolish-dev/teleia teleia-cli --force",
                     uc.latest, uc.current, uc.url
                 ),
                 Some(uc) => format!(

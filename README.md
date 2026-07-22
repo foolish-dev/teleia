@@ -54,6 +54,8 @@ On a source build with no Rust toolchain present, the installer otherwise prompt
 
 `cargo run --release` works from a workspace clone.
 
+Upgrade an existing install in place with `teleia --self-update` — it downloads the latest prebuilt for your platform, verifies it against the release `SHA256SUMS`, and swaps the binary. No shell re-run needed.
+
 ## Run
 
 ```sh
