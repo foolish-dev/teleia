@@ -474,6 +474,16 @@ impl Agent {
         self.permission_mode = mode;
     }
 
+    /// Promote to Auto after an "allow all" tool approval and persist it, so
+    /// a blanket-approval upgrade survives a restart like every other mode
+    /// change (which route through the pref store via `set_mode`). The TUI
+    /// can't do this at the approval site — the agent is borrowed by the
+    /// in-flight turn stream — so the field-of-truth flip persists here.
+    fn promote_to_auto(&mut self) {
+        self.permission_mode = PermissionMode::Auto;
+        self.set_pref("permission_mode", PermissionMode::Auto.label_canonical());
+    }
+
     pub fn auto_mode(&self) -> bool {
         matches!(self.permission_mode, PermissionMode::Auto)
     }
@@ -761,7 +771,7 @@ impl Agent {
                             match decision {
                                 ToolApproval::Allow => {}
                                 ToolApproval::AllowAll => {
-                                    self.permission_mode = PermissionMode::Auto;
+                                    self.promote_to_auto();
                                 }
                                 ToolApproval::Deny => {
                                     let output = "denied by user".to_string();
@@ -1061,6 +1071,39 @@ mod tests {
                 .tools()
                 .iter()
                 .any(|d| d.function.name == "ctx7_query"));
+        }
+
+        let _ = std::fs::remove_file(&store_path);
+    }
+
+    #[test]
+    fn allow_all_upgrade_persists_auto_mode() {
+        // Answering a tool-approval prompt with "allow all" promotes the
+        // agent to Auto for the rest of the session. That upgrade must land
+        // in the pref store so the next launch restores it, like every other
+        // mode change — otherwise the user is silently dropped back to Build.
+        let store_path = std::env::temp_dir().join(format!(
+            "teleia-agent-allowall-test-{}.sqlite",
+            std::process::id(),
+        ));
+        let _ = std::fs::remove_file(&store_path);
+
+        {
+            let llm = LlmClient::new("http://127.0.0.1:0/v1", "test-model");
+            let store = Store::open_at(&store_path).unwrap();
+            let mut agent = Agent::new(llm, store).unwrap();
+            assert!(!agent.auto_mode());
+            agent.promote_to_auto();
+            assert!(agent.auto_mode());
+            assert_eq!(agent.get_pref("permission_mode").as_deref(), Some("Auto"));
+        }
+
+        // A fresh agent over the same store still sees the persisted Auto.
+        {
+            let llm = LlmClient::new("http://127.0.0.1:0/v1", "test-model");
+            let store = Store::open_at(&store_path).unwrap();
+            let agent = Agent::new(llm, store).unwrap();
+            assert_eq!(agent.get_pref("permission_mode").as_deref(), Some("Auto"));
         }
 
         let _ = std::fs::remove_file(&store_path);
