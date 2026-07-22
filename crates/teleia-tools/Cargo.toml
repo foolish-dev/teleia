@@ -14,5 +14,6 @@ tracing.workspace = true
 libc.workspace = true
 regex.workspace = true
 glob.workspace = true
+sysinfo.workspace = true
 reqwest.workspace = true
 teleia-llm.workspace = true

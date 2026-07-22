@@ -1581,6 +1581,90 @@ ToolDef::new(
                 "required": ["start", "end"]
             }),
         ),
+        ToolDef::new(
+            "ps",
+            "List running processes as JSON rows {pid, name, cpu, memory, parent, status}. Optional `name_filter` (substring), `sort_by` (cpu|mem|pid, default cpu), and `limit` (default 30, cap 500).",
+            json!({ "type": "object", "properties": {
+                "name_filter": { "type": "string" },
+                "sort_by": { "type": "string", "enum": ["cpu", "mem", "pid"] },
+                "limit": { "type": "integer" }
+            } }),
+        ),
+        ToolDef::new(
+            "pgrep",
+            "Find processes whose name (or full command line, with `full: true`) contains `pattern`. Returns matching {pid, name}.",
+            json!({ "type": "object", "properties": {
+                "pattern": { "type": "string" },
+                "full": { "type": "boolean", "description": "Match against the full command line instead of just the process name" }
+            }, "required": ["pattern"] }),
+        ),
+        ToolDef::new(
+            "process_status",
+            "Detailed status of a single process by `pid` (name, status, cpu, memory, parent, start_time, cmd). Errors if the pid is not running.",
+            json!({ "type": "object", "properties": {
+                "pid": { "type": "integer" }
+            }, "required": ["pid"] }),
+        ),
+        ToolDef::new(
+            "is_running",
+            "Check whether a process with the given `pid` is currently running. Returns {pid, running}.",
+            json!({ "type": "object", "properties": {
+                "pid": { "type": "integer" }
+            }, "required": ["pid"] }),
+        ),
+        ToolDef::new(
+            "process_tree",
+            "Render the process tree as an indented `pid name` list. With `root_pid`, shows only that subtree; otherwise the whole forest.",
+            json!({ "type": "object", "properties": {
+                "root_pid": { "type": "integer", "description": "Root of the subtree to show (default: all roots)" }
+            } }),
+        ),
+        ToolDef::new(
+            "kill_by_name",
+            "Kill processes matching `name` (substring, or exact with `exact: true`). Defaults to `dry_run: true`, which only LISTS the matching pids so you can confirm; set `dry_run: false` to actually kill them.",
+            json!({ "type": "object", "properties": {
+                "name": { "type": "string" },
+                "exact": { "type": "boolean", "description": "Match the whole process name rather than a substring" },
+                "dry_run": { "type": "boolean", "description": "List matches without killing (default true)" }
+            }, "required": ["name"] }),
+        ),
+        ToolDef::new(
+            "uptime",
+            "System uptime: {uptime_secs, human}.",
+            json!({ "type": "object", "properties": {} }),
+        ),
+        ToolDef::new(
+            "loadavg",
+            "1/5/15-minute load average: {one, five, fifteen, supported}. `supported` is false on Windows (no load-average concept).",
+            json!({ "type": "object", "properties": {} }),
+        ),
+        ToolDef::new(
+            "meminfo",
+            "Memory + swap usage in bytes: {total, used, available, free, swap_total, swap_used} plus human-readable totals.",
+            json!({ "type": "object", "properties": {} }),
+        ),
+        ToolDef::new(
+            "cpuinfo",
+            "CPU details: {brand, vendor_id, frequency_mhz, physical_cores, logical_cores}.",
+            json!({ "type": "object", "properties": {} }),
+        ),
+        ToolDef::new(
+            "sysinfo",
+            "Aggregate system snapshot: os/arch, uptime, load average, memory, swap, and cpu (count + brand). Covers what os_release/nproc don't.",
+            json!({ "type": "object", "properties": {} }),
+        ),
+        ToolDef::new(
+            "df",
+            "Disk space for the filesystem containing `path` (default: current dir): {mount_point, total, used, available} in bytes + human-readable.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string", "description": "A path on the filesystem to report (default: cwd)" }
+            } }),
+        ),
+        ToolDef::new(
+            "net_interfaces",
+            "List network interfaces with MAC address and assigned IP networks (addr/prefix).",
+            json!({ "type": "object", "properties": {} }),
+        ),
     ]
 }
 
@@ -1748,6 +1832,19 @@ pub async fn dispatch(name: &str, arguments: &str) -> Result<String> {
         "sleep" => sleep_tool(args).await,
         "cat" => cat_tool(args).await,
         "seq" => seq_tool(args).await,
+        "ps" => ps_tool(args).await,
+        "pgrep" => pgrep_tool(args).await,
+        "process_status" => process_status_tool(args).await,
+        "is_running" => is_running_tool(args).await,
+        "process_tree" => process_tree_tool(args).await,
+        "kill_by_name" => kill_by_name_tool(args).await,
+        "uptime" => uptime_tool(args).await,
+        "loadavg" => loadavg_tool(args).await,
+        "meminfo" => meminfo_tool(args).await,
+        "cpuinfo" => cpuinfo_tool(args).await,
+        "sysinfo" => sysinfo_tool(args).await,
+        "df" => df_tool(args).await,
+        "net_interfaces" => net_interfaces_tool(args).await,
         other => Err(anyhow!("unknown tool: {other}")),
     }
 }
@@ -11595,6 +11692,403 @@ async fn seq_tool(args: Value) -> Result<String> {
     Ok(out)
 }
 
+// ---- sysinfo-backed system / process tools ----
+
+/// Seconds -> `1d 2h 3m 4s`, trimming leading zero units.
+fn sysinfo_human_duration(mut secs: u64) -> String {
+    let d = secs / 86_400;
+    secs %= 86_400;
+    let h = secs / 3600;
+    secs %= 3600;
+    let m = secs / 60;
+    let s = secs % 60;
+    let mut out = String::new();
+    for (v, unit) in [(d, 'd'), (h, 'h'), (m, 'm'), (s, 's')] {
+        if v > 0 || !out.is_empty() || unit == 's' {
+            out.push_str(&format!("{v}{unit} "));
+        }
+    }
+    out.trim_end().to_string()
+}
+
+fn sysinfo_proc_json(pid: u32, p: &sysinfo::Process) -> Value {
+    json!({
+        "pid": pid,
+        "name": p.name().to_string_lossy(),
+        "cpu": (p.cpu_usage() * 100.0).round() / 100.0,
+        "memory": p.memory(),
+        "parent": p.parent().map(|x| x.as_u32()),
+        "status": p.status().to_string(),
+    })
+}
+
+#[derive(Deserialize)]
+struct PsArgs {
+    #[serde(default)]
+    name_filter: Option<String>,
+    #[serde(default)]
+    sort_by: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+async fn ps_tool(args: Value) -> Result<String> {
+    let PsArgs {
+        name_filter,
+        sort_by,
+        limit,
+    } = serde_json::from_value(args)?;
+    let mut sys = sysinfo::System::new_all();
+    // A second sample after a short interval so cpu_usage is meaningful.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    sys.refresh_all();
+    let filt = name_filter.map(|s| s.to_lowercase());
+    let mut rows: Vec<(u32, &sysinfo::Process)> = sys
+        .processes()
+        .iter()
+        .filter(|(_, p)| match &filt {
+            Some(f) => p
+                .name()
+                .to_string_lossy()
+                .to_lowercase()
+                .contains(f.as_str()),
+            None => true,
+        })
+        .map(|(pid, p)| (pid.as_u32(), p))
+        .collect();
+    match sort_by.as_deref() {
+        Some("mem") => rows.sort_by_key(|r| std::cmp::Reverse(r.1.memory())),
+        Some("pid") => rows.sort_by_key(|r| r.0),
+        _ => rows.sort_by(|a, b| {
+            b.1.cpu_usage()
+                .partial_cmp(&a.1.cpu_usage())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }),
+    }
+    let cap = limit.unwrap_or(30).min(500);
+    let out: Vec<Value> = rows
+        .iter()
+        .take(cap)
+        .map(|(pid, p)| sysinfo_proc_json(*pid, p))
+        .collect();
+    Ok(serde_json::to_string_pretty(
+        &json!({ "count": out.len(), "processes": out }),
+    )?)
+}
+
+#[derive(Deserialize)]
+struct PgrepArgs {
+    pattern: String,
+    #[serde(default)]
+    full: bool,
+}
+
+async fn pgrep_tool(args: Value) -> Result<String> {
+    let PgrepArgs { pattern, full } = serde_json::from_value(args)?;
+    let pat = pattern.to_lowercase();
+    let sys = sysinfo::System::new_all();
+    let mut hits: Vec<(u32, String)> = sys
+        .processes()
+        .iter()
+        .filter_map(|(pid, p)| {
+            let name = p.name().to_string_lossy().into_owned();
+            let hay = if full {
+                p.cmd()
+                    .iter()
+                    .map(|s| s.to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            } else {
+                name.clone()
+            };
+            hay.to_lowercase()
+                .contains(&pat)
+                .then_some((pid.as_u32(), name))
+        })
+        .collect();
+    hits.sort_by_key(|(pid, _)| *pid);
+    let out: Vec<Value> = hits
+        .iter()
+        .map(|(pid, name)| json!({ "pid": pid, "name": name }))
+        .collect();
+    Ok(serde_json::to_string_pretty(&json!({ "matches": out }))?)
+}
+
+#[derive(Deserialize)]
+struct SysPidArgs {
+    pid: u32,
+}
+
+async fn process_status_tool(args: Value) -> Result<String> {
+    let SysPidArgs { pid } = serde_json::from_value(args)?;
+    let mut sys = sysinfo::System::new_all();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    sys.refresh_all();
+    let p = sys
+        .process(sysinfo::Pid::from_u32(pid))
+        .ok_or_else(|| anyhow!("no process with pid {pid}"))?;
+    Ok(serde_json::to_string_pretty(&json!({
+        "pid": pid,
+        "name": p.name().to_string_lossy(),
+        "status": p.status().to_string(),
+        "cpu": (p.cpu_usage() * 100.0).round() / 100.0,
+        "memory": p.memory(),
+        "parent": p.parent().map(|x| x.as_u32()),
+        "start_time": p.start_time(),
+        "cmd": p.cmd().iter().map(|s| s.to_string_lossy().into_owned()).collect::<Vec<_>>(),
+    }))?)
+}
+
+async fn is_running_tool(args: Value) -> Result<String> {
+    let SysPidArgs { pid } = serde_json::from_value(args)?;
+    let sys = sysinfo::System::new_all();
+    let running = sys.process(sysinfo::Pid::from_u32(pid)).is_some();
+    Ok(json!({ "pid": pid, "running": running }).to_string())
+}
+
+#[derive(Deserialize)]
+struct ProcessTreeArgs {
+    #[serde(default)]
+    root_pid: Option<u32>,
+}
+
+fn process_tree_render(
+    id: u32,
+    depth: usize,
+    names: &std::collections::HashMap<u32, String>,
+    children: &std::collections::HashMap<u32, Vec<u32>>,
+    seen: &mut std::collections::HashSet<u32>,
+    out: &mut String,
+) {
+    if depth > 64 || !seen.insert(id) || out.len() > 200_000 {
+        return;
+    }
+    let name = names.get(&id).map(String::as_str).unwrap_or("?");
+    out.push_str(&format!("{}{id} {name}\n", "  ".repeat(depth)));
+    if let Some(kids) = children.get(&id) {
+        for &kid in kids {
+            process_tree_render(kid, depth + 1, names, children, seen, out);
+        }
+    }
+}
+
+async fn process_tree_tool(args: Value) -> Result<String> {
+    let ProcessTreeArgs { root_pid } = serde_json::from_value(args)?;
+    let sys = sysinfo::System::new_all();
+    let mut names = std::collections::HashMap::new();
+    let mut children: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
+    let mut all = std::collections::HashSet::new();
+    for (pid, p) in sys.processes() {
+        let id = pid.as_u32();
+        all.insert(id);
+        names.insert(id, p.name().to_string_lossy().into_owned());
+        if let Some(parent) = p.parent() {
+            children.entry(parent.as_u32()).or_default().push(id);
+        }
+    }
+    for kids in children.values_mut() {
+        kids.sort_unstable();
+    }
+    let mut out = String::new();
+    let mut seen = std::collections::HashSet::new();
+    match root_pid {
+        Some(root) => {
+            if !all.contains(&root) {
+                return Err(anyhow!("no process with pid {root}"));
+            }
+            process_tree_render(root, 0, &names, &children, &mut seen, &mut out);
+        }
+        None => {
+            // Roots: processes whose parent isn't itself a live process.
+            let mut roots: Vec<u32> = all
+                .iter()
+                .copied()
+                .filter(|id| {
+                    sys.process(sysinfo::Pid::from_u32(*id))
+                        .and_then(|p| p.parent())
+                        .map(|pp| !all.contains(&pp.as_u32()))
+                        .unwrap_or(true)
+                })
+                .collect();
+            roots.sort_unstable();
+            for r in roots {
+                process_tree_render(r, 0, &names, &children, &mut seen, &mut out);
+            }
+        }
+    }
+    Ok(out.trim_end().to_string())
+}
+
+#[derive(Deserialize)]
+struct KillByNameArgs {
+    name: String,
+    #[serde(default)]
+    exact: bool,
+    #[serde(default = "default_true")]
+    dry_run: bool,
+}
+
+async fn kill_by_name_tool(args: Value) -> Result<String> {
+    let KillByNameArgs {
+        name,
+        exact,
+        dry_run,
+    } = serde_json::from_value(args)?;
+    let sys = sysinfo::System::new_all();
+    let needle = name.to_lowercase();
+    let matches: Vec<(u32, String)> = sys
+        .processes()
+        .iter()
+        .filter(|(_, p)| {
+            let n = p.name().to_string_lossy();
+            if exact {
+                n == name.as_str()
+            } else {
+                n.to_lowercase().contains(&needle)
+            }
+        })
+        .map(|(pid, p)| (pid.as_u32(), p.name().to_string_lossy().into_owned()))
+        .collect();
+    if dry_run {
+        let would: Vec<Value> = matches
+            .iter()
+            .map(|(pid, n)| json!({ "pid": pid, "name": n }))
+            .collect();
+        return Ok(serde_json::to_string_pretty(
+            &json!({ "dry_run": true, "would_kill": would }),
+        )?);
+    }
+    let mut killed = Vec::new();
+    for (pid, _) in &matches {
+        if let Some(p) = sys.process(sysinfo::Pid::from_u32(*pid)) {
+            if p.kill() {
+                killed.push(*pid);
+            }
+        }
+    }
+    Ok(serde_json::to_string_pretty(&json!({ "killed": killed }))?)
+}
+
+async fn uptime_tool(_args: Value) -> Result<String> {
+    let secs = sysinfo::System::uptime();
+    Ok(json!({ "uptime_secs": secs, "human": sysinfo_human_duration(secs) }).to_string())
+}
+
+async fn loadavg_tool(_args: Value) -> Result<String> {
+    let la = sysinfo::System::load_average();
+    // Windows has no load-average concept; sysinfo returns zeros there.
+    let supported = la.one != 0.0 || la.five != 0.0 || la.fifteen != 0.0;
+    Ok(json!({
+        "one": la.one, "five": la.five, "fifteen": la.fifteen, "supported": supported
+    })
+    .to_string())
+}
+
+async fn meminfo_tool(_args: Value) -> Result<String> {
+    let sys = sysinfo::System::new_all();
+    Ok(serde_json::to_string_pretty(&json!({
+        "total": sys.total_memory(),
+        "used": sys.used_memory(),
+        "available": sys.available_memory(),
+        "free": sys.free_memory(),
+        "swap_total": sys.total_swap(),
+        "swap_used": sys.used_swap(),
+        "total_human": human_bytes(sys.total_memory()),
+        "used_human": human_bytes(sys.used_memory()),
+    }))?)
+}
+
+async fn cpuinfo_tool(_args: Value) -> Result<String> {
+    let sys = sysinfo::System::new_all();
+    let cpus = sys.cpus();
+    let first = cpus.first();
+    Ok(serde_json::to_string_pretty(&json!({
+        "brand": first.map(|c| c.brand()).unwrap_or_default(),
+        "vendor_id": first.map(|c| c.vendor_id()).unwrap_or_default(),
+        "frequency_mhz": first.map(|c| c.frequency()).unwrap_or(0),
+        "physical_cores": sys.physical_core_count(),
+        "logical_cores": cpus.len(),
+    }))?)
+}
+
+async fn sysinfo_tool(_args: Value) -> Result<String> {
+    let sys = sysinfo::System::new_all();
+    let la = sysinfo::System::load_average();
+    Ok(serde_json::to_string_pretty(&json!({
+        "os": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+        "uptime_secs": sysinfo::System::uptime(),
+        "load_average": { "one": la.one, "five": la.five, "fifteen": la.fifteen },
+        "memory": {
+            "total": sys.total_memory(),
+            "used": sys.used_memory(),
+            "available": sys.available_memory(),
+        },
+        "swap": { "total": sys.total_swap(), "used": sys.used_swap() },
+        "cpu": {
+            "logical": sys.cpus().len(),
+            "physical": sys.physical_core_count(),
+            "brand": sys.cpus().first().map(|c| c.brand()).unwrap_or_default(),
+        },
+    }))?)
+}
+
+#[derive(Deserialize)]
+struct DfArgs {
+    #[serde(default)]
+    path: Option<String>,
+}
+
+async fn df_tool(args: Value) -> Result<String> {
+    let DfArgs { path } = serde_json::from_value(args)?;
+    let target = match path {
+        Some(p) => PathBuf::from(p),
+        None => std::env::current_dir().context("current dir")?,
+    };
+    let target = std::fs::canonicalize(&target).unwrap_or(target);
+    let disks = sysinfo::Disks::new_with_refreshed_list();
+    // Longest mount-point prefix of `target` wins.
+    let best = disks
+        .list()
+        .iter()
+        .filter(|d| target.starts_with(d.mount_point()))
+        .max_by_key(|d| d.mount_point().as_os_str().len());
+    match best {
+        Some(d) => {
+            let total = d.total_space();
+            let avail = d.available_space();
+            let used = total.saturating_sub(avail);
+            Ok(serde_json::to_string_pretty(&json!({
+                "mount_point": d.mount_point().display().to_string(),
+                "total": total,
+                "used": used,
+                "available": avail,
+                "total_human": human_bytes(total),
+                "available_human": human_bytes(avail),
+            }))?)
+        }
+        None => Err(anyhow!("no filesystem found for {}", target.display())),
+    }
+}
+
+async fn net_interfaces_tool(_args: Value) -> Result<String> {
+    let nets = sysinfo::Networks::new_with_refreshed_list();
+    let mut out = Vec::new();
+    for (name, data) in nets.iter() {
+        let ips: Vec<String> = data
+            .ip_networks()
+            .iter()
+            .map(|ipn| format!("{}/{}", ipn.addr, ipn.prefix))
+            .collect();
+        out.push(json!({
+            "name": name,
+            "mac": data.mac_address().to_string(),
+            "ips": ips,
+        }));
+    }
+    Ok(serde_json::to_string_pretty(&json!({ "interfaces": out }))?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -16736,5 +17230,92 @@ mod tests {
     async fn cargo_add_rejects_flag_shaped_crate() {
         let args = json!({ "crate": "--config=x" }).to_string();
         assert!(dispatch("cargo_add", &args).await.is_err());
+    }
+
+    // --- sysinfo-backed tools (run against the real host) ---
+
+    #[test]
+    fn sysinfo_human_duration_formats() {
+        assert_eq!(sysinfo_human_duration(0), "0s");
+        assert_eq!(sysinfo_human_duration(59), "59s");
+        assert_eq!(sysinfo_human_duration(3661), "1h 1m 1s");
+        assert_eq!(sysinfo_human_duration(90_061), "1d 1h 1m 1s");
+    }
+
+    #[tokio::test]
+    async fn meminfo_and_cpuinfo_report_positive_values() {
+        let mem: Value = serde_json::from_str(&dispatch("meminfo", "{}").await.unwrap()).unwrap();
+        assert!(mem["total"].as_u64().unwrap() > 0);
+        let cpu: Value = serde_json::from_str(&dispatch("cpuinfo", "{}").await.unwrap()).unwrap();
+        assert!(cpu["logical_cores"].as_u64().unwrap() >= 1);
+    }
+
+    #[tokio::test]
+    async fn uptime_and_sysinfo_and_loadavg_are_valid_json() {
+        for tool in ["uptime", "sysinfo", "loadavg", "net_interfaces"] {
+            let out = dispatch(tool, "{}").await.unwrap();
+            let _: Value = serde_json::from_str(&out)
+                .unwrap_or_else(|e| panic!("{tool} returned invalid JSON: {e}: {out}"));
+        }
+        // process_tree returns an indented text tree, not JSON — just non-empty.
+        assert!(!dispatch("process_tree", "{}").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn is_running_and_process_status_track_self() {
+        let self_pid = std::process::id();
+        let out = dispatch("is_running", &json!({ "pid": self_pid }).to_string())
+            .await
+            .unwrap();
+        assert!(
+            out.contains("\"running\":true") || out.contains("\"running\": true"),
+            "{out}"
+        );
+        // A pid that cannot exist.
+        let none = dispatch(
+            "is_running",
+            &json!({ "pid": 4_000_000_000u32 }).to_string(),
+        )
+        .await
+        .unwrap();
+        assert!(none.contains("false"), "{none}");
+        // process_status on self succeeds.
+        assert!(
+            dispatch("process_status", &json!({ "pid": self_pid }).to_string())
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn ps_lists_processes_and_df_finds_a_mount() {
+        let ps: Value = serde_json::from_str(
+            &dispatch("ps", &json!({ "limit": 5 }).to_string())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(!ps["processes"].as_array().unwrap().is_empty());
+        let df: Value = serde_json::from_str(
+            &dispatch("df", &json!({ "path": "." }).to_string())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(df["total"].as_u64().unwrap() > 0);
+    }
+
+    #[tokio::test]
+    async fn kill_by_name_dry_run_lists_without_killing() {
+        // Default dry_run:true; a name that won't match anything -> empty, no kill.
+        let out = dispatch(
+            "kill_by_name",
+            &json!({ "name": "teleia-definitely-no-such-proc-xyz" }).to_string(),
+        )
+        .await
+        .unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["dry_run"], true);
+        assert_eq!(v["would_kill"].as_array().unwrap().len(), 0);
     }
 }
