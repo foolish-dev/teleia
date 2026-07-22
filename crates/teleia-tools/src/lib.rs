@@ -12045,7 +12045,14 @@ async fn df_tool(args: Value) -> Result<String> {
         Some(p) => PathBuf::from(p),
         None => std::env::current_dir().context("current dir")?,
     };
-    let target = std::fs::canonicalize(&target).unwrap_or(target);
+    let canon = std::fs::canonicalize(&target).unwrap_or(target);
+    // Windows canonicalize yields a `\\?\C:\…` verbatim path that doesn't
+    // starts_with the `C:\` mount point sysinfo reports — strip that prefix.
+    let s = canon.to_string_lossy().into_owned();
+    let target = match s.strip_prefix(r"\\?\") {
+        Some(stripped) => PathBuf::from(stripped),
+        None => canon,
+    };
     let disks = sysinfo::Disks::new_with_refreshed_list();
     // Longest mount-point prefix of `target` wins.
     let best = disks
