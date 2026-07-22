@@ -7505,9 +7505,13 @@ mod tests {
 
         drop(listener);
         let closed = dispatch("tcp_check", &args).await.unwrap();
+        // The meaningful, portable invariant is "no longer accepting". The
+        // exact classification of a refused loopback connect differs by OS
+        // (Windows often reports timed-out/reset/unreachable rather than
+        // ECONNREFUSED), so assert not-open rather than a specific word.
         assert!(
-            closed.contains("closed") || closed.contains("refused"),
-            "expected closed/refused, got: {closed}"
+            !closed.contains("open ("),
+            "expected not-open after drop, got: {closed}"
         );
     }
 
