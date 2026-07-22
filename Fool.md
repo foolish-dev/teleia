@@ -3,10 +3,8 @@
 Bias toward caution over speed; on trivial tasks, use judgment.
 
 ## 1. Think before coding
-State assumptions; when uncertain or a request is ambiguous, surface the
-options and ask rather than pick silently. Prefer the simpler approach
-and push back when warranted. Read the existing types and traits before
-adding new ones.
+State assumptions. Prefer the simpler approach and push back when
+warranted. Read the existing types and traits before adding new ones.
 
 ## 2. Simplicity first
 Minimum code that solves the problem — nothing speculative. No features
