@@ -27,6 +27,19 @@ pub struct TokenCounts {
     pub completion: u64,
 }
 
+/// Rough token estimate (~4 chars/token, from the JSON wire form) of what
+/// each turn sends the model: the system prompt (the first message), the
+/// tool schemas, and the conversation so far. Approximate — a `/context`
+/// at-a-glance, not a billing figure.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ContextEstimate {
+    pub system: u64,
+    pub tools: u64,
+    pub history: u64,
+    /// Conversation messages, excluding the leading system prompt.
+    pub messages: usize,
+}
+
 const SYSTEM_PROMPT_BASE: &str = "You are τέλεια, a terse coding assistant running in a terminal. \
 Use the provided tools to do real work: read, write, edit, multi_edit, bash, list, glob, grep, \
 head, tail, tree, stat, diff, which, fetch, mkdir, mv, cp, rm, apply_patch, wc, touch, sha256, \
@@ -510,6 +523,25 @@ impl Agent {
         self.messages.len()
     }
 
+    /// A rough per-turn token breakdown for `/context`. Estimates from the
+    /// JSON wire form at ~4 chars/token; `messages[0]` is the system prompt,
+    /// the rest is conversation, and the tool schemas are sent alongside.
+    pub fn context_estimate(&self) -> ContextEstimate {
+        let toks = |chars: usize| (chars / 4) as u64;
+        let ser = |m: &Message| serde_json::to_string(m).map_or(0, |s| s.len());
+        let mut est = ContextEstimate::default();
+        for (i, m) in self.messages.iter().enumerate() {
+            if i == 0 {
+                est.system = toks(ser(m));
+            } else {
+                est.history += toks(ser(m));
+                est.messages += 1;
+            }
+        }
+        est.tools = toks(serde_json::to_string(&self.tools).map_or(0, |s| s.len()));
+        est
+    }
+
     // ---- preference + history pass-through ----
     // Centralised so the TUI doesn't need to own its own Store handle.
 
@@ -885,6 +917,26 @@ mod tests {
                 def.function.name
             );
         }
+    }
+
+    #[test]
+    fn context_estimate_splits_system_tools_and_history() {
+        let mut agent = fake_agent();
+        let est = agent.context_estimate();
+        assert!(est.system > 0, "system prompt should have tokens");
+        assert!(est.tools > 0, "tool schemas should have tokens");
+        assert_eq!(est.history, 0, "fresh agent has no conversation");
+        assert_eq!(est.messages, 0);
+        // A user message lands in the history bucket, not the system one.
+        agent
+            .push(Message::User {
+                content: "hello world, some context to measure the estimate".into(),
+            })
+            .unwrap();
+        let est2 = agent.context_estimate();
+        assert_eq!(est2.system, est.system, "system prompt is unchanged");
+        assert!(est2.history > 0, "the user message counts as history");
+        assert_eq!(est2.messages, 1);
     }
 
     #[test]
