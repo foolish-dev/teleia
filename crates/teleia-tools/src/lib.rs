@@ -1819,7 +1819,8 @@ ToolDef::new(
                 "path": { "type": "string" },
                 "out": { "type": "string", "description": "Output path (default: path.gz encoding, or path with .gz stripped when decoding)" },
                 "level": { "type": "integer", "description": "Compression level 0-9 (default 6)" },
-                "decode": { "type": "boolean", "description": "Decompress instead of compress (default false)" }
+                "decode": { "type": "boolean", "description": "Decompress instead of compress (default false)" },
+                "overwrite": { "type": "boolean", "description": "Overwrite the output if it exists (default false)" }
             }, "required": ["path"] }),
         ),
         ToolDef::new(
@@ -1829,7 +1830,8 @@ ToolDef::new(
                 "path": { "type": "string" },
                 "out": { "type": "string" },
                 "level": { "type": "integer", "description": "0-9 (default 6)" },
-                "decode": { "type": "boolean" }
+                "decode": { "type": "boolean" },
+                "overwrite": { "type": "boolean", "description": "Overwrite the output if it exists (default false)" }
             }, "required": ["path"] }),
         ),
         ToolDef::new(
@@ -1839,7 +1841,8 @@ ToolDef::new(
                 "path": { "type": "string" },
                 "out": { "type": "string" },
                 "quality": { "type": "integer", "description": "0-11 (default 11)" },
-                "decode": { "type": "boolean" }
+                "decode": { "type": "boolean" },
+                "overwrite": { "type": "boolean", "description": "Overwrite the output if it exists (default false)" }
             }, "required": ["path"] }),
         ),
         ToolDef::new(
@@ -1848,7 +1851,8 @@ ToolDef::new(
             json!({ "type": "object", "properties": {
                 "path": { "type": "string" },
                 "out": { "type": "string" },
-                "decode": { "type": "boolean", "description": "Must be true (default true); false errors" }
+                "decode": { "type": "boolean", "description": "Must be true (default true); false errors" },
+                "overwrite": { "type": "boolean", "description": "Overwrite the output if it exists (default false)" }
             }, "required": ["path"] }),
         ),
         ToolDef::new(
@@ -1857,7 +1861,8 @@ ToolDef::new(
             json!({ "type": "object", "properties": {
                 "paths": { "type": "array", "items": { "type": "string" } },
                 "output": { "type": "string" },
-                "stored": { "type": "boolean", "description": "Store without compression (default false)" }
+                "stored": { "type": "boolean", "description": "Store without compression (default false)" },
+                "overwrite": { "type": "boolean", "description": "Overwrite the output if it exists (default false)" }
             }, "required": ["paths", "output"] }),
         ),
         ToolDef::new(
@@ -1875,7 +1880,8 @@ ToolDef::new(
             json!({ "type": "object", "properties": {
                 "paths": { "type": "array", "items": { "type": "string" } },
                 "output": { "type": "string" },
-                "gzip": { "type": "boolean", "description": "Gzip the archive (.tar.gz) (default false)" }
+                "gzip": { "type": "boolean", "description": "Gzip the archive (.tar.gz) (default false)" },
+                "overwrite": { "type": "boolean", "description": "Overwrite the output if it exists (default false)" }
             }, "required": ["paths", "output"] }),
         ),
         ToolDef::new(
@@ -13364,6 +13370,34 @@ fn compress_report(kind: &str, path: &str, out: &std::path::Path) -> Result<Stri
     ))
 }
 
+/// 8 GiB ceiling on a single decode's output — guards against a
+/// decompression bomb filling the disk before io::copy hits ENOSPC.
+const MAX_DECOMPRESSED: u64 = 8 * 1024 * 1024 * 1024;
+
+/// Create an output file, refusing to clobber an existing path unless
+/// `overwrite` (matches the refuse-to-clobber convention of mv/cp/download).
+fn compress_create(out: &std::path::Path, overwrite: bool) -> Result<std::fs::File> {
+    if !overwrite && out.exists() {
+        return Err(anyhow!(
+            "destination already exists: {} (pass overwrite:true to replace)",
+            out.display()
+        ));
+    }
+    std::fs::File::create(out).with_context(|| format!("create {}", out.display()))
+}
+
+/// Copy a decoder into `w`, erroring past MAX_DECOMPRESSED bytes.
+fn decode_copy(r: impl std::io::Read, w: &mut std::fs::File) -> Result<u64> {
+    let mut limited = std::io::Read::take(r, MAX_DECOMPRESSED + 1);
+    let n = std::io::copy(&mut limited, w)?;
+    if n > MAX_DECOMPRESSED {
+        return Err(anyhow!(
+            "decompressed output exceeds {MAX_DECOMPRESSED} bytes (possible decompression bomb)"
+        ));
+    }
+    Ok(n)
+}
+
 #[derive(Deserialize)]
 struct GzipArgs {
     path: String,
@@ -13373,6 +13407,8 @@ struct GzipArgs {
     level: Option<u32>,
     #[serde(default)]
     decode: bool,
+    #[serde(default)]
+    overwrite: bool,
 }
 
 async fn gzip_tool(args: Value) -> Result<String> {
@@ -13381,19 +13417,20 @@ async fn gzip_tool(args: Value) -> Result<String> {
         out,
         level,
         decode,
+        overwrite,
     } = serde_json::from_value(args)?;
     let out_path = compress_out_path(out, &path, "gz", decode)?;
     if decode {
-        let mut dec = flate2::read::GzDecoder::new(
+        let dec = flate2::read::GzDecoder::new(
             std::fs::File::open(&path).with_context(|| format!("open {path}"))?,
         );
-        let mut w = std::fs::File::create(&out_path)?;
-        std::io::copy(&mut dec, &mut w).context("gunzip")?;
+        let mut w = compress_create(&out_path, overwrite)?;
+        decode_copy(dec, &mut w).context("gunzip")?;
         compress_report("gunzip", &path, &out_path)
     } else {
         let lvl = level.unwrap_or(6).min(9);
         let mut enc = flate2::write::GzEncoder::new(
-            std::fs::File::create(&out_path)?,
+            compress_create(&out_path, overwrite)?,
             flate2::Compression::new(lvl),
         );
         std::io::copy(
@@ -13412,19 +13449,20 @@ async fn deflate_tool(args: Value) -> Result<String> {
         out,
         level,
         decode,
+        overwrite,
     } = serde_json::from_value(args)?;
     let out_path = compress_out_path(out, &path, "deflate", decode)?;
     if decode {
-        let mut dec = flate2::read::DeflateDecoder::new(
+        let dec = flate2::read::DeflateDecoder::new(
             std::fs::File::open(&path).with_context(|| format!("open {path}"))?,
         );
-        let mut w = std::fs::File::create(&out_path)?;
-        std::io::copy(&mut dec, &mut w).context("inflate")?;
+        let mut w = compress_create(&out_path, overwrite)?;
+        decode_copy(dec, &mut w).context("inflate")?;
         compress_report("inflate", &path, &out_path)
     } else {
         let lvl = level.unwrap_or(6).min(9);
         let mut enc = flate2::write::DeflateEncoder::new(
-            std::fs::File::create(&out_path)?,
+            compress_create(&out_path, overwrite)?,
             flate2::Compression::new(lvl),
         );
         std::io::copy(
@@ -13446,6 +13484,8 @@ struct BrotliArgs {
     quality: Option<u32>,
     #[serde(default)]
     decode: bool,
+    #[serde(default)]
+    overwrite: bool,
 }
 
 async fn brotli_tool(args: Value) -> Result<String> {
@@ -13454,13 +13494,14 @@ async fn brotli_tool(args: Value) -> Result<String> {
         out,
         quality,
         decode,
+        overwrite,
     } = serde_json::from_value(args)?;
     let out_path = compress_out_path(out, &path, "br", decode)?;
     let input = std::fs::File::open(&path).with_context(|| format!("open {path}"))?;
-    let mut w = std::fs::File::create(&out_path)?;
+    let mut w = compress_create(&out_path, overwrite)?;
     if decode {
-        let mut dec = brotli::Decompressor::new(input, 4096);
-        std::io::copy(&mut dec, &mut w).context("brotli decode")?;
+        let dec = brotli::Decompressor::new(input, 4096);
+        decode_copy(dec, &mut w).context("brotli decode")?;
         compress_report("unbrotli", &path, &out_path)
     } else {
         let q = quality.unwrap_or(11).min(11);
@@ -13477,22 +13518,29 @@ struct ZstdArgs {
     out: Option<String>,
     #[serde(default = "default_true")]
     decode: bool,
+    #[serde(default)]
+    overwrite: bool,
 }
 
 async fn zstd_tool(args: Value) -> Result<String> {
-    let ZstdArgs { path, out, decode } = serde_json::from_value(args)?;
+    let ZstdArgs {
+        path,
+        out,
+        decode,
+        overwrite,
+    } = serde_json::from_value(args)?;
     if !decode {
         return Err(anyhow!(
             "zstd is decode-only (no pure-Rust encoder); pass decode:true, or use gzip/brotli to compress"
         ));
     }
     let out_path = compress_out_path(out, &path, "zst", true)?;
-    let mut dec = ruzstd::StreamingDecoder::new(
+    let dec = ruzstd::StreamingDecoder::new(
         std::fs::File::open(&path).with_context(|| format!("open {path}"))?,
     )
     .map_err(|e| anyhow!("not a zstd stream: {e}"))?;
-    let mut w = std::fs::File::create(&out_path)?;
-    std::io::copy(&mut dec, &mut w).context("zstd decode")?;
+    let mut w = compress_create(&out_path, overwrite)?;
+    decode_copy(dec, &mut w).context("zstd decode")?;
     compress_report("unzstd", &path, &out_path)
 }
 
@@ -13502,6 +13550,8 @@ struct ZipArgs {
     output: String,
     #[serde(default)]
     stored: bool,
+    #[serde(default)]
+    overwrite: bool,
 }
 
 async fn zip_tool(args: Value) -> Result<String> {
@@ -13509,19 +13559,19 @@ async fn zip_tool(args: Value) -> Result<String> {
         paths,
         output,
         stored,
+        overwrite,
     } = serde_json::from_value(args)?;
     if paths.is_empty() {
         return Err(anyhow!("zip: `paths` is empty"));
     }
-    let mut zw = zip::ZipWriter::new(
-        std::fs::File::create(&output).with_context(|| format!("create {output}"))?,
-    );
+    let mut zw = zip::ZipWriter::new(compress_create(std::path::Path::new(&output), overwrite)?);
     let method = if stored {
         zip::CompressionMethod::Stored
     } else {
         zip::CompressionMethod::Deflated
     };
     let opts = zip::write::SimpleFileOptions::default().compression_method(method);
+    let mut seen = std::collections::HashSet::new();
     for p in &paths {
         let meta = std::fs::metadata(p).with_context(|| format!("stat {p}"))?;
         if meta.is_dir() {
@@ -13531,6 +13581,11 @@ async fn zip_tool(args: Value) -> Result<String> {
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| p.clone());
+        if !seen.insert(name.clone()) {
+            return Err(anyhow!(
+                "zip: duplicate entry name `{name}` (two inputs share a basename); rename or archive separately"
+            ));
+        }
         zw.start_file(name, opts)
             .with_context(|| format!("zip entry {p}"))?;
         std::io::copy(
@@ -13594,12 +13649,18 @@ async fn unzip_tool(args: Value) -> Result<String> {
 }
 
 fn tar_append_all<W: std::io::Write>(b: &mut tar::Builder<W>, paths: &[String]) -> Result<()> {
+    let mut seen = std::collections::HashSet::new();
     for p in paths {
         let meta = std::fs::symlink_metadata(p).with_context(|| format!("stat {p}"))?;
         let name = std::path::Path::new(p)
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| p.clone());
+        if !seen.insert(name.clone()) {
+            return Err(anyhow!(
+                "tar_create: duplicate entry name `{name}` (two inputs share a basename); rename or archive separately"
+            ));
+        }
         if meta.is_dir() {
             b.append_dir_all(&name, p)
                 .with_context(|| format!("append dir {p}"))?;
@@ -13618,6 +13679,8 @@ struct TarCreateArgs {
     output: String,
     #[serde(default)]
     gzip: bool,
+    #[serde(default)]
+    overwrite: bool,
 }
 
 async fn tar_create_tool(args: Value) -> Result<String> {
@@ -13625,11 +13688,12 @@ async fn tar_create_tool(args: Value) -> Result<String> {
         paths,
         output,
         gzip,
+        overwrite,
     } = serde_json::from_value(args)?;
     if paths.is_empty() {
         return Err(anyhow!("tar_create: `paths` is empty"));
     }
-    let file = std::fs::File::create(&output).with_context(|| format!("create {output}"))?;
+    let file = compress_create(std::path::Path::new(&output), overwrite)?;
     if gzip {
         let enc = flate2::write::GzEncoder::new(file, flate2::Compression::new(6));
         let mut b = tar::Builder::new(enc);
@@ -19734,5 +19798,38 @@ tempfile = "3"
         .await
         .unwrap();
         assert_eq!(std::fs::read_to_string(out.join("x.txt")).unwrap(), "ecks");
+    }
+
+    #[tokio::test]
+    async fn gzip_refuses_to_clobber_without_overwrite() {
+        let dir = tmp_path("clobber");
+        std::fs::create_dir_all(&dir).unwrap();
+        let _c = CleanupDir(dir.clone());
+        let src = dir.join("f.txt");
+        std::fs::write(&src, "data").unwrap();
+        let a = json!({ "path": src.to_str().unwrap() }).to_string();
+        dispatch("gzip", &a).await.unwrap(); // creates f.txt.gz
+                                             // second run: output exists -> refuse.
+        assert!(dispatch("gzip", &a).await.is_err());
+        // with overwrite it succeeds.
+        let ov = json!({ "path": src.to_str().unwrap(), "overwrite": true }).to_string();
+        assert!(dispatch("gzip", &ov).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn zip_rejects_duplicate_basenames() {
+        let dir = tmp_path("dup");
+        std::fs::create_dir_all(dir.join("a")).unwrap();
+        std::fs::create_dir_all(dir.join("b")).unwrap();
+        let _c = CleanupDir(dir.clone());
+        std::fs::write(dir.join("a/log.txt"), "1").unwrap();
+        std::fs::write(dir.join("b/log.txt"), "2").unwrap();
+        let args = json!({
+            "paths": [dir.join("a/log.txt").to_str().unwrap(), dir.join("b/log.txt").to_str().unwrap()],
+            "output": dir.join("dup.zip").to_str().unwrap()
+        })
+        .to_string();
+        let err = dispatch("zip", &args).await.unwrap_err().to_string();
+        assert!(err.contains("duplicate entry name"), "{err}");
     }
 }
