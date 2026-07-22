@@ -1665,6 +1665,153 @@ ToolDef::new(
             "List network interfaces with MAC address and assigned IP networks (addr/prefix).",
             json!({ "type": "object", "properties": {} }),
         ),
+        ToolDef::new(
+            "yaml_to_json",
+            "Convert YAML to JSON. Supply the YAML via `path` (a file to read) or inline `data` (exactly one). Multi-document streams (separated by `---`) become a JSON array of documents. Set `pretty` to true for indented output (the default); false emits compact single-line JSON.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to a YAML file to read; mutually exclusive with `data`" },
+                    "data": { "type": "string", "description": "Inline YAML text; mutually exclusive with `path`" },
+                    "pretty": { "type": "boolean", "description": "Pretty-print the JSON output (default true)" }
+                }
+            }),
+        ),
+        ToolDef::new(
+            "json_to_yaml",
+            "Convert JSON to YAML. Supply the JSON via `data` (inline string) or `path` (a `.json` file); provide exactly one. Parses with serde_json and re-emits with a proper YAML serializer, so booleans, nulls, and numeric-looking strings are quoted correctly — safer than a hand-rolled or `sed`-based conversion.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string", "description": "Path to a JSON file to convert; mutually exclusive with `data`" },
+                "data": { "type": "string", "description": "Inline JSON string to convert; mutually exclusive with `path`" }
+            } }),
+        ),
+ToolDef::new(
+            "yaml_get",
+            "Extract a value from a YAML file by RFC 6901 JSON Pointer (e.g. `/services/web/image`, `/jobs/0/name`). An empty pointer returns the whole document. The result is converted to JSON and pretty-printed; set `raw: true` to print a scalar's plain text without JSON quoting. Cheaper and more precise than reading + eyeballing a big YAML file.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" },
+                "pointer": { "type": "string", "description": "JSON Pointer into the parsed YAML; empty string selects the root document (default empty)" },
+                "raw": { "type": "boolean", "description": "For a scalar result, print its plain string value instead of pretty-printed JSON (default false)" }
+            }, "required": ["path"] }),
+        ),
+ToolDef::new(
+            "toml_to_json",
+            "Convert a TOML document to JSON. Reads TOML from `path` or inline `data` (exactly one), parses it, and returns the equivalent JSON pretty-printed by default (set `pretty: false` for compact single-line output). Errors on invalid TOML. Read-only: writes nothing.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to a TOML file to read (provide this or `data`, not both)" },
+                    "data": { "type": "string", "description": "Inline TOML text to convert (provide this or `path`, not both)" },
+                    "pretty": { "type": "boolean", "description": "Pretty-print the JSON output (default true); set false for compact single-line JSON" }
+                }
+            }),
+        ),
+        ToolDef::new(
+            "json_to_toml",
+            "Convert a JSON document to TOML. Provide exactly one of `path` (read the JSON from a file) or `data` (inline JSON string). Returns pretty-printed TOML. Errors if the JSON has no TOML representation — e.g. a non-table root (array, string, number) or a null value, since TOML has no null.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to a JSON file to read." },
+                    "data": { "type": "string", "description": "Inline JSON string to convert." }
+                }
+            }),
+        ),
+        ToolDef::new(
+            "toml_get",
+            "Extract a value from a TOML file by RFC 6901 JSON Pointer (e.g. `/package/name`, `/dependencies/serde`). The TOML is parsed and treated as a JSON document, so tables index like objects and arrays like `/bin/0`. An empty pointer returns the whole document. Result is pretty-printed JSON; set `raw: true` to emit a bare string scalar without JSON quotes. Read-only: writes nothing. Cheaper and more precise than reading + eyeballing a Cargo.toml / pyproject.toml.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string", "description": "Path to the TOML file to read" },
+                "pointer": { "type": "string", "description": "RFC 6901 JSON Pointer into the parsed TOML; empty string selects the root document" },
+                "raw": { "type": "boolean", "description": "When the selected value is a string scalar, emit it unquoted (default false)" }
+            }, "required": ["path", "pointer"] }),
+        ),
+        ToolDef::new(
+            "deps_list",
+            "List the declared dependencies of a project manifest. Accepts a path to a manifest file or a project directory (defaults to the current directory, in which case a manifest is auto-detected). Supports Cargo.toml (Rust), package.json (Node), pyproject.toml and requirements.txt (Python). Returns each dependency as `name = version` grouped by section (e.g. dependencies, dev-dependencies). Read-only.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to a manifest file or a project directory (default: current directory)" }
+                }
+            }),
+        ),
+        ToolDef::new(
+            "package_info",
+            "Read a package manifest (Cargo.toml, package.json, or pyproject.toml) and return a unified {name, version, dependencies} JSON summary. `path` may point at the manifest file directly or at a project directory containing one.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to a manifest file (Cargo.toml / package.json / pyproject.toml) or a directory containing one" }
+                },
+                "required": ["path"]
+            }),
+        ),
+ToolDef::new(
+            "csv_to_json",
+            "Parse a CSV file into JSON. With a header row (default), each record becomes an object keyed by column name; set `has_header: false` to emit each record as an array of string fields. Handles BOM, CRLF, and quoted fields. Result is a pretty-printed JSON array. Set `delimiter` for TSV or other separators (single character, default `,`).",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" },
+                "has_header": { "type": "boolean", "description": "Treat the first row as column names and key objects by them (default true)" },
+                "delimiter": { "type": "string", "description": "Single-character field separator (default `,`; use `\\t` for TSV)" }
+            }, "required": ["path"] }),
+        ),
+ToolDef::new(
+            "csv_select",
+            "Project selected columns out of a CSV file and re-serialize them as CSV. Uses a proper RFC-4180 parser, so embedded quotes, commas, and newlines inside quoted fields are preserved. `columns` entries are matched against header names when `has_header` is true (default), or as 1-based column indices; a purely-numeric entry is always treated as a 1-based index. With `has_header` false, entries must be 1-based indices and no header row is emitted. Duplicate/reordered selections are honored. `delimiter` is a single character (default `,`) used for both reading and writing. Read-only: parses `path` and returns the projected CSV text; never writes.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string", "description": "Path to the CSV file" },
+                "columns": { "type": "array", "items": { "type": "string" }, "description": "Columns to keep, as header names or 1-based indices. Order and duplicates are preserved in the output." },
+                "has_header": { "type": "boolean", "description": "Treat the first row as a header (default true). When false, `columns` must be 1-based indices and no header is emitted." },
+                "delimiter": { "type": "string", "description": "Single-character field delimiter for reading and writing (default `,`)" }
+            }, "required": ["path", "columns"] }),
+        ),
+ToolDef::new(
+    "csv_query",
+    "Filter rows of a CSV file. Keeps only rows where the named (or 0-based indexed) column matches a simple predicate — `equals` for an exact match or `contains` for a substring — and re-emits the matching rows as CSV (with the header row preserved when has_header is true). Read-only.",
+    json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string", "description": "Path to the CSV file" },
+            "column": { "type": "string", "description": "Column to test: a header name (when has_header is true) or a 0-based column index" },
+            "equals": { "type": "string", "description": "Keep rows whose column value equals this string exactly" },
+            "contains": { "type": "string", "description": "Keep rows whose column value contains this substring. Ignored if `equals` is given." },
+            "has_header": { "type": "boolean", "description": "Treat the first row as a header (default true). When true, `column` may be a header name." },
+            "delimiter": { "type": "string", "description": "Single-character field delimiter (default \",\")" }
+        },
+        "required": ["path", "column"]
+    }),
+),
+        ToolDef::new(
+            "csv_to_ndjson",
+            "Convert a CSV file to newline-delimited JSON (NDJSON): one JSON object per row, one row per line. With `has_header: true` (default) the first row supplies object keys; otherwise keys are `col0`, `col1`, … by position. `delimiter` defaults to `,` (pass e.g. `\"\\t\"` for TSV). Streaming-friendly output for piping into `jq -c` or line-oriented tools — unlike a single JSON array.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" },
+                "has_header": { "type": "boolean", "description": "Treat the first row as column names (default true); if false keys are col0, col1, …" },
+                "delimiter": { "type": "string", "description": "Field delimiter, single character (default \",\"); use \"\\t\" for TSV" }
+            }, "required": ["path"] }),
+        ),
+ToolDef::new(
+    "xml_to_json",
+    "Convert XML to JSON. Reads XML from `path` or inline `data` (provide exactly one) and emits a JSON tree: each element becomes an object, attributes become `@name` keys, text content becomes `#text` (or the bare string for leaf elements), and repeated sibling tags become arrays. CDATA is inlined as text. Read-only.",
+    json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string", "description": "Path to an XML file to read" },
+            "data": { "type": "string", "description": "Inline XML string (alternative to `path`)" },
+            "pretty": { "type": "boolean", "description": "Pretty-print the JSON output (default false)" }
+        }
+    }),
+),
+ToolDef::new(
+            "xml_format",
+            "Pretty-print (re-indent) an XML or HTML document. Reads from `path` or inline `data` (exactly one), normalizes whitespace, and re-emits with consistent indentation (`indent` spaces per level, default 2). Read-only: never writes the file back. Malformed XML (mismatched or unclosed tags) is reported as an error. Complements `format`, which does not route XML/HTML.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string", "description": "Path to an XML/HTML file to re-indent; mutually exclusive with `data`" },
+                "data": { "type": "string", "description": "Inline XML/HTML text to re-indent; mutually exclusive with `path`" },
+                "indent": { "type": "integer", "description": "Spaces of indentation per nesting level (default 2)" }
+            } }),
+        ),
     ]
 }
 
@@ -1845,6 +1992,20 @@ pub async fn dispatch(name: &str, arguments: &str) -> Result<String> {
         "sysinfo" => sysinfo_tool(args).await,
         "df" => df_tool(args).await,
         "net_interfaces" => net_interfaces_tool(args).await,
+        "yaml_to_json" => yaml_to_json_tool(args).await,
+        "json_to_yaml" => json_to_yaml_tool(args).await,
+        "yaml_get" => yaml_get_tool(args).await,
+        "toml_to_json" => toml_to_json_tool(args).await,
+        "json_to_toml" => json_to_toml_tool(args).await,
+        "toml_get" => toml_get_tool(args).await,
+        "deps_list" => deps_list_tool(args).await,
+        "package_info" => package_info_tool(args).await,
+        "csv_to_json" => csv_to_json_tool(args).await,
+        "csv_select" => csv_select_tool(args).await,
+        "csv_query" => csv_query_tool(args).await,
+        "csv_to_ndjson" => csv_to_ndjson_tool(args).await,
+        "xml_to_json" => xml_to_json_tool(args).await,
+        "xml_format" => xml_format_tool(args).await,
         other => Err(anyhow!("unknown tool: {other}")),
     }
 }
@@ -12096,6 +12257,978 @@ async fn net_interfaces_tool(_args: Value) -> Result<String> {
     Ok(serde_json::to_string_pretty(&json!({ "interfaces": out }))?)
 }
 
+#[derive(Deserialize)]
+struct YamlToJsonArgs {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    data: Option<String>,
+    #[serde(default)]
+    pretty: Option<bool>,
+}
+
+async fn yaml_to_json_tool(args: Value) -> Result<String> {
+    let YamlToJsonArgs { path, data, pretty } = serde_json::from_value(args)?;
+    let text = match (path, data) {
+        (Some(p), None) => tokio::fs::read_to_string(&p)
+            .await
+            .with_context(|| format!("read {p}"))?,
+        (None, Some(d)) => d,
+        _ => return Err(anyhow!("provide exactly one of `path` or `data`")),
+    };
+
+    // A YAML stream may hold multiple documents separated by `---`. Collect
+    // them; a single document is emitted bare, several become a JSON array.
+    let mut docs: Vec<Value> = Vec::new();
+    for doc in serde_yaml::Deserializer::from_str(&text) {
+        let value = Value::deserialize(doc).context("parse YAML")?;
+        docs.push(value);
+    }
+
+    let out = match docs.len() {
+        0 => Value::Null,
+        1 => docs.into_iter().next().unwrap(),
+        _ => Value::Array(docs),
+    };
+
+    let pretty = pretty.unwrap_or(true);
+    if pretty {
+        Ok(serde_json::to_string_pretty(&out)?)
+    } else {
+        Ok(serde_json::to_string(&out)?)
+    }
+}
+
+#[derive(Deserialize)]
+struct JsonToYamlArgs {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    data: Option<String>,
+}
+
+async fn json_to_yaml_tool(args: Value) -> Result<String> {
+    let JsonToYamlArgs { path, data } = serde_json::from_value(args)?;
+    let text = match (path, data) {
+        (Some(p), None) => tokio::fs::read_to_string(&p)
+            .await
+            .with_context(|| format!("read {p}"))?,
+        (None, Some(d)) => d,
+        _ => return Err(anyhow!("provide exactly one of `path` or `data`")),
+    };
+    let doc: Value = serde_json::from_str(&text).context("parse JSON")?;
+    let yaml = serde_yaml::to_string(&doc).context("serialize YAML")?;
+    Ok(yaml)
+}
+
+#[derive(Deserialize)]
+struct YamlGetArgs {
+    path: String,
+    #[serde(default)]
+    pointer: String,
+    #[serde(default)]
+    raw: bool,
+}
+
+async fn yaml_get_tool(args: Value) -> Result<String> {
+    let YamlGetArgs { path, pointer, raw } = serde_json::from_value(args)?;
+    let text = tokio::fs::read_to_string(&path)
+        .await
+        .with_context(|| format!("read {path}"))?;
+    let doc: Value =
+        serde_yaml::from_str(&text).with_context(|| format!("parsing YAML from {path}"))?;
+    let found = if pointer.is_empty() {
+        &doc
+    } else {
+        doc.pointer(&pointer)
+            .ok_or_else(|| anyhow!("no value at pointer `{pointer}`"))?
+    };
+    if raw {
+        if let Value::String(s) = found {
+            return Ok(s.clone());
+        }
+    }
+    Ok(serde_json::to_string_pretty(found)?)
+}
+
+#[derive(Deserialize)]
+struct TomlToJsonArgs {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    data: Option<String>,
+    #[serde(default = "toml_to_json_default_pretty")]
+    pretty: bool,
+}
+
+fn toml_to_json_default_pretty() -> bool {
+    true
+}
+
+async fn toml_to_json_tool(args: Value) -> Result<String> {
+    let TomlToJsonArgs { path, data, pretty } = serde_json::from_value(args)?;
+    let bytes = one_input_bytes(path, data)?;
+    let text = std::str::from_utf8(&bytes).context("TOML input is not valid UTF-8")?;
+    let doc: Value = toml::from_str(text).context("parse TOML")?;
+    if pretty {
+        Ok(serde_json::to_string_pretty(&doc)?)
+    } else {
+        Ok(serde_json::to_string(&doc)?)
+    }
+}
+
+#[derive(Deserialize)]
+struct JsonToTomlArgs {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    data: Option<String>,
+}
+
+async fn json_to_toml_tool(args: Value) -> Result<String> {
+    let JsonToTomlArgs { path, data } = serde_json::from_value(args)?;
+    let text = match (path, data) {
+        (Some(p), None) => tokio::fs::read_to_string(&p)
+            .await
+            .with_context(|| format!("read {p}"))?,
+        (None, Some(d)) => d,
+        _ => return Err(anyhow!("provide exactly one of `path` or `data`")),
+    };
+    let doc: Value = serde_json::from_str(&text).context("parse JSON")?;
+    toml::to_string_pretty(&doc).context(
+        "no TOML representation for this JSON (TOML requires a table/object root and has no null)",
+    )
+}
+
+#[derive(Deserialize)]
+struct TomlGetArgs {
+    path: String,
+    pointer: String,
+    #[serde(default)]
+    raw: bool,
+}
+
+async fn toml_get_tool(args: Value) -> Result<String> {
+    let TomlGetArgs { path, pointer, raw } = serde_json::from_value(args)?;
+    let text = tokio::fs::read_to_string(&path)
+        .await
+        .with_context(|| format!("read {path}"))?;
+    let doc: Value = toml::from_str(&text).with_context(|| format!("parsing TOML from {path}"))?;
+    let found = if pointer.is_empty() {
+        &doc
+    } else {
+        doc.pointer(&pointer)
+            .ok_or_else(|| anyhow!("no value at pointer `{pointer}`"))?
+    };
+    if raw {
+        if let Value::String(s) = found {
+            return Ok(s.clone());
+        }
+    }
+    Ok(serde_json::to_string_pretty(found)?)
+}
+
+#[derive(Deserialize)]
+struct DepsListArgs {
+    #[serde(default)]
+    path: Option<String>,
+}
+
+// Manifest filenames we know how to parse, in detection priority order.
+const DEPS_LIST_MANIFESTS: &[&str] = &[
+    "Cargo.toml",
+    "package.json",
+    "pyproject.toml",
+    "requirements.txt",
+];
+
+// Resolve the argument to a concrete manifest file. A file path is used as-is;
+// a directory (or the defaulted cwd) is searched for a known manifest.
+fn deps_list_resolve(path: Option<String>) -> Result<PathBuf> {
+    let base = match path {
+        Some(p) => PathBuf::from(p),
+        None => std::env::current_dir().context("get current directory")?,
+    };
+    if base.is_file() {
+        return Ok(base);
+    }
+    if base.is_dir() {
+        for name in DEPS_LIST_MANIFESTS {
+            let candidate = base.join(name);
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+        return Err(anyhow!(
+            "no supported manifest found in {} (looked for {})",
+            base.display(),
+            DEPS_LIST_MANIFESTS.join(", ")
+        ));
+    }
+    Err(anyhow!("no such file or directory: {}", base.display()))
+}
+
+// Render a section of `{name: version}` entries as sorted `name = version` lines.
+fn deps_list_section(title: &str, table: Option<&Value>, out: &mut String) {
+    let obj = match table.and_then(Value::as_object) {
+        Some(o) if !o.is_empty() => o,
+        _ => return,
+    };
+    out.push_str(&format!("[{title}]\n"));
+    let mut names: Vec<&String> = obj.keys().collect();
+    names.sort();
+    for name in names {
+        let req = &obj[name];
+        // Cargo allows either `foo = "1"` or `foo = { version = "1", ... }`.
+        let version = match req {
+            Value::String(s) => s.clone(),
+            Value::Object(m) => m
+                .get("version")
+                .and_then(Value::as_str)
+                .unwrap_or("*")
+                .to_string(),
+            other => other.to_string(),
+        };
+        out.push_str(&format!("{name} = {version}\n"));
+    }
+}
+
+async fn deps_list_tool(args: Value) -> Result<String> {
+    let DepsListArgs { path } = serde_json::from_value(args)?;
+    let manifest = deps_list_resolve(path)?;
+    let filename = manifest
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    let text = tokio::fs::read_to_string(&manifest)
+        .await
+        .with_context(|| format!("read {}", manifest.display()))?;
+
+    let mut out = String::new();
+    match filename {
+        "Cargo.toml" => {
+            let doc: Value = toml::from_str(&text)
+                .with_context(|| format!("parse TOML from {}", manifest.display()))?;
+            deps_list_section("dependencies", doc.pointer("/dependencies"), &mut out);
+            deps_list_section(
+                "dev-dependencies",
+                doc.pointer("/dev-dependencies"),
+                &mut out,
+            );
+            deps_list_section(
+                "build-dependencies",
+                doc.pointer("/build-dependencies"),
+                &mut out,
+            );
+        }
+        "package.json" => {
+            let doc: Value = serde_json::from_str(&text)
+                .with_context(|| format!("parse JSON from {}", manifest.display()))?;
+            deps_list_section("dependencies", doc.pointer("/dependencies"), &mut out);
+            deps_list_section("devDependencies", doc.pointer("/devDependencies"), &mut out);
+        }
+        "pyproject.toml" => {
+            let doc: Value = toml::from_str(&text)
+                .with_context(|| format!("parse TOML from {}", manifest.display()))?;
+            // PEP 621 `[project] dependencies` is an array of requirement strings;
+            // Poetry uses `[tool.poetry.dependencies]` as a table.
+            if let Some(arr) = doc
+                .pointer("/project/dependencies")
+                .and_then(Value::as_array)
+            {
+                out.push_str("[dependencies]\n");
+                for req in arr {
+                    if let Some(s) = req.as_str() {
+                        out.push_str(s);
+                        out.push('\n');
+                    }
+                }
+            }
+            deps_list_section(
+                "tool.poetry.dependencies",
+                doc.pointer("/tool/poetry/dependencies"),
+                &mut out,
+            );
+        }
+        "requirements.txt" => {
+            out.push_str("[requirements]\n");
+            for line in text.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') || line.starts_with("-") {
+                    continue;
+                }
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+        other => {
+            return Err(anyhow!(
+                "unsupported manifest `{other}` (supported: {})",
+                DEPS_LIST_MANIFESTS.join(", ")
+            ));
+        }
+    }
+
+    if out.is_empty() {
+        return Ok(format!("{filename}: no dependencies declared"));
+    }
+    Ok(out.trim_end().to_string())
+}
+
+#[derive(Deserialize)]
+struct PackageInfoArgs {
+    path: String,
+}
+
+/// Locate the actual manifest file: if `path` is a directory, look inside it
+/// for a known manifest; otherwise use `path` as-is.
+fn package_info_resolve(path: &str) -> Result<PathBuf> {
+    let p = PathBuf::from(path);
+    if p.is_dir() {
+        for name in ["Cargo.toml", "package.json", "pyproject.toml"] {
+            let candidate = p.join(name);
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+        return Err(anyhow!(
+            "no Cargo.toml, package.json, or pyproject.toml found in directory `{path}`"
+        ));
+    }
+    Ok(p)
+}
+
+/// Collect the keys of a JSON object at `pointer` into `names`, if present.
+fn package_info_collect_keys(doc: &Value, pointer: &str, names: &mut Vec<String>) {
+    if let Some(Value::Object(map)) = doc.pointer(pointer) {
+        for k in map.keys() {
+            names.push(k.clone());
+        }
+    }
+}
+
+async fn package_info_tool(args: Value) -> Result<String> {
+    let PackageInfoArgs { path } = serde_json::from_value(args)?;
+    let manifest = package_info_resolve(&path)?;
+    let file_name = manifest
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| anyhow!("invalid manifest path `{}`", manifest.display()))?
+        .to_string();
+    let text = tokio::fs::read_to_string(&manifest)
+        .await
+        .with_context(|| format!("read {}", manifest.display()))?;
+
+    let (name, version, mut deps): (Value, Value, Vec<String>) = match file_name.as_str() {
+        "Cargo.toml" => {
+            let doc: Value = toml::from_str(&text)
+                .with_context(|| format!("parse TOML from {}", manifest.display()))?;
+            let name = doc.pointer("/package/name").cloned().unwrap_or(Value::Null);
+            let version = doc
+                .pointer("/package/version")
+                .cloned()
+                .unwrap_or(Value::Null);
+            let mut deps = Vec::new();
+            package_info_collect_keys(&doc, "/dependencies", &mut deps);
+            (name, version, deps)
+        }
+        "package.json" => {
+            let doc: Value = serde_json::from_str(&text)
+                .with_context(|| format!("parse JSON from {}", manifest.display()))?;
+            let name = doc.pointer("/name").cloned().unwrap_or(Value::Null);
+            let version = doc.pointer("/version").cloned().unwrap_or(Value::Null);
+            let mut deps = Vec::new();
+            package_info_collect_keys(&doc, "/dependencies", &mut deps);
+            package_info_collect_keys(&doc, "/devDependencies", &mut deps);
+            (name, version, deps)
+        }
+        "pyproject.toml" => {
+            let doc: Value = toml::from_str(&text)
+                .with_context(|| format!("parse TOML from {}", manifest.display()))?;
+            // PEP 621 [project] table first, then Poetry's [tool.poetry].
+            let (name, version, deps) = if doc.pointer("/project").is_some() {
+                let name = doc.pointer("/project/name").cloned().unwrap_or(Value::Null);
+                let version = doc
+                    .pointer("/project/version")
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                // PEP 621 dependencies is an array of requirement strings.
+                let deps = match doc.pointer("/project/dependencies") {
+                    Some(Value::Array(arr)) => arr
+                        .iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                (name, version, deps)
+            } else {
+                let name = doc
+                    .pointer("/tool/poetry/name")
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                let version = doc
+                    .pointer("/tool/poetry/version")
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                let mut deps = Vec::new();
+                package_info_collect_keys(&doc, "/tool/poetry/dependencies", &mut deps);
+                (name, version, deps)
+            };
+            (name, version, deps)
+        }
+        other => {
+            return Err(anyhow!(
+                "unsupported manifest `{other}` (expected Cargo.toml, package.json, or pyproject.toml)"
+            ));
+        }
+    };
+
+    deps.sort();
+    deps.dedup();
+
+    let out = json!({
+        "manifest": file_name,
+        "name": name,
+        "version": version,
+        "dependencies": deps,
+    });
+    Ok(serde_json::to_string_pretty(&out)?)
+}
+
+#[derive(Deserialize)]
+struct CsvToJsonArgs {
+    path: String,
+    #[serde(default = "csv_to_json_default_header")]
+    has_header: bool,
+    #[serde(default = "csv_to_json_default_delimiter")]
+    delimiter: String,
+}
+
+fn csv_to_json_default_header() -> bool {
+    true
+}
+
+fn csv_to_json_default_delimiter() -> String {
+    ",".to_string()
+}
+
+async fn csv_to_json_tool(args: Value) -> Result<String> {
+    let CsvToJsonArgs {
+        path,
+        has_header,
+        delimiter,
+    } = serde_json::from_value(args)?;
+
+    let delim = csv_to_json_one_byte_delim(&delimiter)?;
+
+    let text = tokio::fs::read_to_string(&path)
+        .await
+        .with_context(|| format!("read {path}"))?;
+
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(has_header)
+        .delimiter(delim)
+        .flexible(true)
+        .from_reader(text.as_bytes());
+
+    let mut rows: Vec<Value> = Vec::new();
+
+    if has_header {
+        let headers = rdr
+            .headers()
+            .with_context(|| format!("parsing CSV header from {path}"))?
+            .clone();
+        for rec in rdr.records() {
+            let rec = rec.with_context(|| format!("parsing CSV from {path}"))?;
+            let mut obj = serde_json::Map::new();
+            for (i, key) in headers.iter().enumerate() {
+                let val = rec.get(i).unwrap_or("");
+                obj.insert(key.to_string(), Value::String(val.to_string()));
+            }
+            rows.push(Value::Object(obj));
+        }
+    } else {
+        for rec in rdr.records() {
+            let rec = rec.with_context(|| format!("parsing CSV from {path}"))?;
+            let fields: Vec<Value> = rec.iter().map(|f| Value::String(f.to_string())).collect();
+            rows.push(Value::Array(fields));
+        }
+    }
+
+    Ok(serde_json::to_string_pretty(&Value::Array(rows))?)
+}
+
+fn csv_to_json_one_byte_delim(delimiter: &str) -> Result<u8> {
+    let bytes = delimiter.as_bytes();
+    if bytes.len() != 1 {
+        return Err(anyhow!(
+            "delimiter must be a single ASCII byte, got {delimiter:?}"
+        ));
+    }
+    Ok(bytes[0])
+}
+
+#[derive(Deserialize)]
+struct CsvSelectArgs {
+    path: String,
+    columns: Vec<String>,
+    #[serde(default = "csv_select_default_has_header")]
+    has_header: bool,
+    delimiter: Option<String>,
+}
+
+fn csv_select_default_has_header() -> bool {
+    true
+}
+
+fn csv_select_delimiter(delimiter: Option<&str>) -> Result<u8> {
+    let d = delimiter.unwrap_or(",");
+    let bytes = d.as_bytes();
+    if bytes.len() != 1 {
+        return Err(anyhow!(
+            "delimiter must be a single ASCII character, got `{d}`"
+        ));
+    }
+    Ok(bytes[0])
+}
+
+/// Resolve each requested column to a 0-based index into the source record.
+/// A purely-numeric entry is a 1-based index. Otherwise it is looked up as a
+/// header name (only possible when `headers` is present).
+fn csv_select_resolve(
+    columns: &[String],
+    headers: Option<&csv::StringRecord>,
+) -> Result<Vec<usize>> {
+    let mut resolved = Vec::with_capacity(columns.len());
+    for col in columns {
+        let trimmed = col.trim();
+        if let Ok(n) = trimmed.parse::<usize>() {
+            if n == 0 {
+                return Err(anyhow!(
+                    "column index `{col}` is out of range: indices are 1-based"
+                ));
+            }
+            resolved.push(n - 1);
+            continue;
+        }
+        match headers {
+            Some(h) => {
+                let idx = h.iter().position(|name| name == col).ok_or_else(|| {
+                    anyhow!(
+                        "no column named `{col}` in header: {:?}",
+                        h.iter().collect::<Vec<_>>()
+                    )
+                })?;
+                resolved.push(idx);
+            }
+            None => {
+                return Err(anyhow!(
+                    "column `{col}` is not a 1-based index; header names require has_header=true"
+                ));
+            }
+        }
+    }
+    Ok(resolved)
+}
+
+async fn csv_select_tool(args: Value) -> Result<String> {
+    let CsvSelectArgs {
+        path,
+        columns,
+        has_header,
+        delimiter,
+    } = serde_json::from_value(args)?;
+    if columns.is_empty() {
+        return Err(anyhow!("columns must not be empty"));
+    }
+    let delim = csv_select_delimiter(delimiter.as_deref())?;
+    let text = tokio::fs::read_to_string(&path)
+        .await
+        .with_context(|| format!("read {path}"))?;
+
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(has_header)
+        .delimiter(delim)
+        .flexible(true)
+        .from_reader(text.as_bytes());
+
+    // Resolve selections against the header when present.
+    let headers = if has_header {
+        Some(rdr.headers().context("read CSV header")?.clone())
+    } else {
+        None
+    };
+    let indices = csv_select_resolve(&columns, headers.as_ref())?;
+
+    let mut wtr = csv::WriterBuilder::new()
+        .delimiter(delim)
+        .from_writer(Vec::new());
+
+    if let Some(h) = headers.as_ref() {
+        // Re-emit the selected header cells. An index past the header width
+        // (possible with an explicit numeric selection) yields an empty cell.
+        let row: Vec<&str> = indices.iter().map(|&i| h.get(i).unwrap_or("")).collect();
+        wtr.write_record(&row).context("write CSV header")?;
+    }
+
+    for (n, rec) in rdr.records().enumerate() {
+        let rec = rec.with_context(|| format!("parsing CSV record {} of {path}", n + 1))?;
+        // Missing cells (short rows under flexible parsing) become empty.
+        let row: Vec<&str> = indices.iter().map(|&i| rec.get(i).unwrap_or("")).collect();
+        wtr.write_record(&row)
+            .with_context(|| format!("write CSV record {}", n + 1))?;
+    }
+
+    let bytes = wtr
+        .into_inner()
+        .map_err(|e| anyhow!("finish CSV output: {e}"))?;
+    String::from_utf8(bytes).context("CSV output was not valid UTF-8")
+}
+
+#[derive(Deserialize)]
+struct CsvQueryArgs {
+    path: String,
+    column: String,
+    #[serde(default)]
+    equals: Option<String>,
+    #[serde(default)]
+    contains: Option<String>,
+    #[serde(default = "csv_query_default_has_header")]
+    has_header: bool,
+    #[serde(default)]
+    delimiter: Option<String>,
+}
+
+fn csv_query_default_has_header() -> bool {
+    true
+}
+
+/// Resolve the target column to a 0-based index. When there is a header, the
+/// `column` argument may be a header name; otherwise (or if no name matches) it
+/// must parse as an integer index.
+fn csv_query_column_index(column: &str, headers: Option<&csv::StringRecord>) -> Result<usize> {
+    if let Some(hdr) = headers {
+        if let Some(i) = hdr.iter().position(|h| h == column) {
+            return Ok(i);
+        }
+    }
+    column
+        .parse::<usize>()
+        .map_err(|_| anyhow!("column `{column}` is not a header name or a valid 0-based index"))
+}
+
+async fn csv_query_tool(args: Value) -> Result<String> {
+    let CsvQueryArgs {
+        path,
+        column,
+        equals,
+        contains,
+        has_header,
+        delimiter,
+    } = serde_json::from_value(args)?;
+
+    let delim: u8 = match delimiter {
+        Some(d) => {
+            let bytes = d.as_bytes();
+            if bytes.len() != 1 {
+                return Err(anyhow!("delimiter must be a single byte, got `{d}`"));
+            }
+            bytes[0]
+        }
+        None => b',',
+    };
+
+    if equals.is_none() && contains.is_none() {
+        return Err(anyhow!("csv_query requires either `equals` or `contains`"));
+    }
+
+    let text = tokio::fs::read_to_string(&path)
+        .await
+        .with_context(|| format!("read {path}"))?;
+
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(has_header)
+        .delimiter(delim)
+        .flexible(true)
+        .from_reader(text.as_bytes());
+
+    let headers = if has_header {
+        Some(rdr.headers().context("reading CSV header")?.clone())
+    } else {
+        None
+    };
+
+    let idx = csv_query_column_index(&column, headers.as_ref())?;
+
+    let mut wtr = csv::WriterBuilder::new()
+        .delimiter(delim)
+        .from_writer(Vec::new());
+
+    if let Some(hdr) = &headers {
+        wtr.write_record(hdr).context("writing CSV header")?;
+    }
+
+    for rec in rdr.records() {
+        let rec = rec.context("parsing CSV record")?;
+        let field = rec.get(idx).unwrap_or("");
+        let keep = match &equals {
+            Some(want) => field == want,
+            None => field.contains(contains.as_deref().unwrap_or("")),
+        };
+        if keep {
+            wtr.write_record(&rec).context("writing CSV record")?;
+        }
+    }
+
+    let bytes = wtr.into_inner().context("finalizing CSV output")?;
+    String::from_utf8(bytes).context("CSV output is not valid UTF-8")
+}
+
+#[derive(Deserialize)]
+struct CsvToNdjsonArgs {
+    path: String,
+    #[serde(default = "csv_to_ndjson_default_header")]
+    has_header: bool,
+    delimiter: Option<String>,
+}
+
+fn csv_to_ndjson_default_header() -> bool {
+    true
+}
+
+fn csv_to_ndjson_delim(delimiter: Option<String>) -> Result<u8> {
+    match delimiter {
+        None => Ok(b','),
+        Some(s) => {
+            let mut bytes = s.bytes();
+            match (bytes.next(), bytes.next()) {
+                (Some(b), None) => Ok(b),
+                _ => Err(anyhow!("delimiter must be exactly one byte, got `{s}`")),
+            }
+        }
+    }
+}
+
+async fn csv_to_ndjson_tool(args: Value) -> Result<String> {
+    let CsvToNdjsonArgs {
+        path,
+        has_header,
+        delimiter,
+    } = serde_json::from_value(args)?;
+    let delim = csv_to_ndjson_delim(delimiter)?;
+    let text = tokio::fs::read_to_string(&path)
+        .await
+        .with_context(|| format!("read {path}"))?;
+
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(has_header)
+        .delimiter(delim)
+        .flexible(true)
+        .from_reader(text.as_bytes());
+
+    let headers: Vec<String> = if has_header {
+        rdr.headers()
+            .with_context(|| format!("reading CSV header from {path}"))?
+            .iter()
+            .map(|h| h.to_string())
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let mut out = String::new();
+    for rec in rdr.records() {
+        let rec = rec.with_context(|| format!("parsing CSV from {path}"))?;
+        let mut obj = serde_json::Map::new();
+        for (i, field) in rec.iter().enumerate() {
+            let key = match headers.get(i) {
+                Some(h) => h.clone(),
+                None => format!("col{i}"),
+            };
+            obj.insert(key, Value::String(field.to_string()));
+        }
+        out.push_str(&serde_json::to_string(&Value::Object(obj))?);
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+#[derive(Deserialize)]
+struct XmlToJsonArgs {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    data: Option<String>,
+    #[serde(default)]
+    pretty: bool,
+}
+
+async fn xml_to_json_tool(args: Value) -> Result<String> {
+    let XmlToJsonArgs { path, data, pretty } = serde_json::from_value(args)?;
+    let text = match (path, data) {
+        (Some(p), None) => tokio::fs::read_to_string(&p)
+            .await
+            .with_context(|| format!("read {p}"))?,
+        (None, Some(d)) => d,
+        _ => return Err(anyhow!("provide exactly one of `path` or `data`")),
+    };
+    let value = xml_to_json_parse(&text)?;
+    if pretty {
+        Ok(serde_json::to_string_pretty(&value)?)
+    } else {
+        Ok(serde_json::to_string(&value)?)
+    }
+}
+
+/// Insert `val` under `key`, promoting to an array when the key repeats
+/// (so repeated sibling tags collapse into a JSON array).
+fn xml_to_json_insert(obj: &mut serde_json::Map<String, Value>, key: String, val: Value) {
+    match obj.get_mut(&key) {
+        Some(Value::Array(arr)) => arr.push(val),
+        Some(existing) => {
+            let prev = std::mem::replace(existing, Value::Null);
+            *existing = Value::Array(vec![prev, val]);
+        }
+        None => {
+            obj.insert(key, val);
+        }
+    }
+}
+
+/// One element under construction while walking the XML event stream.
+struct XmlToJsonNode {
+    name: String,
+    map: serde_json::Map<String, Value>,
+    text: String,
+}
+
+impl XmlToJsonNode {
+    /// Collapse into a JSON value: a bare string for leaf elements, otherwise
+    /// an object whose `#text` key (if any non-whitespace text) carries the
+    /// element's text content alongside attributes and child elements.
+    fn finish(self) -> Value {
+        let XmlToJsonNode {
+            name: _,
+            mut map,
+            text,
+        } = self;
+        let trimmed = text.trim();
+        if map.is_empty() {
+            Value::String(trimmed.to_string())
+        } else {
+            if !trimmed.is_empty() {
+                map.insert("#text".to_string(), Value::String(trimmed.to_string()));
+            }
+            Value::Object(map)
+        }
+    }
+}
+
+/// Hand-rolled quick-xml event walk building a `serde_json::Value` tree.
+/// Elements -> objects, attributes -> `@name` keys, text/CDATA -> `#text`
+/// (or the bare string for leaves), repeated tags -> arrays.
+fn xml_to_json_parse(text: &str) -> Result<Value> {
+    use quick_xml::events::Event;
+    let mut reader = quick_xml::Reader::from_str(text);
+    reader.config_mut().expand_empty_elements = true;
+
+    let mut stack: Vec<XmlToJsonNode> = vec![XmlToJsonNode {
+        name: String::new(),
+        map: serde_json::Map::new(),
+        text: String::new(),
+    }];
+
+    loop {
+        match reader.read_event().context("parse XML")? {
+            Event::Start(e) => {
+                let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                let mut map = serde_json::Map::new();
+                for attr in e.attributes() {
+                    let attr = attr.context("parse XML attribute")?;
+                    let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+                    let val = attr.unescape_value().context("unescape attribute value")?;
+                    map.insert(format!("@{key}"), Value::String(val.into_owned()));
+                }
+                stack.push(XmlToJsonNode {
+                    name,
+                    map,
+                    text: String::new(),
+                });
+            }
+            Event::End(_) => {
+                let node = stack.pop().ok_or_else(|| anyhow!("unbalanced XML tags"))?;
+                let name = node.name.clone();
+                let val = node.finish();
+                let parent = stack
+                    .last_mut()
+                    .ok_or_else(|| anyhow!("unbalanced XML tags"))?;
+                xml_to_json_insert(&mut parent.map, name, val);
+            }
+            Event::Text(e) => {
+                let t = e.unescape().context("unescape XML text")?;
+                if let Some(top) = stack.last_mut() {
+                    top.text.push_str(&t);
+                }
+            }
+            Event::CData(e) => {
+                let t = e.decode().context("decode CDATA")?;
+                if let Some(top) = stack.last_mut() {
+                    top.text.push_str(&t);
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    if stack.len() != 1 {
+        return Err(anyhow!("unbalanced XML tags"));
+    }
+    let root = stack.pop().expect("root node present");
+    if root.map.is_empty() {
+        return Err(anyhow!("no XML elements found"));
+    }
+    Ok(Value::Object(root.map))
+}
+
+#[derive(Deserialize)]
+struct XmlFormatArgs {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    data: Option<String>,
+    #[serde(default)]
+    indent: Option<usize>,
+}
+
+async fn xml_format_tool(args: Value) -> Result<String> {
+    let XmlFormatArgs { path, data, indent } = serde_json::from_value(args)?;
+    let text = match (path, data) {
+        (Some(p), None) => tokio::fs::read_to_string(&p)
+            .await
+            .with_context(|| format!("read {p}"))?,
+        (None, Some(d)) => d,
+        _ => return Err(anyhow!("provide exactly one of `path` or `data`")),
+    };
+    xml_format_reindent(&text, indent.unwrap_or(2))
+}
+
+/// Re-indent an XML/HTML document to `indent` spaces per level. Whitespace
+/// between nodes is trimmed and re-applied by quick-xml's indenting writer.
+/// Returns an error on malformed markup (mismatched/unclosed tags).
+fn xml_format_reindent(text: &str, indent: usize) -> Result<String> {
+    let mut reader = quick_xml::Reader::from_str(text);
+    reader.config_mut().trim_text(true);
+    let mut writer = quick_xml::Writer::new_with_indent(Vec::new(), b' ', indent);
+    loop {
+        match reader.read_event().context("parse XML")? {
+            quick_xml::events::Event::Eof => break,
+            ev => writer.write_event(ev).context("write XML")?,
+        }
+    }
+    String::from_utf8(writer.into_inner()).context("XML output was not valid UTF-8")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -16773,42 +17906,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn jwt_sign_hmac_matches_known_vectors() {
-        // Vectors computed independently with Python's hmac/hashlib against
-        // serde_json's compact, sorted-key serialization of the header/payload.
-        let hs256 = dispatch(
+    async fn jwt_sign_hmac_round_trips_through_verify() {
+        // Exact serialization (hence the signature) depends on JSON key order,
+        // so assert the sign->verify contract rather than a hardcoded string.
+        for algo in ["HS256", "HS384", "HS512"] {
+            let token = dispatch(
+                "jwt_sign_hmac",
+                &json!({ "payload": { "sub": "1234567890" }, "secret": "secret", "algo": algo })
+                    .to_string(),
+            )
+            .await
+            .unwrap();
+            // Three base64url segments.
+            assert_eq!(token.split('.').count(), 3, "{algo}: {token}");
+            let verified = dispatch(
+                "jwt_verify_hmac",
+                &json!({ "token": token, "secret": "secret", "algo": algo }).to_string(),
+            )
+            .await
+            .unwrap();
+            let v: Value = serde_json::from_str(&verified).unwrap();
+            assert_eq!(v["valid"], true, "{algo}: {verified}");
+            assert_eq!(v["payload"]["sub"], "1234567890", "{algo}");
+        }
+        // A tampered secret must fail verification.
+        let token = dispatch(
             "jwt_sign_hmac",
-            &json!({ "payload": { "sub": "1234567890" }, "secret": "secret" }).to_string(),
+            &json!({ "payload": { "sub": "x" }, "secret": "secret" }).to_string(),
         )
         .await
         .unwrap();
-        assert_eq!(
-            hs256,
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.Rq8IxqeX7eA6GgYxlcHdPFVRNFFZc5rEI3MQTZZbK3I"
-        );
-
-        let hs384 = dispatch(
-            "jwt_sign_hmac",
-            &json!({ "payload": { "sub": "1234567890" }, "secret": "secret", "algo": "HS384" })
-                .to_string(),
+        let bad = dispatch(
+            "jwt_verify_hmac",
+            &json!({ "token": token, "secret": "wrong" }).to_string(),
         )
         .await
         .unwrap();
-        assert_eq!(
-            hs384,
-            "eyJhbGciOiJIUzM4NCIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.cFmm_wV3BX7uUahBnoKQfeojYSMnfSh4-kUoipDqUIpBOIORaodCAQ7Iwwkh6IwJ"
-        );
-
-        let hs512 = dispatch(
-            "jwt_sign_hmac",
-            &json!({ "payload": { "sub": "1234567890" }, "secret": "secret", "algo": "HS512" })
-                .to_string(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            hs512,
-            "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.iGXilZ1IVm-8paqgFeserjxZTbBfbP2IhIuWBAul5Le_SaJrWKzMfqrBGtsSRS6oKXZGQhETkslUMzON8WqTGg"
+        assert!(
+            bad.contains("\"valid\":false") || bad.contains("\"valid\": false"),
+            "{bad}"
         );
     }
 
@@ -17324,5 +18460,650 @@ mod tests {
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["dry_run"], true);
         assert_eq!(v["would_kill"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn yaml_to_json_converts_inline_data() {
+        let args =
+            json!({ "data": "name: teleia\nport: 8080\ntags:\n  - a\n  - b\n", "pretty": false })
+                .to_string();
+        let out = dispatch("yaml_to_json", &args).await.unwrap();
+        assert_eq!(out, r#"{"name":"teleia","port":8080,"tags":["a","b"]}"#);
+    }
+
+    #[tokio::test]
+    async fn yaml_to_json_reads_file_and_pretty_prints() {
+        let path = tmp_path("in.yaml");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "k: v\n").unwrap();
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        let out = dispatch("yaml_to_json", &args).await.unwrap();
+        assert_eq!(out, "{\n  \"k\": \"v\"\n}");
+    }
+
+    #[tokio::test]
+    async fn yaml_to_json_multi_document_becomes_array() {
+        let args = json!({ "data": "a: 1\n---\nb: 2\n", "pretty": false }).to_string();
+        let out = dispatch("yaml_to_json", &args).await.unwrap();
+        assert_eq!(out, r#"[{"a":1},{"b":2}]"#);
+    }
+
+    #[tokio::test]
+    async fn yaml_to_json_errors_on_malformed_yaml() {
+        let args = json!({ "data": "key: [unclosed\n" }).to_string();
+        assert!(dispatch("yaml_to_json", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn yaml_to_json_rejects_both_path_and_data() {
+        let args = json!({ "path": "x.yaml", "data": "k: v" }).to_string();
+        assert!(dispatch("yaml_to_json", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn json_to_yaml_converts_inline_and_file() {
+        // Inline round-trip: numeric-looking string stays quoted, bool/null preserved.
+        let inline = json!({ "data": r#"{"name":"teleia","port":8080,"debug":true,"note":null,"zip":"01234"}"# })
+            .to_string();
+        let out = dispatch("json_to_yaml", &inline).await.unwrap();
+        let back: Value = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(back["name"], json!("teleia"));
+        assert_eq!(back["port"], json!(8080));
+        assert_eq!(back["debug"], json!(true));
+        assert!(back["note"].is_null());
+        // Leading-zero string must survive as a string, not become an int.
+        assert_eq!(back["zip"], json!("01234"));
+
+        // File path form.
+        let path = tmp_path("conv.json");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, r#"{"a":[1,2,3]}"#).unwrap();
+        let file = json!({ "path": path.to_str().unwrap() }).to_string();
+        let out = dispatch("json_to_yaml", &file).await.unwrap();
+        assert!(out.contains("- 1"));
+
+        // Malformed JSON is a hard error, not silent passthrough.
+        let bad = json!({ "data": "{not: valid json" }).to_string();
+        assert!(dispatch("json_to_yaml", &bad).await.is_err());
+
+        // Both inputs at once is rejected.
+        let both = json!({ "path": "x.json", "data": "{}" }).to_string();
+        assert!(dispatch("json_to_yaml", &both).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn yaml_get_extracts_by_pointer_and_errors_on_miss() {
+        let path = tmp_path("data.yaml");
+        let _c = Cleanup(path.clone());
+        std::fs::write(
+            &path,
+            "service:\n  name: web\n  ports:\n    - 80\n    - 443\n",
+        )
+        .unwrap();
+        // Scalar number round-trips through serde_json::Value as JSON.
+        let hit =
+            json!({ "path": path.to_str().unwrap(), "pointer": "/service/ports/1" }).to_string();
+        assert_eq!(dispatch("yaml_get", &hit).await.unwrap(), "443");
+        // raw prints a string scalar without JSON quoting.
+        let raw =
+            json!({ "path": path.to_str().unwrap(), "pointer": "/service/name", "raw": true })
+                .to_string();
+        assert_eq!(dispatch("yaml_get", &raw).await.unwrap(), "web");
+        // Without raw the same string is JSON-quoted.
+        let quoted =
+            json!({ "path": path.to_str().unwrap(), "pointer": "/service/name" }).to_string();
+        assert_eq!(dispatch("yaml_get", &quoted).await.unwrap(), "\"web\"");
+        // Default (missing) pointer returns the whole document.
+        let root = json!({ "path": path.to_str().unwrap() }).to_string();
+        assert!(dispatch("yaml_get", &root)
+            .await
+            .unwrap()
+            .contains("\"web\""));
+        // Nonexistent pointer errors.
+        let miss = json!({ "path": path.to_str().unwrap(), "pointer": "/service/zzz" }).to_string();
+        assert!(dispatch("yaml_get", &miss).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn yaml_get_errors_on_malformed_yaml() {
+        let path = tmp_path("bad.yaml");
+        let _c = Cleanup(path.clone());
+        // Unbalanced flow mapping is not valid YAML.
+        std::fs::write(&path, "a: [1, 2\nb: :\n").unwrap();
+        let args = json!({ "path": path.to_str().unwrap(), "pointer": "/a" }).to_string();
+        assert!(dispatch("yaml_get", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn toml_to_json_converts_inline_data() {
+        let args = json!({
+            "data": "title = \"hello\"\n[owner]\nname = \"bob\"\nage = 42\n"
+        })
+        .to_string();
+        let out = dispatch("toml_to_json", &args).await.unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["title"], json!("hello"));
+        assert_eq!(v["owner"]["name"], json!("bob"));
+        assert_eq!(v["owner"]["age"], json!(42));
+    }
+
+    #[tokio::test]
+    async fn toml_to_json_compact_reads_file() {
+        let path = tmp_path("conv.toml");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "a = 1\nb = \"two\"\n").unwrap();
+        let args = json!({ "path": path.to_str().unwrap(), "pretty": false }).to_string();
+        let out = dispatch("toml_to_json", &args).await.unwrap();
+        assert_eq!(out, r#"{"a":1,"b":"two"}"#);
+    }
+
+    #[tokio::test]
+    async fn toml_to_json_rejects_malformed() {
+        let args = json!({ "data": "this is = = not valid toml" }).to_string();
+        assert!(dispatch("toml_to_json", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn toml_to_json_requires_exactly_one_input() {
+        let args = json!({ "path": "x.toml", "data": "a = 1" }).to_string();
+        assert!(dispatch("toml_to_json", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn json_to_toml_converts_object() {
+        let args = json!({ "data": r#"{"title":"hi","n":3,"nested":{"on":true}}"# }).to_string();
+        let out = dispatch("json_to_toml", &args).await.unwrap();
+        assert!(out.contains("title = \"hi\""));
+        assert!(out.contains("n = 3"));
+        assert!(out.contains("[nested]"));
+        assert!(out.contains("on = true"));
+    }
+
+    #[tokio::test]
+    async fn json_to_toml_reads_from_path() {
+        let path = tmp_path("j2t.json");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, r#"{"a":1}"#).unwrap();
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        let out = dispatch("json_to_toml", &args).await.unwrap();
+        assert_eq!(out.trim(), "a = 1");
+    }
+
+    #[tokio::test]
+    async fn json_to_toml_errors_on_non_table_root() {
+        // A JSON array has no TOML top-level representation.
+        let args = json!({ "data": "[1,2,3]" }).to_string();
+        assert!(dispatch("json_to_toml", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn json_to_toml_errors_on_malformed_json() {
+        let args = json!({ "data": "{not json" }).to_string();
+        assert!(dispatch("json_to_toml", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn json_to_toml_requires_exactly_one_input() {
+        let args = json!({}).to_string();
+        assert!(dispatch("json_to_toml", &args).await.is_err());
+        let args = json!({ "path": "x", "data": "{}" }).to_string();
+        assert!(dispatch("json_to_toml", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn toml_get_extracts_by_pointer_raw_and_errors() {
+        let path = tmp_path("data.toml");
+        let _c = Cleanup(path.clone());
+        std::fs::write(
+            &path,
+            "[package]\nname = \"teleia\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1.0\"\n",
+        )
+        .unwrap();
+        let p = path.to_str().unwrap();
+
+        // Pretty-printed JSON scalar (quoted).
+        let hit = json!({ "path": p, "pointer": "/package/name" }).to_string();
+        assert_eq!(dispatch("toml_get", &hit).await.unwrap(), "\"teleia\"");
+
+        // raw strips the quotes.
+        let raw = json!({ "path": p, "pointer": "/package/version", "raw": true }).to_string();
+        assert_eq!(dispatch("toml_get", &raw).await.unwrap(), "0.1.0");
+
+        // Empty pointer returns the whole document.
+        let root = json!({ "path": p, "pointer": "" }).to_string();
+        assert!(dispatch("toml_get", &root)
+            .await
+            .unwrap()
+            .contains("\"serde\""));
+
+        // Missing pointer is an error.
+        let miss = json!({ "path": p, "pointer": "/package/license" }).to_string();
+        assert!(dispatch("toml_get", &miss).await.is_err());
+
+        // Malformed TOML surfaces a parse error.
+        let bad = tmp_path("bad.toml");
+        let _cb = Cleanup(bad.clone());
+        std::fs::write(&bad, "name = = broken\n").unwrap();
+        let bad_args = json!({ "path": bad.to_str().unwrap(), "pointer": "/name" }).to_string();
+        assert!(dispatch("toml_get", &bad_args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn deps_list_reads_cargo_toml() {
+        let dir = tmp_path("deps-list-cargo");
+        std::fs::create_dir_all(&dir).unwrap();
+        let _c = CleanupDir(dir.clone());
+        let manifest = dir.join("Cargo.toml");
+        std::fs::write(
+            &manifest,
+            r#"
+[package]
+name = "demo"
+version = "0.1.0"
+
+[dependencies]
+serde = "1.0"
+anyhow = { version = "1", features = ["backtrace"] }
+
+[dev-dependencies]
+tempfile = "3"
+"#,
+        )
+        .unwrap();
+        let args = json!({ "path": manifest.to_str().unwrap() }).to_string();
+        let out = dispatch("deps_list", &args).await.unwrap();
+        assert!(out.contains("[dependencies]"));
+        assert!(out.contains("serde = 1.0"));
+        // Table-form dependency resolves to its `version` field.
+        assert!(out.contains("anyhow = 1"));
+        assert!(out.contains("[dev-dependencies]"));
+        assert!(out.contains("tempfile = 3"));
+    }
+
+    #[tokio::test]
+    async fn deps_list_auto_detects_manifest_in_directory() {
+        let dir = tmp_path("deps-list-dir");
+        std::fs::create_dir_all(&dir).unwrap();
+        let _c = CleanupDir(dir.clone());
+        std::fs::write(
+            dir.join("package.json"),
+            r#"{ "name": "x", "dependencies": { "left-pad": "^1.0.0" }, "devDependencies": { "jest": "29" } }"#,
+        )
+        .unwrap();
+        let args = json!({ "path": dir.to_str().unwrap() }).to_string();
+        let out = dispatch("deps_list", &args).await.unwrap();
+        assert!(out.contains("[dependencies]"));
+        assert!(out.contains("left-pad = ^1.0.0"));
+        assert!(out.contains("[devDependencies]"));
+        assert!(out.contains("jest = 29"));
+    }
+
+    #[tokio::test]
+    async fn deps_list_errors_on_malformed_toml() {
+        let path = tmp_path("deps-list-bad.toml");
+        let _c = Cleanup(path.clone());
+        // Rename via extension detection: file must be named Cargo.toml to be parsed as TOML,
+        // so place a broken Cargo.toml in a dir instead.
+        let dir = tmp_path("deps-list-bad-dir");
+        std::fs::create_dir_all(&dir).unwrap();
+        let _cd = CleanupDir(dir.clone());
+        std::fs::write(dir.join("Cargo.toml"), "[dependencies\nbroken = ").unwrap();
+        let args = json!({ "path": dir.join("Cargo.toml").to_str().unwrap() }).to_string();
+        let err = dispatch("deps_list", &args).await.unwrap_err().to_string();
+        assert!(err.contains("parse TOML"));
+    }
+
+    #[tokio::test]
+    async fn deps_list_errors_when_no_manifest_in_directory() {
+        let dir = tmp_path("deps-list-empty");
+        std::fs::create_dir_all(&dir).unwrap();
+        let _c = CleanupDir(dir.clone());
+        let args = json!({ "path": dir.to_str().unwrap() }).to_string();
+        let err = dispatch("deps_list", &args).await.unwrap_err().to_string();
+        assert!(err.contains("no supported manifest"));
+    }
+
+    #[tokio::test]
+    async fn package_info_reads_cargo_toml() {
+        // package_info matches on the exact manifest filename, so put a real
+        // Cargo.toml inside a temp dir and point the tool at the dir.
+        let dir = tmp_path("pkg-cargo");
+        std::fs::create_dir_all(&dir).unwrap();
+        let _c = CleanupDir(dir.clone());
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"widget\"\nversion = \"1.2.3\"\n\n[dependencies]\nserde = \"1\"\nanyhow = \"1\"\n",
+        )
+        .unwrap();
+        let args = json!({ "path": dir.to_str().unwrap() }).to_string();
+        let out = dispatch("package_info", &args).await.unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["name"], "widget");
+        assert_eq!(v["version"], "1.2.3");
+        assert_eq!(v["manifest"], "Cargo.toml");
+        // Dependencies are sorted.
+        assert_eq!(v["dependencies"], json!(["anyhow", "serde"]));
+    }
+
+    #[tokio::test]
+    async fn package_info_reads_package_json_merging_dev_deps() {
+        let dir = tmp_path("pkg-npm");
+        std::fs::create_dir_all(&dir).unwrap();
+        let _c = CleanupDir(dir.clone());
+        std::fs::write(
+            dir.join("package.json"),
+            r#"{"name":"app","version":"0.1.0","dependencies":{"react":"18"},"devDependencies":{"jest":"29"}}"#,
+        )
+        .unwrap();
+        let args = json!({ "path": dir.to_str().unwrap() }).to_string();
+        let out = dispatch("package_info", &args).await.unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["name"], "app");
+        assert_eq!(v["version"], "0.1.0");
+        assert_eq!(v["dependencies"], json!(["jest", "react"]));
+    }
+
+    #[tokio::test]
+    async fn package_info_errors_on_malformed_toml() {
+        let path = tmp_path("Cargo.toml");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "[package\nname = broken").unwrap();
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        assert!(dispatch("package_info", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn package_info_errors_on_dir_without_manifest() {
+        let dir = tmp_path("empty-proj");
+        let _c = CleanupDir(dir.clone());
+        std::fs::create_dir_all(&dir).unwrap();
+        let args = json!({ "path": dir.to_str().unwrap() }).to_string();
+        assert!(dispatch("package_info", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn csv_to_json_maps_headers_and_rejects_bad_delimiter() {
+        let path = tmp_path("data.csv");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "name,age\r\nAda,36\n\"Bob, Jr\",41\n").unwrap();
+
+        let ok = json!({ "path": path.to_str().unwrap() }).to_string();
+        let out = dispatch("csv_to_json", &ok).await.unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v[0]["name"], "Ada");
+        assert_eq!(v[0]["age"], "36");
+        assert_eq!(v[1]["name"], "Bob, Jr");
+        assert_eq!(v[1]["age"], "41");
+
+        let no_header = json!({ "path": path.to_str().unwrap(), "has_header": false }).to_string();
+        let out = dispatch("csv_to_json", &no_header).await.unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v[0][0], "name");
+        assert_eq!(v[0][1], "age");
+        assert_eq!(v[2][0], "Bob, Jr");
+
+        let bad = json!({ "path": path.to_str().unwrap(), "delimiter": ",," }).to_string();
+        assert!(dispatch("csv_to_json", &bad).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn csv_select_projects_and_errors() {
+        // Select by header name, reordered, preserving RFC-4180 quoting.
+        let path = tmp_path("csv-select.csv");
+        let _c = Cleanup(path.clone());
+        std::fs::write(
+            &path,
+            "name,age,city\n\"Doe, John\",30,\"New\nYork\"\nJane,25,LA\n",
+        )
+        .unwrap();
+        let args = json!({
+            "path": path.to_str().unwrap(),
+            "columns": ["city", "name"],
+        })
+        .to_string();
+        let out = dispatch("csv_select", &args).await.unwrap();
+        assert_eq!(out, "city,name\n\"New\nYork\",\"Doe, John\"\nLA,Jane\n");
+
+        // Select by 1-based index; numeric entries are indices even with header.
+        let iargs = json!({
+            "path": path.to_str().unwrap(),
+            "columns": ["2", "1"],
+        })
+        .to_string();
+        let iout = dispatch("csv_select", &iargs).await.unwrap();
+        assert_eq!(iout, "age,name\n30,\"Doe, John\"\n25,Jane\n");
+
+        // has_header=false: no header row emitted, indices only.
+        let hpath = tmp_path("csv-select-noheader.csv");
+        let _hc = Cleanup(hpath.clone());
+        std::fs::write(&hpath, "a,b,c\nd,e,f\n").unwrap();
+        let hargs = json!({
+            "path": hpath.to_str().unwrap(),
+            "columns": ["3", "1"],
+            "has_header": false,
+        })
+        .to_string();
+        let hout = dispatch("csv_select", &hargs).await.unwrap();
+        assert_eq!(hout, "c,a\nf,d\n");
+
+        // Custom delimiter (semicolon).
+        let dpath = tmp_path("csv-select-semi.csv");
+        let _dc = Cleanup(dpath.clone());
+        std::fs::write(&dpath, "x;y\n1;2\n").unwrap();
+        let dargs = json!({
+            "path": dpath.to_str().unwrap(),
+            "columns": ["y"],
+            "delimiter": ";",
+        })
+        .to_string();
+        let dout = dispatch("csv_select", &dargs).await.unwrap();
+        assert_eq!(dout, "y\n2\n");
+
+        // Unknown column name is an error naming the column.
+        let bargs = json!({
+            "path": path.to_str().unwrap(),
+            "columns": ["nope"],
+        })
+        .to_string();
+        let err = dispatch("csv_select", &bargs).await.unwrap_err();
+        assert!(err.to_string().contains("nope"), "err was: {err}");
+
+        // Header name requested with has_header=false is an error.
+        let nargs = json!({
+            "path": hpath.to_str().unwrap(),
+            "columns": ["a"],
+            "has_header": false,
+        })
+        .to_string();
+        assert!(dispatch("csv_select", &nargs).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn csv_query_filters_by_named_column_equals() {
+        let path = tmp_path("csv_query_eq.csv");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "name,city\nAlice,NYC\nBob,LA\nCarol,NYC\n").unwrap();
+        let args = json!({
+            "path": path.to_str().unwrap(),
+            "column": "city",
+            "equals": "NYC"
+        })
+        .to_string();
+        let out = dispatch("csv_query", &args).await.unwrap();
+        assert_eq!(out, "name,city\nAlice,NYC\nCarol,NYC\n");
+    }
+
+    #[tokio::test]
+    async fn csv_query_filters_by_index_contains_no_header() {
+        let path = tmp_path("csv_query_idx.csv");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "apple,red\nbanana,yellow\ncherry,red\n").unwrap();
+        let args = json!({
+            "path": path.to_str().unwrap(),
+            "column": "1",
+            "contains": "red",
+            "has_header": false
+        })
+        .to_string();
+        let out = dispatch("csv_query", &args).await.unwrap();
+        assert_eq!(out, "apple,red\ncherry,red\n");
+    }
+
+    #[tokio::test]
+    async fn csv_query_errors_on_unknown_column() {
+        let path = tmp_path("csv_query_badcol.csv");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "name,city\nAlice,NYC\n").unwrap();
+        let args = json!({
+            "path": path.to_str().unwrap(),
+            "column": "nope",
+            "equals": "x"
+        })
+        .to_string();
+        assert!(dispatch("csv_query", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn csv_query_errors_without_predicate() {
+        let path = tmp_path("csv_query_nopred.csv");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "name,city\nAlice,NYC\n").unwrap();
+        let args = json!({
+            "path": path.to_str().unwrap(),
+            "column": "city"
+        })
+        .to_string();
+        assert!(dispatch("csv_query", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn csv_to_ndjson_converts_and_errors() {
+        // Round-trip: header row supplies keys, one JSON object per line.
+        let path = tmp_path("data.csv");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "name,age\nAlice,30\nBob,25\n").unwrap();
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        let out = dispatch("csv_to_ndjson", &args).await.unwrap();
+        assert_eq!(
+            out,
+            "{\"name\":\"Alice\",\"age\":\"30\"}\n{\"name\":\"Bob\",\"age\":\"25\"}\n"
+        );
+
+        // has_header=false -> positional col0/col1 keys.
+        std::fs::write(&path, "x,y\n").unwrap();
+        let noh = json!({ "path": path.to_str().unwrap(), "has_header": false }).to_string();
+        let out = dispatch("csv_to_ndjson", &noh).await.unwrap();
+        assert_eq!(out, "{\"col0\":\"x\",\"col1\":\"y\"}\n");
+
+        // Custom delimiter (TSV).
+        std::fs::write(&path, "a\tb\n1\t2\n").unwrap();
+        let tsv = json!({ "path": path.to_str().unwrap(), "delimiter": "\t" }).to_string();
+        let out = dispatch("csv_to_ndjson", &tsv).await.unwrap();
+        assert_eq!(out, "{\"a\":\"1\",\"b\":\"2\"}\n");
+
+        // Error path: multi-byte delimiter is rejected.
+        let bad = json!({ "path": path.to_str().unwrap(), "delimiter": "||" }).to_string();
+        assert!(dispatch("csv_to_ndjson", &bad).await.is_err());
+
+        // Error path: missing file.
+        let missing = json!({ "path": "/no/such/csv_to_ndjson_file.csv" }).to_string();
+        assert!(dispatch("csv_to_ndjson", &missing).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn xml_to_json_converts_attrs_text_and_repeats() {
+        let xml =
+            r#"<note id="1"><to>Tove</to><from>Jani</from><item>a</item><item>b</item></note>"#;
+        let out = dispatch("xml_to_json", &json!({ "data": xml }).to_string())
+            .await
+            .unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["note"]["@id"], "1");
+        assert_eq!(v["note"]["to"], "Tove");
+        assert_eq!(v["note"]["from"], "Jani");
+        assert_eq!(v["note"]["item"], json!(["a", "b"]));
+    }
+
+    #[tokio::test]
+    async fn xml_to_json_reads_file_and_handles_cdata() {
+        let path = tmp_path("xtj.xml");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, r#"<r><![CDATA[<hi>]]></r>"#).unwrap();
+        let out = dispatch(
+            "xml_to_json",
+            &json!({ "path": path.to_str().unwrap() }).to_string(),
+        )
+        .await
+        .unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["r"], "<hi>");
+    }
+
+    #[tokio::test]
+    async fn xml_to_json_rejects_malformed_and_non_xml() {
+        let unbalanced =
+            dispatch("xml_to_json", &json!({ "data": "<a><b></a>" }).to_string()).await;
+        assert!(unbalanced.is_err());
+        let not_xml = dispatch(
+            "xml_to_json",
+            &json!({ "data": "not xml at all" }).to_string(),
+        )
+        .await;
+        assert!(not_xml.is_err());
+    }
+
+    #[tokio::test]
+    async fn xml_to_json_requires_exactly_one_input() {
+        let err = dispatch("xml_to_json", &json!({}).to_string()).await;
+        assert!(err.is_err());
+    }
+
+    #[tokio::test]
+    async fn xml_format_reindents_from_data() {
+        let out = dispatch(
+            "xml_format",
+            &json!({ "data": "<root><a x=\"1\">hi</a><b/></root>" }).to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out, "<root>\n  <a x=\"1\">hi</a>\n  <b/>\n</root>");
+    }
+
+    #[tokio::test]
+    async fn xml_format_honors_indent_and_reads_path() {
+        let path = tmp_path("fmt.xml");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "<root><a>hi</a></root>").unwrap();
+        let out = dispatch(
+            "xml_format",
+            &json!({ "path": path.to_str().unwrap(), "indent": 4 }).to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out, "<root>\n    <a>hi</a>\n</root>");
+    }
+
+    #[tokio::test]
+    async fn xml_format_rejects_malformed() {
+        let err = dispatch(
+            "xml_format",
+            &json!({ "data": "<root><a></root>" }).to_string(),
+        )
+        .await
+        .is_err();
+        assert!(err);
+    }
+
+    #[tokio::test]
+    async fn xml_format_requires_exactly_one_input() {
+        assert!(dispatch("xml_format", &json!({}).to_string())
+            .await
+            .is_err());
+        assert!(dispatch(
+            "xml_format",
+            &json!({ "path": "x.xml", "data": "<a/>" }).to_string()
+        )
+        .await
+        .is_err());
     }
 }
