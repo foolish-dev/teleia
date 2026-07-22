@@ -13,7 +13,7 @@
   <a href="https://huggingface.co/FoolDev/Thanatos-27B"><img alt="FoolDev/Thanatos-27B on Hugging Face" src="https://img.shields.io/badge/%F0%9F%A4%97-FoolDev%2FThanatos--27B-bb9af7?logo=huggingface&logoColor=1a1b26&labelColor=24283b"></a>
 </p>
 
-**λ τέλεια — a minimal TUI coding agent (rewritten in Rust btw).** One binary, no daemon. Talks to a local Ollama or any of twenty cloud chat-completions endpoints (≈210 named models in the dropdown) and hosts MCP + LSP servers. Ships **194 built-in tools** — files, search, text, code/build/test, git, data-format conversion, encoding, hashing/crypto, compression, system & process inspection, and networking — dispatched in a tool-call loop until the model stops asking. Persists sessions to SQLite, resumes where you left off, and paints an OS-aware welcome banner on launch.
+**λ τέλεια — a minimal TUI coding agent (rewritten in Rust btw).** One binary, no daemon. Talks to a local Ollama or any of twenty cloud chat-completions endpoints (≈210 named models in the dropdown) and hosts MCP + LSP servers. Ships a minimal core of **39 built-in tools** — files, search, code lint/test, git, JSON, encoding, and web — dispatched in a tool-call loop until the model stops asking (`bash` and MCP servers cover the rest). Persists sessions to SQLite, resumes where you left off, and paints an OS-aware welcome banner on launch.
 
 <p align="center">
   <img src="assets/screenshot.svg" alt="τέλεια TUI session" width="780">
@@ -79,7 +79,7 @@ Three stances control tool execution — cycle with `Shift+Tab` or set explicitl
 
 | mode      | chip    | behaviour                                                                  | trigger              |
 | --------- | ------- | -------------------------------------------------------------------------- | -------------------- |
-| **PLAN**  | blue    | only read-only tools run — filesystem reads, search, inspection, format conversions, hashing/encoding, and system queries (plus `git`'s `status` / `diff` / `log` / `show` / `blame` / `diff_stat`); every mutating tool short-circuits with a synthetic "blocked: plan mode" result | `/plan`, `--plan`    |
+| **PLAN**  | blue    | only read-only tools run — filesystem reads, search, inspection, `sha256`, `web_search`, and `fetch` (plus `git`'s `status` / `diff` / `log`); every mutating tool short-circuits with a synthetic "blocked: plan mode" result | `/plan`, `--plan`    |
 | **BUILD** | green (default) | every tool call pauses for `y` allow / `n` deny / `a` allow-all (auto)                          | `/build`, default    |
 | **AUTO**  | red     | every tool dispatches immediately, no prompts                              | `/auto`, `--auto`    |
 
@@ -177,23 +177,17 @@ From Normal mode, `:` opens a command line. The dropdown filters `EX_COMMANDS` b
 
 ## Tools
 
-**194 built-ins**, dispatched in a tool-call loop that runs until the model stops requesting tools. MCP servers add more to the same dispatch loop. Every tool has a JSON-schema definition sent to the model; run `/tools` in the TUI for the live inventory (names + one-line help). Read-only tools stay enabled in [PLAN mode](#permission-modes); mutating and network-writing tools are gated.
+**39 built-ins** — a deliberately minimal core; `bash` covers everything else, and MCP servers add domain tools to the same dispatch loop. Every tool has a JSON-schema definition sent to the model; run `/tools` in the TUI for the live inventory. Read-only tools stay enabled in [PLAN mode](#permission-modes); mutating tools are gated.
 
-- **Files & directories** — `read` `write` `edit` `multi_edit` `apply_patch` `rm` `cp` `mv` `mkdir` `touch` `symlink` `hardlink` `readlink` `truncate` `fallocate` `mktemp` `split_file` `join_files` `cat` `chmod` `chown` `stat` `du` `file_type` `exists` `is_dir_empty`
-- **Paths** — `realpath` `pathinfo` `path_join` `path_normalize` `relpath` `pwd`
-- **Search & listing** — `list` `glob` `grep` `find` `tree` `diff` `which` `wc` `head` `tail` `slice`
-- **Text processing** — `sort` `cut` `comm` `uniq` `paste` `join` `column` `tr` `expand` `dedent` `fold` `tac` `indent` `squeeze_blank` `reflow` `trim` `strings` `count_matches` `replace` `seq`
-- **Code: lint / build / test** — `lint` `format` `typecheck` `test` `test_one` `build` `bench` `coverage` `run_bin` `run_script` `clippy_fix` `list_scripts` `make_target` `npm_install` `audit` `cloc` `cargo_metadata` `cargo_tree` `cargo_add` `cargo_search` `cargo_expand`
-- **Git** — `git` (`status`/`diff`/`log`/`add`/`commit`/`show`/`blame`/`diff_stat`) `git_branch` `git_stash` `git_remote` `git_grep` `git_log_file` `git_apply` `git_reset` `git_checkout_file` `git_status_json` `changelog_gen`
-- **JSON & data formats** — `json` `jsonl` `json_diff` `json_merge` `json_validate` `json_format` `json_keys` `json_flatten` `ndjson_query` `ndjson_to_json` `dotenv_parse` `ini_to_json` `properties_to_json` `html_to_text` `yaml_to_json` `json_to_yaml` `yaml_get` `toml_to_json` `json_to_toml` `toml_get` `deps_list` `package_info` `csv_to_json` `csv_select` `csv_query` `csv_to_ndjson` `xml_to_json` `xml_format`
-- **Encoding** — `base64` `base64url` `base32` `base85` `hex` `url_encode` `rot13` `unicode_escape` `hexdump`
-- **Compression & archives** — `gzip` `deflate` `brotli` `zstd` (decode-only) `zip` `unzip` `tar_create` `tar_extract`
-- **Hashing & crypto** — `sha256` `md5` `sha1` `crc32` `crc32c` `adler32` `crc16` `hash` `hmac_sha256` `hmac_verify` `hash_verify` `jwt_decode` `jwt_verify_hmac` `jwt_sign_hmac` `totp` `secret_scan`
-- **System & processes** — `bash` `env` `env_run` `date` `epoch` `calc` `nproc` `os_release` `kill` `pid` `sleep` `ps` `pgrep` `process_status` `is_running` `process_tree` `kill_by_name` `uptime` `loadavg` `meminfo` `cpuinfo` `sysinfo` `df` `net_interfaces`
-- **Network & web** — `fetch` `web_search` `download` `http_request` `http_form_post` `follow_redirects` `tcp_check` `port_scan` `dns_resolve` `public_ip` `local_ip` `ip_geolocate` `mac_lookup`
+- **Files & directories** — `read` `write` `edit` `multi_edit` `apply_patch` `rm` `cp` `mv` `mkdir` `touch` `symlink` `stat` `du` `realpath`
+- **Search & listing** — `list` `glob` `grep` `tree` `diff` `which` `wc` `head` `tail`
+- **Code: lint / test** — `lint` `format` `typecheck` `test`
+- **Git** — `git` (`status` / `diff` / `log` / `add` / `commit`)
+- **JSON & encoding** — `json` (RFC 6901 pointer) `replace` (regex) `base64` `hexdump` `sha256`
+- **System & web** — `bash` `env` `date` `fetch` `web_search`
 - **Session** — `todo_write`
 
-A few worth calling out: `read` syntax-highlights via scope-aware syntect; `edit` does a unique-substring replace (fails if `old_string` isn't unique unless `replace_all`); `bash` combines stdout/stderr with a 30 s timeout; `web_search` is keyless (DuckDuckGo); `kill_by_name` defaults to `dry_run: true`; and the hashing/encoding family is hand-rolled (no crypto crates). Tools that shell out (`lint`/`format`/`build`/`git_*`/`cargo_*`/…) auto-detect the toolchain by file extension or manifest.
+A few worth calling out: `read` syntax-highlights via scope-aware syntect; `edit` does a unique-substring replace (fails if `old_string` isn't unique unless `replace_all`); `bash` combines stdout/stderr with a 30 s timeout; `web_search` is keyless (DuckDuckGo); `sha256` is hand-rolled (no hash crate). `lint`/`format`/`typecheck`/`test` auto-detect the toolchain by file extension.
 
 ## Providers
 
@@ -302,7 +296,7 @@ crates/
   teleia-cli       # `teleia` binary + TUI + MCP client + LSP client
   teleia-agent     # turn loop, permission gate, event stream
   teleia-llm       # chat / pull / tags streaming, provider detection
-  teleia-tools     # the 186 built-in tools + dispatch
+  teleia-tools     # the 39 built-in tools + dispatch
   teleia-tools-bin # same dispatch as a stdin/stdout CLI
   teleia-store     # sqlite session + prefs + input-history persistence
 ```
