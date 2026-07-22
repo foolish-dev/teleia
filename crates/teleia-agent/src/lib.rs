@@ -31,26 +31,10 @@ const SYSTEM_PROMPT_BASE: &str = "You are τέλεια, a terse coding assistant
 Use the provided tools to do real work: read, write, edit, bash, list, glob, grep, head, tail, \
 tree, stat, diff, which, fetch, mkdir, mv, cp, apply_patch, wc, touch, sha256, date, lint, \
 format, typecheck, test, git, symlink, env, replace, json, base64, hexdump, du, realpath, \
-web_search, md5, sha1, crc32, hash, hmac_sha256, hex, base32, url_encode, hash_verify, jwt_decode, \
-find, chmod, readlink, hardlink, pathinfo, mktemp, truncate, slice, sort, cut, comm, strings, \
-column, tr, expand, dedent, count_matches, epoch, calc, nproc, os_release, kill, tcp_check, \
-dns_resolve, download, http_request, cargo_metadata, cargo_tree, test_one, cloc, json_diff, \
-json_merge, jsonl, dotenv_parse, ini_to_json, ndjson_to_json, chown, pwd, file_type, path_join, \
-path_normalize, relpath, split_file, join_files, is_dir_empty, exists, fallocate, uniq, paste, \
-fold, tac, indent, join, squeeze_blank, reflow, trim, crc32c, adler32, crc16, base64url, base85, \
-rot13, json_validate, json_format, ndjson_query, properties_to_json, html_to_text, json_keys, \
-json_flatten, unicode_escape, port_scan, public_ip, local_ip, ip_geolocate, follow_redirects, \
-http_form_post, mac_lookup, pid, env_run, git_branch, git_stash, git_remote, git_checkout_file, \
-run_script, list_scripts, coverage, bench, build, cargo_expand, clippy_fix, run_bin, \
-changelog_gen, git_grep, git_log_file, cargo_add, cargo_search, make_target, git_apply, \
-git_reset, npm_install, audit, git_status_json, jwt_verify_hmac, jwt_sign_hmac, hmac_verify, \
-totp, secret_scan, sleep, cat, seq, ps, pgrep, process_status, is_running, process_tree, \
-kill_by_name, uptime, loadavg, meminfo, cpuinfo, sysinfo, df, net_interfaces, yaml_to_json, \
-json_to_yaml, yaml_get, toml_to_json, json_to_toml, toml_get, deps_list, package_info, \
-csv_to_json, csv_select, csv_query, csv_to_ndjson, xml_to_json, xml_format, gzip, deflate, \
-brotli, zstd, zip, unzip, tar_create, tar_extract (plus any MCP tools the user has configured). \
-After any code change, run `lint`/`typecheck`/`test` to confirm the edit before claiming done. \
-Default to brief replies. When you finish a turn, stop — do not narrate.";
+web_search (plus any MCP tools the user has configured). After any code change, run \
+`lint`/`typecheck`/`test` to \
+confirm the edit before claiming done. Default to brief replies. When you finish a turn, stop — \
+do not narrate.";
 
 /// Base prompt + the karpathy-derived guidelines, joined once at startup.
 fn system_prompt() -> String {
@@ -175,124 +159,6 @@ fn is_readonly_tool(name: &str) -> bool {
             | "du"
             | "realpath"
             | "web_search"
-            | "md5"
-            | "sha1"
-            | "crc32"
-            | "hash"
-            | "hmac_sha256"
-            | "hex"
-            | "base32"
-            | "url_encode"
-            | "hash_verify"
-            | "jwt_decode"
-            | "find"
-            | "readlink"
-            | "pathinfo"
-            | "slice"
-            | "sort"
-            | "cut"
-            | "comm"
-            | "strings"
-            | "column"
-            | "tr"
-            | "expand"
-            | "dedent"
-            | "count_matches"
-            | "epoch"
-            | "calc"
-            | "nproc"
-            | "os_release"
-            | "tcp_check"
-            | "dns_resolve"
-            | "cargo_metadata"
-            | "cargo_tree"
-            | "cloc"
-            | "json_diff"
-            | "json_merge"
-            | "jsonl"
-            | "dotenv_parse"
-            | "ini_to_json"
-            | "ndjson_to_json"
-            | "pwd"
-            | "file_type"
-            | "path_join"
-            | "path_normalize"
-            | "relpath"
-            | "is_dir_empty"
-            | "exists"
-            | "uniq"
-            | "paste"
-            | "fold"
-            | "tac"
-            | "indent"
-            | "join"
-            | "squeeze_blank"
-            | "reflow"
-            | "trim"
-            | "crc32c"
-            | "adler32"
-            | "crc16"
-            | "base64url"
-            | "base85"
-            | "rot13"
-            | "json_validate"
-            | "json_format"
-            | "ndjson_query"
-            | "properties_to_json"
-            | "html_to_text"
-            | "json_keys"
-            | "json_flatten"
-            | "unicode_escape"
-            | "port_scan"
-            | "public_ip"
-            | "local_ip"
-            | "ip_geolocate"
-            | "follow_redirects"
-            | "mac_lookup"
-            | "pid"
-            | "git_remote"
-            | "list_scripts"
-            | "cargo_expand"
-            | "changelog_gen"
-            | "git_grep"
-            | "git_log_file"
-            | "cargo_search"
-            | "audit"
-            | "git_status_json"
-            | "jwt_verify_hmac"
-            | "jwt_sign_hmac"
-            | "hmac_verify"
-            | "totp"
-            | "secret_scan"
-            | "sleep"
-            | "cat"
-            | "seq"
-            | "ps"
-            | "pgrep"
-            | "process_status"
-            | "is_running"
-            | "process_tree"
-            | "uptime"
-            | "loadavg"
-            | "meminfo"
-            | "cpuinfo"
-            | "sysinfo"
-            | "df"
-            | "net_interfaces"
-            | "yaml_to_json"
-            | "json_to_yaml"
-            | "yaml_get"
-            | "toml_to_json"
-            | "json_to_toml"
-            | "toml_get"
-            | "deps_list"
-            | "package_info"
-            | "csv_to_json"
-            | "csv_select"
-            | "csv_query"
-            | "csv_to_ndjson"
-            | "xml_to_json"
-            | "xml_format"
     )
 }
 
@@ -308,7 +174,7 @@ fn is_readonly_call(name: &str, arguments: &str) -> bool {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(arguments) {
             return matches!(
                 v.get("subcommand").and_then(|s| s.as_str()),
-                Some("status" | "diff" | "log" | "show" | "blame" | "diff_stat")
+                Some("status" | "diff" | "log")
             );
         }
     }
@@ -1019,18 +885,6 @@ mod tests {
         assert!(is_readonly_call(
             "git",
             &json!({"subcommand": "log"}).to_string()
-        ));
-        assert!(is_readonly_call(
-            "git",
-            &json!({"subcommand": "show"}).to_string()
-        ));
-        assert!(is_readonly_call(
-            "git",
-            &json!({"subcommand": "blame"}).to_string()
-        ));
-        assert!(is_readonly_call(
-            "git",
-            &json!({"subcommand": "diff_stat"}).to_string()
         ));
         assert!(!is_readonly_call(
             "git",

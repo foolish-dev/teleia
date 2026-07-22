@@ -78,7 +78,7 @@
     <g transform="translate(328 232)">
       <rect x="0" y="0" width="60" height="20" rx="3" fill="#9ece6a"/>
       <text x="30" y="14" text-anchor="middle" font-size="12" font-weight="700" fill="#1a1b26">BUILD</text>
-      <text x="74" y="14" font-size="13" fill="#565f89">21 providers · 210 models · 186 tools · MCP · LSP</text>
+      <text x="74" y="14" font-size="13" fill="#565f89">21 providers · 210 models · 39 tools · MCP · LSP</text>
     </g>
 
     <text x="328" y="276" font-size="16" fill="#565f89" font-style="italic">powered by λ τέλεια</text>

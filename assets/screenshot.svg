@@ -56,46 +56,33 @@
   <g font-family="'JetBrainsMonoNF-Regular', 'JetBrains Mono Nerd Font', 'JetBrains Mono', Iosevka, 'IBM Plex Mono', monospace" font-size="14">
     <!-- user 1 -->
     <text x="68" y="130" fill="#7dcfff" font-weight="700">fool</text>
-    <text x="68" y="152" fill="#c0caf5">convert deploy/values.yaml to json, then bump the image tag to v2.1.0</text>
+    <text x="68" y="152" fill="#c0caf5">bump the version in package.json to 2.1.0</text>
 
     <!-- assistant 1 -->
     <text x="68" y="190" fill="#bb9af7" font-weight="700">τέλεια</text>
-    <text x="68" y="212" fill="#c0caf5">reading the chart values:</text>
+    <text x="68" y="212" fill="#c0caf5">current version, and anywhere else it's referenced:</text>
 
-    <!-- tool call 1 — yaml_to_json with highlighted output -->
-    <text x="68" y="244" fill="#e0af68">⚙ yaml_to_json({"path":"deploy/values.yaml"})</text>
+    <!-- tool call 1 — json pointer extract -->
+    <text x="68" y="244" fill="#e0af68">⚙ json({"path":"package.json","pointer":"/version"})</text>
     <text x="90" y="262" font-size="13">
-      <tspan fill="#565f89">{ </tspan>
-      <tspan fill="#7dcfff">"image"</tspan>
-      <tspan fill="#565f89">: { </tspan>
-      <tspan fill="#7dcfff">"repo"</tspan>
-      <tspan fill="#565f89">: </tspan>
-      <tspan fill="#9ece6a">"ghcr.io/foolish-dev/api"</tspan>
-      <tspan fill="#565f89">,</tspan>
-    </text>
-    <text x="108" y="278" font-size="13">
-      <tspan fill="#7dcfff">"tag"</tspan>
-      <tspan fill="#565f89">: </tspan>
-      <tspan fill="#9ece6a">"v2.0.4"</tspan>
-      <tspan fill="#565f89"> }, </tspan>
-      <tspan fill="#7dcfff">"replicas"</tspan>
-      <tspan fill="#565f89">: </tspan>
-      <tspan fill="#ff9e64">3</tspan>
-      <tspan fill="#565f89"> }</tspan>
+      <tspan fill="#9ece6a">"2.0.4"</tspan>
     </text>
 
-    <!-- tool call 2 — json pointer extract -->
-    <text x="68" y="310" fill="#e0af68">⚙ json({"path":"deploy/values.yaml","pointer":"/image/tag"})</text>
-    <text x="90" y="328" font-size="13">
-      <tspan fill="#9ece6a">"v2.0.4"</tspan>
+    <!-- tool call 2 — grep for stray references -->
+    <text x="68" y="294" fill="#e0af68">⚙ grep({"pattern":"2\.0\.4","path":"src"})</text>
+    <text x="90" y="312" font-size="13">
+      <tspan fill="#7dcfff">src/version.ts</tspan>
+      <tspan fill="#565f89">:3:</tspan>
+      <tspan fill="#c0caf5"> export const VERSION = </tspan>
+      <tspan fill="#9ece6a">"2.0.4"</tspan>
     </text>
 
     <!-- assistant 2 (streaming) -->
     <text x="68" y="366" fill="#bb9af7" font-weight="700">τέλεια ▌</text>
-    <text x="68" y="388" fill="#c0caf5">found it under image.tag (v2.0.4). editing the one line:</text>
+    <text x="68" y="388" fill="#c0caf5">two spots (package.json + src/version.ts). editing the first:</text>
 
     <!-- info line -->
-    <text x="68" y="424" fill="#7aa2f7">· 186 tools · yaml/json conversion is read-only, the edit needs approval</text>
+    <text x="68" y="424" fill="#7aa2f7">· 39 tools · json/grep are read-only; the edit needs approval</text>
   </g>
 
   <!-- scrollbar (right edge of chat block) -->
@@ -112,7 +99,7 @@
       <tspan fill="#565f89">approve </tspan>
       <tspan fill="#bb9af7" font-weight="700">edit</tspan>
       <tspan fill="#565f89">(</tspan>
-      <tspan fill="#c0caf5">deploy/values.yaml, "tag: v2.0.4", "tag: v2.1.0"</tspan>
+      <tspan fill="#c0caf5">package.json, '"version": "2.0.4"', '"version": "2.1.0"'</tspan>
       <tspan fill="#565f89">) ?</tspan>
     </text>
     <text x="72" y="562" font-family="'JetBrainsMonoNF-Regular', 'JetBrains Mono Nerd Font', 'JetBrains Mono', Iosevka, monospace" font-size="13">
