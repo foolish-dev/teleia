@@ -13795,7 +13795,8 @@ mod tests {
             let out = dispatch("path_normalize", &json!({ "path": input }).to_string())
                 .await
                 .unwrap();
-            assert_eq!(out, want, "input {input}");
+            // Normalize the separator so the assertion holds on Windows too.
+            assert_eq!(out.replace('\\', "/"), want, "input {input}");
         }
         // Absolute: `..` cannot escape root, symlinks are NOT resolved.
         let abs = dispatch(
@@ -13804,11 +13805,11 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(abs, "/c");
+        assert_eq!(abs.replace('\\', "/"), "/c");
         let root = dispatch("path_normalize", &json!({ "path": "/" }).to_string())
             .await
             .unwrap();
-        assert_eq!(root, "/");
+        assert_eq!(root.replace('\\', "/"), "/");
         // Missing `path` arg is an error.
         assert!(dispatch("path_normalize", &json!({}).to_string())
             .await
@@ -13857,6 +13858,9 @@ mod tests {
         assert_eq!(out, want);
     }
 
+    // Unix-only: "/a/b" is absolute on unix but not on Windows (which needs a
+    // drive prefix), so the absolute-vs-relative mismatch only arises here.
+    #[cfg(unix)]
     #[tokio::test]
     async fn relpath_rejects_mixed_absoluteness() {
         let args = json!({ "path": "/a/b", "base": "a/b" }).to_string();
