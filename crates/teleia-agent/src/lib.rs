@@ -15,11 +15,11 @@ pub trait ToolRouter: Send {
     fn dispatch<'a>(&'a mut self, name: &'a str, args: &'a str) -> BoxFuture<'a, Result<String>>;
 }
 
-// Filename is capital-K (matches `Karpathy.md` at the workspace root),
+// Filename is capital-F (matches `Fool.md` at the workspace root),
 // but the module identifier stays snake_case so callers keep using
-// `karpathy::GUIDELINES`.
-#[path = "Karpathy.rs"]
-mod karpathy;
+// `fool::GUIDELINES`.
+#[path = "Fool.rs"]
+mod fool;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TokenCounts {
@@ -36,9 +36,9 @@ realpath, todo_write, web_search (plus any MCP tools the user has configured). A
 confirm the edit before claiming done. Default to brief replies. When you finish a turn, stop — \
 do not narrate.";
 
-/// Base prompt + the karpathy-derived guidelines, joined once at startup.
+/// Base prompt + the fool-derived guidelines, joined once at startup.
 fn system_prompt() -> String {
-    format!("{SYSTEM_PROMPT_BASE}\n\n{}", karpathy::GUIDELINES)
+    format!("{SYSTEM_PROMPT_BASE}\n\n{}", fool::GUIDELINES)
 }
 
 /// Events emitted by `turn()`. The TUI consumes these to render
