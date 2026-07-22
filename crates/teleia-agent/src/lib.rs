@@ -46,7 +46,7 @@ head, tail, tree, stat, diff, which, fetch, mkdir, mv, cp, rm, apply_patch, wc, 
 date, lint, format, typecheck, test, git, symlink, env, replace, json, base64, hexdump, du, \
 realpath, todo_write, web_search (plus any MCP tools the user has configured). After any code change, run \
 `lint`/`typecheck`/`test` to \
-confirm the edit before claiming done. Default to brief replies. When you finish a turn, stop — \
+confirm the edit before claiming done. Always be concise. When you finish a turn, stop — \
 do not narrate.";
 
 /// Base prompt + the fool-derived guidelines, joined once at startup.
