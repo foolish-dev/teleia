@@ -8643,6 +8643,11 @@ fn json_flatten_insert(target: &mut Value, segments: &[&str], leaf: Value) -> Re
             let arr = target.as_array_mut().ok_or_else(|| {
                 anyhow!("key `{seg}` treats an existing non-array value as an array")
             })?;
+            // Bound the index: a huge value (from a crafted key) would
+            // otherwise overflow idx+1 or force a multi-GB allocation.
+            if idx > 1_000_000 {
+                return Err(anyhow!("array index {idx} too large in unflatten"));
+            }
             if idx >= arr.len() {
                 arr.resize(idx + 1, Value::Null);
             }
@@ -8764,11 +8769,11 @@ fn unicode_escape_decode(data: &str) -> Result<String> {
                     .map_err(|_| anyhow!("invalid hex in \\u{{{hex}}}"))?;
                 (n, end + 1)
             } else {
-                // \uXXXX
-                if i + 6 > bytes.len() {
-                    return Err(anyhow!("truncated \\uXXXX escape at byte {i}"));
-                }
-                let hex = &data[i + 2..i + 6];
+                // \uXXXX — str::get avoids a panic when a multibyte char
+                // follows `\u` and i+6 lands inside a UTF-8 code point.
+                let hex = data
+                    .get(i + 2..i + 6)
+                    .ok_or_else(|| anyhow!("truncated or non-ASCII \\uXXXX escape at byte {i}"))?;
                 let n =
                     u32::from_str_radix(hex, 16).map_err(|_| anyhow!("invalid hex in \\u{hex}"))?;
                 (n, i + 6)
@@ -9761,6 +9766,14 @@ async fn run_script_tool(args: Value) -> Result<String> {
         if !run_script_make_has(&content, &name) {
             return Err(anyhow!("no Makefile target named `{name}`"));
         }
+        // make has no `--` end-of-options; reject flag/override-shaped args so
+        // they can't smuggle -C <dir> / -f <makefile> / VAR=value past the
+        // validated target.
+        for a in &args {
+            if a.starts_with('-') || a.contains('=') {
+                return Err(anyhow!("invalid make argument `{a}`"));
+            }
+        }
         let mut cmd_args: Vec<&str> = vec![&name];
         for a in &args {
             cmd_args.push(a);
@@ -10338,12 +10351,11 @@ async fn git_log_file_tool(args: Value) -> Result<String> {
     if follow {
         argv.push("--follow");
     }
-    let limit_str;
-    if let Some(n) = limit {
-        limit_str = n.to_string();
-        argv.push("-n");
-        argv.push(&limit_str);
-    }
+    // Always bound the history so an omitted limit can't dump a deep file's
+    // whole log into the context window (default 50, hard cap 1000).
+    let limit_str = limit.unwrap_or(50).min(1000).to_string();
+    argv.push("-n");
+    argv.push(&limit_str);
     argv.push("--");
     argv.push(&path);
     run_command("git", &argv).await
@@ -10368,6 +10380,11 @@ async fn cargo_add_tool(args: Value) -> Result<String> {
         dev,
         manifest_path,
     } = serde_json::from_value(args)?;
+    // A crate spec is never a flag; reject a leading '-' so it can't smuggle
+    // `cargo add` flags like --git/--path/--registry (mirrors the git tools).
+    if krate.starts_with('-') {
+        return Err(anyhow!("invalid crate spec: {krate}"));
+    }
     let mut argv: Vec<String> = vec!["add".into(), krate];
     if dev {
         argv.push("--dev".into());
@@ -10400,7 +10417,9 @@ async fn cargo_search_tool(args: Value) -> Result<String> {
     }
     let limit = limit.unwrap_or(10).clamp(1, 100);
     let limit_str = limit.to_string();
-    run_command("cargo", &["search", query, "--limit", &limit_str]).await
+    // `--` before the positional so a query starting with '-' can't smuggle
+    // a flag (e.g. --registry pointing at an attacker-controlled index).
+    run_command("cargo", &["search", "--limit", &limit_str, "--", query]).await
 }
 
 #[derive(Deserialize)]
@@ -16646,5 +16665,31 @@ mod tests {
         // Oversized ascending sequence is rejected rather than truncated.
         let big = json!({ "start": 0, "end": 1_000_000, "step": 1 }).to_string();
         assert!(dispatch("seq", &big).await.is_err(), "expected cap err");
+    }
+
+    // --- regression tests for batch-1 adversarial review findings ---
+
+    #[tokio::test]
+    async fn unicode_escape_decode_multibyte_after_escape_is_error_not_panic() {
+        // A multibyte char right after `\u` used to slice mid-codepoint and panic.
+        let args = json!({ "data": "\\uab€", "decode": true }).to_string();
+        assert!(dispatch("unicode_escape", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn json_flatten_unflatten_rejects_huge_array_index() {
+        // A crafted numeric key used to overflow/OOM on resize.
+        let args = json!({
+            "data": "{\"a.18446744073709551615\": 1}",
+            "unflatten": true
+        })
+        .to_string();
+        assert!(dispatch("json_flatten", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn cargo_add_rejects_flag_shaped_crate() {
+        let args = json!({ "crate": "--config=x" }).to_string();
+        assert!(dispatch("cargo_add", &args).await.is_err());
     }
 }
