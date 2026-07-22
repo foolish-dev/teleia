@@ -47,13 +47,13 @@ fn mode_hints(mode: Mode) -> &'static str {
 const SLASH_COMMANDS: &[&str] = &[
     "ask",
     "auto",
-    "autoprompt",
     "build",
     "cd",
     "clear",
     "copy",
     "delete",
     "effort",
+    "entropy",
     "exit",
     "help",
     "key",
@@ -511,7 +511,8 @@ struct State {
     /// tool, `submit_input` re-submits "continue" and runs again — driving
     /// the task to completion on its own — until a turn finishes without
     /// touching a tool, the user interrupts, or the [`LOOP_MAX`] cap is hit.
-    /// Toggled via `/autoprompt`, persisted across launches; defaults off.
+    /// Toggled via `/entropy` (its UI name; this field + pref key stay
+    /// `autoprompt`), persisted across launches; defaults off.
     autoprompt: bool,
     /// Set by `run_turn`: did the turn just streamed dispatch at least one
     /// tool? The auto-prompt loop reads it right after to decide whether the
@@ -642,7 +643,7 @@ struct LoopSpec {
 const LOOP_MAX: usize = 100;
 
 /// The prompt re-submitted each round of sticky auto-prompting
-/// (`/autoprompt`). Generic on purpose — the agent decides from its own
+/// (`/entropy`). Generic on purpose — the agent decides from its own
 /// prior work what "continue" means, per the auto-prompting-loop guideline
 /// carried in the system prompt.
 const AUTO_CONTINUE_PROMPT: &str = "continue";
@@ -1605,7 +1606,7 @@ async fn submit_input<B: ratatui::backend::Backend>(
         let mut steps = 0;
         while should_auto_continue(state.autoprompt, outcome, state.turn_used_tool, steps) {
             steps += 1;
-            state.push(Entry::Info(format!("auto-continue {steps}")));
+            state.push(Entry::Info(format!("entropy {steps}")));
             state.push(Entry::User(AUTO_CONTINUE_PROMPT.to_string()));
             outcome = run_turn(terminal, state, agent, AUTO_CONTINUE_PROMPT.to_string()).await;
         }
@@ -1816,7 +1817,7 @@ fn translate_ex(cmd: &str) -> Result<String, String> {
         "theme" | "colorscheme" | "colo" => format!("theme {arg}"),
         "notify" | "notifications" => format!("notify {arg}"),
         "transparent" | "transparency" | "transp" => format!("transparent {arg}"),
-        "autoprompt" | "autoloop" => format!("autoprompt {arg}"),
+        "entropy" => format!("entropy {arg}"),
         "cd" | "lcd" | "tcd" => format!("cd {arg}"),
         "pwd" => "pwd".to_string(),
         "version" => "version".to_string(),
@@ -1957,7 +1958,7 @@ fn arg_placeholder(cmd: &str) -> Option<&'static str> {
         "save" | "load" | "delete" | "rm" => Some(" NAME"),
         "model" => Some(" [NAME]"),
         "theme" => Some(" [NAME]"),
-        "notify" | "transparent" | "autoprompt" => Some(" [on|off]"),
+        "notify" | "transparent" | "entropy" => Some(" [on|off]"),
         "prompt" => Some(" [NAME]"),
         "key" => Some(" PROVIDER"),
         "cd" => Some(" PATH"),
@@ -2061,7 +2062,7 @@ fn compute_menu(
                 kind: MenuKind::Theme,
             });
         }
-        if matches!(cmd, "notify" | "transparent" | "autoprompt") {
+        if matches!(cmd, "notify" | "transparent" | "entropy") {
             let items: Vec<String> = ["on", "off"]
                 .iter()
                 .filter(|n| n.starts_with(arg))
@@ -2157,7 +2158,6 @@ fn compute_menu(
 /// (they'd clutter the menu with ambiguous prefixes).
 const EX_COMMANDS: &[&str] = &[
     "auto",
-    "autoprompt",
     "build",
     "cd",
     "clear",
@@ -2166,6 +2166,7 @@ const EX_COMMANDS: &[&str] = &[
     "delete",
     "edit",
     "effort",
+    "entropy",
     "exit",
     "file",
     "help",
@@ -2198,7 +2199,7 @@ fn ex_arg_placeholder(cmd: &str) -> Option<&'static str> {
     match cmd {
         "write" | "load" | "edit" | "delete" => Some(" NAME"),
         "model" | "theme" | "colorscheme" => Some(" [NAME]"),
-        "notify" | "transparent" | "autoprompt" => Some(" [on|off]"),
+        "notify" | "transparent" | "entropy" => Some(" [on|off]"),
         "mcps" => Some(" [enable|disable NAME]"),
         "effort" => Some(" [off|low|medium|high|xhigh|max|leetcode]"),
         "loop" => Some(" N PROMPT"),
@@ -3006,14 +3007,15 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                 if new { "on" } else { "off" }
             )));
         }
-        "autoprompt" => {
+        // UI name is `/entropy`; the internal field + pref key stay `autoprompt`.
+        "entropy" => {
             let new = match arg.to_ascii_lowercase().as_str() {
                 "on" | "true" | "yes" | "1" => true,
                 "off" | "false" | "no" | "0" => false,
                 "" => !state.autoprompt,
                 _ => {
                     state.push(Entry::Error(format!(
-                        "usage: /autoprompt [on|off]  (current: {})",
+                        "usage: /entropy [on|off]  (current: {})",
                         if state.autoprompt { "on" } else { "off" }
                     )));
                     return;
@@ -3023,9 +3025,9 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
             agent.set_pref("autoprompt", if new { "on" } else { "off" });
             state.push(Entry::Info(
                 if new {
-                    "auto-prompting on — after each turn I'll continue on my own until the task is done (esc/^c stops, cap 100)".to_string()
+                    "entropy on — after each turn I'll continue on my own until the task is done (esc/^c stops, cap 100)".to_string()
                 } else {
-                    "auto-prompting off".to_string()
+                    "entropy off".to_string()
                 },
             ));
         }
@@ -3156,7 +3158,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
         }
         "help" | "?" => {
             state.push(Entry::Info(
-                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /effort [off|low|medium|high|xhigh|max|leetcode] · /key PROVIDER · /keys · /mcps · /lsps · /tools · /plan · /build · /auto · /loop N PROMPT · /prompt [NAME] · /theme [NAME] · /notify [on|off] · /autoprompt [on|off] · /transparent [on|off] · /copy · /cd PATH · /pwd · /version · /show · /help · /quit"
+                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /effort [off|low|medium|high|xhigh|max|leetcode] · /key PROVIDER · /keys · /mcps · /lsps · /tools · /plan · /build · /auto · /loop N PROMPT · /prompt [NAME] · /theme [NAME] · /notify [on|off] · /entropy [on|off] · /transparent [on|off] · /copy · /cd PATH · /pwd · /version · /show · /help · /quit"
                     .into(),
             ));
         }
@@ -3782,7 +3784,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
     if state.autoprompt {
         status_spans.push(Span::styled(" · ", Style::default().fg(th.dim)));
         status_spans.push(Span::styled(
-            " ⟳ auto ",
+            " ⟳ entropy ",
             Style::default()
                 .fg(th.bg)
                 .bg(th.purple)
@@ -5937,11 +5939,11 @@ mod tests {
     }
 
     #[test]
-    fn autoprompt_is_a_listed_command_with_on_off_completion() {
-        assert!(SLASH_COMMANDS.contains(&"autoprompt"));
-        assert!(EX_COMMANDS.contains(&"autoprompt"));
-        assert_eq!(arg_placeholder("autoprompt"), Some(" [on|off]"));
-        assert_eq!(translate_ex("autoprompt on").unwrap(), "autoprompt on");
+    fn entropy_is_a_listed_command_with_on_off_completion() {
+        assert!(SLASH_COMMANDS.contains(&"entropy"));
+        assert!(EX_COMMANDS.contains(&"entropy"));
+        assert_eq!(arg_placeholder("entropy"), Some(" [on|off]"));
+        assert_eq!(translate_ex("entropy on").unwrap(), "entropy on");
     }
 
     #[test]
