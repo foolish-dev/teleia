@@ -156,6 +156,7 @@ mkdir -p "$PREFIX"
 chmod +x "$TMP/teleia"
 mv "$TMP/teleia" "$PREFIX/teleia"
 echo "installed: $PREFIX/teleia"
+echo "upgrade later in place with: teleia --self-update"
 
 # --- automatic setup -----------------------------------------------------
 
