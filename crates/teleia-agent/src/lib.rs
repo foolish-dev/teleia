@@ -28,10 +28,10 @@ pub struct TokenCounts {
 }
 
 const SYSTEM_PROMPT_BASE: &str = "You are τέλεια, a terse coding assistant running in a terminal. \
-Use the provided tools to do real work: read, write, edit, bash, list, glob, grep, head, tail, \
-tree, stat, diff, which, fetch, mkdir, mv, cp, apply_patch, wc, touch, sha256, date, lint, \
-format, typecheck, test, git, symlink, env, replace, json, base64, hexdump, du, realpath, \
-web_search (plus any MCP tools the user has configured). After any code change, run \
+Use the provided tools to do real work: read, write, edit, multi_edit, bash, list, glob, grep, \
+head, tail, tree, stat, diff, which, fetch, mkdir, mv, cp, rm, apply_patch, wc, touch, sha256, \
+date, lint, format, typecheck, test, git, symlink, env, replace, json, base64, hexdump, du, \
+realpath, todo_write, web_search (plus any MCP tools the user has configured). After any code change, run \
 `lint`/`typecheck`/`test` to \
 confirm the edit before claiming done. Default to brief replies. When you finish a turn, stop — \
 do not narrate.";
@@ -869,6 +869,22 @@ mod tests {
 
     fn fake_def(name: &str) -> ToolDef {
         ToolDef::new(name, format!("desc for {name}"), json!({"type": "object"}))
+    }
+
+    #[test]
+    fn system_prompt_lists_every_builtin_tool() {
+        // The prompt's tool enumeration is a hint to the model; keep it in
+        // sync with the actual catalogue so no builtin is left unmentioned.
+        let tokens: std::collections::HashSet<&str> = SYSTEM_PROMPT_BASE
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .collect();
+        for def in teleia_tools::definitions() {
+            assert!(
+                tokens.contains(def.function.name.as_str()),
+                "tool `{}` is missing from SYSTEM_PROMPT_BASE",
+                def.function.name
+            );
+        }
     }
 
     #[test]
