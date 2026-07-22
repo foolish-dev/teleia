@@ -47,10 +47,10 @@ git_reset, npm_install, audit, git_status_json, jwt_verify_hmac, jwt_sign_hmac, 
 totp, secret_scan, sleep, cat, seq, ps, pgrep, process_status, is_running, process_tree, \
 kill_by_name, uptime, loadavg, meminfo, cpuinfo, sysinfo, df, net_interfaces, yaml_to_json, \
 json_to_yaml, yaml_get, toml_to_json, json_to_toml, toml_get, deps_list, package_info, \
-csv_to_json, csv_select, csv_query, csv_to_ndjson, xml_to_json, xml_format (plus any MCP tools \
-the user has configured). After any code change, run `lint`/`typecheck`/`test` to confirm the \
-edit before claiming done. Default to brief replies. When you finish a turn, stop — do not \
-narrate.";
+csv_to_json, csv_select, csv_query, csv_to_ndjson, xml_to_json, xml_format, gzip, deflate, \
+brotli, zstd, zip, unzip, tar_create, tar_extract (plus any MCP tools the user has configured). \
+After any code change, run `lint`/`typecheck`/`test` to confirm the edit before claiming done. \
+Default to brief replies. When you finish a turn, stop — do not narrate.";
 
 /// Base prompt + the karpathy-derived guidelines, joined once at startup.
 fn system_prompt() -> String {
