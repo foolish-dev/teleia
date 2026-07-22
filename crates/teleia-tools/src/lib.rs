@@ -775,6 +775,812 @@ pub fn definitions() -> Vec<ToolDef> {
                 "to": { "type": "string", "enum": ["array", "lines"], "description": "`array` = NDJSON -> pretty JSON array; `lines` = JSON array -> compact NDJSON" }
             }, "required": ["path", "to"] }),
         ),
+ToolDef::new(
+            "chown",
+            "Change the owner (and optionally group) of a file or directory (Unix only). `owner` may be a user name or a numeric uid; `group` may be a group name or numeric gid. Names are resolved via the system password/group database. With `recursive` true, applies to the whole subtree; real directories are descended but symlinks are not followed during the walk. On Windows this is unsupported and returns an error (Windows has no POSIX uid/gid ownership model).",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string", "description": "File or directory whose ownership to change" },
+                "owner": { "type": "string", "description": "New owner: user name or numeric uid" },
+                "group": { "type": "string", "description": "Optional new group: group name or numeric gid" },
+                "recursive": { "type": "boolean", "description": "Recurse into directories (default false)" }
+            }, "required": ["path", "owner"] }),
+        ),
+ToolDef::new(
+    "pwd",
+    "Print the current working directory as an absolute path.",
+    json!({
+        "type": "object",
+        "properties": {}
+    }),
+),
+ToolDef::new(
+            "file_type",
+            "Identify a file's type by inspecting its contents. Reads the first bytes, matches common magic-number signatures (ELF, PE, Mach-O, PNG, JPEG, GIF, PDF, gzip, zip, wasm, and more), and otherwise classifies the file as text or binary via a NUL-byte / printable-ratio heuristic.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Absolute or relative path to the file to inspect" }
+                },
+                "required": ["path"]
+            }),
+        ),
+ToolDef::new(
+            "path_join",
+            "Join path segments into a single path using the OS separator. Later segments that are absolute reset the accumulated path (matching std::path semantics). Returns the joined path as a string.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "parts": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Path segments to join in order"
+                    }
+                },
+                "required": ["parts"]
+            }),
+        ),
+        ToolDef::new(
+            "path_normalize",
+            "Lexically normalize a path string: collapse `.` segments and resolve `..` segments without touching the filesystem. Unlike realpath/canonicalize this works on non-existent paths and does NOT resolve symlinks (`a/b/../c` becomes `a/c` purely textually). Preserves a leading root or Windows drive prefix; a `..` that would escape the root, or a leading `..` on a relative path, is kept. An empty result normalizes to `.`.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" }
+            }, "required": ["path"] }),
+        ),
+ToolDef::new(
+            "relpath",
+            "Compute the relative path from `base` to `path` (pure string/component math, no filesystem access). Both paths must be the same kind: either both absolute or both relative. Returns a path made of `..` and forward components (e.g. base=/a/b/c, path=/a/x/y -> ../../x/y). Returns `.` when the two are equal.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "The target path to reach" },
+                    "base": { "type": "string", "description": "The starting directory the result is relative to" }
+                },
+                "required": ["path", "base"]
+            }),
+        ),
+ToolDef::new(
+            "split_file",
+            "Split a file into numbered chunk files by byte-count or line-count. Provide exactly one of `bytes` (max bytes per chunk) or `lines` (lines per chunk). Chunks are written as prefix.00, prefix.01, ... (prefix defaults to path + \".part\"). Returns the newline-separated list of chunk paths written.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to the file to split" },
+                    "bytes": { "type": "integer", "description": "Maximum bytes per chunk (mutually exclusive with lines)" },
+                    "lines": { "type": "integer", "description": "Number of lines per chunk (mutually exclusive with bytes)" },
+                    "prefix": { "type": "string", "description": "Output prefix; chunk files are prefix.00, prefix.01, ... (default: path + \".part\")" }
+                },
+                "required": ["path"]
+            }),
+        ),
+ToolDef::new(
+            "join_files",
+            "Concatenate the byte contents of several input files, in order, into a single output file. The write counterpart to splitting a file.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "inputs": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Paths to the input files, concatenated in the given order"
+                    },
+                    "output": { "type": "string", "description": "Path to the output file to create or overwrite" }
+                },
+                "required": ["inputs", "output"]
+            }),
+        ),
+        ToolDef::new(
+            "is_dir_empty",
+            "Report whether a directory contains no entries. Errors if the path does not exist or is not a directory.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Absolute or relative path to a directory" }
+                },
+                "required": ["path"]
+            }),
+        ),
+ToolDef::new(
+            "exists",
+            "Check whether a path exists on disk without erroring when it doesn't. Returns `exists: true/false` and, when present, `kind:` one of file/dir/symlink/other (classified with symlink_metadata, so a symlink is reported as `symlink` rather than being followed).",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Absolute or relative path to test" }
+                },
+                "required": ["path"]
+            }),
+        ),
+        ToolDef::new(
+            "fallocate",
+            "Preallocate or resize a file to an exact byte size, creating it if it does not exist. Growing zero-fills the new space; shrinking discards trailing bytes. Use this to reserve space for a file up front. (Portable: implemented via set_len on all platforms; the reserved space is not guaranteed physically non-sparse.)",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" },
+                "size": { "type": "integer", "minimum": 0, "description": "Target length in bytes; the file is created if absent" }
+            }, "required": ["path", "size"] }),
+        ),
+        ToolDef::new(
+            "uniq",
+            "Collapse runs of ADJACENT equal lines in a file (like GNU `uniq`), order-preserving. Distinct from `sort unique`, which reorders and dedups globally: `uniq` only merges lines that are already next to each other. `count` prefixes each emitted line with its occurrence count. `repeated` (like `-d`) emits only lines that appeared more than once in their run; `unique_only` (like `-u`) emits only lines that appeared exactly once (`repeated` and `unique_only` are mutually exclusive). `ignore_case` compares case-insensitively but prints the first line of each run verbatim. Read-only; capped at 2000 output lines.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" },
+                "count": { "type": "boolean", "description": "Prefix each line with its occurrence count (default false)" },
+                "repeated": { "type": "boolean", "description": "Only print lines that were repeated within their run (like -d, default false)" },
+                "unique_only": { "type": "boolean", "description": "Only print lines that occurred exactly once (like -u, default false)" },
+                "ignore_case": { "type": "boolean", "description": "Compare lines case-insensitively (default false)" }
+            }, "required": ["path"] }),
+        ),
+        ToolDef::new(
+            "paste",
+            "Merge lines of multiple files side by side, like Unix `paste`. Reads each file's lines and joins the Nth line of every file into one output row, separated by `delimiter` (default tab). Rows are padded with empty cells when files have different line counts. Output is capped at 10000 rows.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Files to merge column-wise (at least one)"
+                    },
+                    "delimiter": { "type": "string", "description": "Separator between columns (default tab)" }
+                },
+                "required": ["paths"]
+            }),
+        ),
+ToolDef::new(
+            "fold",
+            "Hard-wrap each line of a file to at most `width` characters (default 80), like `fold`. By default lines are broken at exactly `width` chars; set `spaces: true` to break at the last whitespace at or before the limit (word wrap), falling back to a hard break for words longer than `width`. Column counting is per-character. Returns the wrapped text.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to the file to wrap" },
+                    "width": { "type": "integer", "description": "Maximum line width in characters (default 80, must be >= 1)" },
+                    "spaces": { "type": "boolean", "description": "Break at whitespace boundaries (word wrap) instead of at exact width (default false)" }
+                },
+                "required": ["path"]
+            }),
+        ),
+        ToolDef::new(
+            "tac",
+            "Print the lines of a file in reverse order (last line first), like the Unix `tac`. Reads the whole file top-to-bottom, reverses the line order, and re-emits. Output is capped at 2000 lines (the last 2000 lines of the file, emitted in reverse).",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" }
+            }, "required": ["path"] }),
+        ),
+ToolDef::new(
+            "indent",
+            "Prepend an indentation prefix to each line of a text file. Provide either an explicit `prefix` string, or `width` (number of characters, default 4) with `tabs` (use tab characters instead of spaces, default false). By default blank lines are left untouched; set `skip_blank` to false to indent them too. Read-only: returns the reindented text without modifying the file.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to the text file to indent" },
+                    "prefix": { "type": "string", "description": "Literal string to prepend to each line. Overrides width/tabs when set." },
+                    "width": { "type": "integer", "description": "Number of space (or tab) characters to prepend when `prefix` is not given (default 4)" },
+                    "tabs": { "type": "boolean", "description": "Use tab characters instead of spaces for `width` (default false)" },
+                    "skip_blank": { "type": "boolean", "description": "Leave blank (empty or whitespace-only) lines unindented (default true)" }
+                },
+                "required": ["path"]
+            }),
+        ),
+        ToolDef::new(
+            "join",
+            "Relational inner join of two text files on a shared key field (like the Unix `join`, but the inputs need not be pre-sorted). Reads file B fully into a hash map keyed on its join field, then streams file A emitting one merged line per matching key: `<key><delim><rest of A><delim><rest of B>`. Fields are 1-based; defaults join field 1 of each file. By default lines are split on runs of whitespace; pass `delimiter` for a fixed single-character separator (also used to join the output). Output is capped at 10000 lines.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path_a": { "type": "string", "description": "Path to the first (streamed) file" },
+                    "path_b": { "type": "string", "description": "Path to the second (hashed) file" },
+                    "field_a": { "type": "integer", "description": "1-based join field in file A (default 1)" },
+                    "field_b": { "type": "integer", "description": "1-based join field in file B (default 1)" },
+                    "delimiter": { "type": "string", "description": "Single-character field separator; default splits on whitespace" }
+                },
+                "required": ["path_a", "path_b"]
+            }),
+        ),
+ToolDef::new(
+            "squeeze_blank",
+            "Read a text file and collapse every run of two or more consecutive blank (empty) lines into a single blank line, like `cat -s`, returning the squeezed text without writing to disk. A line is considered blank only when it is completely empty; whitespace-only lines are preserved as-is. The original line ending style (LF or CRLF) of each surviving line is kept, and a trailing newline is preserved if present.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to the text file to squeeze blank lines in" }
+                },
+                "required": ["path"]
+            }),
+        ),
+        ToolDef::new(
+            "reflow",
+            "Reflow text to a maximum line width using greedy word-wrapping. Splits the input into paragraphs on blank lines, wraps each paragraph so no line exceeds `width` columns (breaking only on whitespace), and rejoins the paragraphs. A single word longer than `width` is placed on its own line unbroken.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "text": { "type": "string", "description": "Text to reflow" },
+                    "width": { "type": "integer", "description": "Maximum line width in columns (default 80)" }
+                },
+                "required": ["text"]
+            }),
+        ),
+ToolDef::new(
+            "trim",
+            "Trim whitespace from each line of text. mode selects the side (both|leading|trailing, default both); set normalize_eol to convert CRLF/CR line endings to LF.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "data": { "type": "string", "description": "Input text to trim, line by line." },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["both", "leading", "trailing"],
+                        "description": "Which side of each line to trim (default both)."
+                    },
+                    "normalize_eol": {
+                        "type": "boolean",
+                        "description": "Normalize CRLF/CR line endings to LF (default false)."
+                    }
+                },
+                "required": ["data"]
+            }),
+        ),
+        ToolDef::new(
+            "crc32c",
+            "CRC-32C (Castagnoli, iSCSI/ext4/SSE4.2 polynomial) of a file (`path`) or literal string (`data`) — exactly one. Different result than `crc32`. Returns hex (0x-prefixed) and unsigned decimal.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" },
+                "data": { "type": "string" }
+            } }),
+        ),
+ToolDef::new(
+            "adler32",
+            "Adler-32 checksum (RFC 1950 / zlib) of a file (`path`) or literal string (`data`) — exactly one. Returns hex (0x-prefixed) and unsigned decimal.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" },
+                "data": { "type": "string" }
+            } }),
+        ),
+ToolDef::new(
+            "crc16",
+            "CRC-16 checksum of a file (`path`) or literal string (`data`) — exactly one. `variant` = ccitt (poly 0x1021, init 0xFFFF, default) | xmodem (0x1021/0x0000) | modbus (0x8005 reflected, init 0xFFFF) | ibm (0x8005 reflected, init 0x0000). Returns hex (0x-prefixed, 4 digits) and unsigned decimal.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" },
+                "data": { "type": "string" },
+                "variant": { "type": "string", "enum": ["ccitt", "xmodem", "modbus", "ibm"] }
+            } }),
+        ),
+ToolDef::new(
+            "base64url",
+            "URL-safe Base64 encode or decode a UTF-8 string (RFC 4648 §5: `-_` instead of `+/`). Encodes `data` by default and omits `=` padding; set `pad: true` to keep padding, or `decode: true` to decode (padding optional on input). Handy for JWT segments and URL/filename-safe tokens.",
+            json!({ "type": "object", "properties": {
+                "data": { "type": "string" },
+                "decode": { "type": "boolean", "description": "Decode `data` instead of encoding it (default false)" },
+                "pad": { "type": "boolean", "description": "Keep `=` padding when encoding (default false)" }
+            }, "required": ["data"] }),
+        ),
+        ToolDef::new(
+            "base85",
+            "Encode or decode base85 text. variant `ascii85` is the btoa/Adobe style (5-char/4-byte groups, `z` shorthand for an all-zero group, optional `<~ ~>` delimiters on decode); variant `z85` is the ZeroMQ RFC 32/64 alphabet (input length must be a multiple of 4 bytes to encode, 5 chars to decode). Set decode: true to go the other way.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "data": { "type": "string", "description": "Text to encode, or base85 text to decode" },
+                    "decode": { "type": "boolean", "description": "Decode instead of encode (default false)" },
+                    "variant": { "type": "string", "enum": ["ascii85", "z85"], "description": "base85 flavor (default ascii85)" }
+                },
+                "required": ["data"]
+            }),
+        ),
+ToolDef::new(
+    "rot13",
+    "Apply the ROT13 substitution cipher to text. Each ASCII letter is rotated 13 places within its case (A-Z, a-z); all other characters pass through unchanged. ROT13 is self-inverse, so the same operation both encodes and decodes.",
+    json!({
+        "type": "object",
+        "properties": {
+            "data": { "type": "string", "description": "Text to transform with ROT13" }
+        },
+        "required": ["data"]
+    }),
+),
+ToolDef::new(
+            "json_validate",
+            "Validate that a JSON document is well-formed. Provide exactly one of `path` (a file to read) or `data` (an inline string). On success returns `valid` with the top-level type. On failure returns the parse error together with its 1-based line and column, e.g. `invalid: expected `,` or `}` at line 3 column 5`.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to a JSON file to validate" },
+                    "data": { "type": "string", "description": "Inline JSON text to validate" }
+                }
+            }),
+        ),
+ToolDef::new(
+            "json_format",
+            "Reformat a JSON document: pretty-print (default) or minify. Reads from `path` or inline `data` (exactly one). Set `minify: true` for single-line compact output; otherwise returns indented pretty JSON. Errors on invalid JSON. Unlike `json` (which extracts by pointer from a file), this reformats whole documents and accepts inline strings.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string", "description": "Path to a JSON file; mutually exclusive with `data`" },
+                "data": { "type": "string", "description": "Inline JSON string; mutually exclusive with `path`" },
+                "minify": { "type": "boolean", "description": "Emit compact single-line JSON instead of pretty-printed (default false)" }
+            } }),
+        ),
+ToolDef::new(
+            "ndjson_query",
+            "Filter a JSONL/NDJSON file by a per-record predicate, then optionally project a field. For each record, `filter_pointer` (RFC 6901) selects a value; a record is kept when that pointer resolves (and, if `equals` is given, when the value matches it). Matching is string-based: a string value is compared directly, any other value against its compact JSON form (so `equals: \"2\"` matches the number 2, `equals: \"foo\"` matches \"foo\"). Kept records are emitted whole (compact JSON), or, if `pointer` is set, projected to that field (compact JSON). Blank lines are skipped; a malformed line fails with its line number. Unlike `jsonl`, this filters rows out by predicate. Read-only.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" },
+                "filter_pointer": { "type": "string", "description": "RFC 6901 JSON Pointer whose value drives the filter (e.g. `/status`). A record is dropped when the pointer does not resolve." },
+                "equals": { "type": "string", "description": "Optional. Keep only records whose filter_pointer value equals this. String values compare directly; other values compare against their compact JSON form. Omit to keep every record where filter_pointer merely resolves." },
+                "pointer": { "type": "string", "description": "Optional RFC 6901 JSON Pointer to project from each kept record (e.g. `/id`); empty string selects the whole record. A kept record missing this pointer fails with its line number. Omit to emit whole records." }
+            }, "required": ["path", "filter_pointer"] }),
+        ),
+        ToolDef::new(
+            "properties_to_json",
+            "Parse a Java `.properties` file into a flat JSON object of string key/value pairs, following java.util.Properties rules. Separators between key and value are `=`, `:`, or whitespace (the first unescaped one wins; surrounding whitespace is dropped). Full-line comments start with `#` or `!` (first non-whitespace char). Logical lines continue when a line ends with an odd number of backslashes; leading whitespace on continuation lines is stripped. Escapes `\\t \\n \\r \\f \\uXXXX \\\\` plus escaped separators/comment chars (`\\=` `\\:` `\\#` `\\!` `\\ `) are expanded in BOTH key and value; an unknown `\\x` becomes `x`. A key with no separator/value yields an empty string. Duplicate keys: last wins. Distinct from dotenv_parse/ini_to_json. Provide exactly one of `path` or `data`.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string", "description": "Path to the .properties file to read" },
+                "data": { "type": "string", "description": "Inline .properties text (use instead of `path`)" }
+            } }),
+        ),
+ToolDef::new(
+            "html_to_text",
+            "Strip HTML markup to plain text: drops tags, decodes common entities, collapses whitespace. Provide exactly one of `path` or `data`.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string", "description": "Path to an HTML file to read." },
+                "data": { "type": "string", "description": "Raw HTML string (alternative to path)." }
+            } }),
+        ),
+ToolDef::new(
+    "json_keys",
+    "List every key path in a JSON document as RFC-6901-style JSON Pointers (`/a/b`, array elements as `/a/0`). Reads the JSON from `path` (a file) or inline `data` (provide exactly one), parses it, and walks it recursively, emitting one pointer per line, sorted. By default every intermediate object/array container path is emitted too; set `leaves_only: true` to emit only pointers that resolve to a scalar (string/number/bool/null) or an empty object/array. A root scalar (e.g. `42`) yields the empty pointer `` (shown as `(root)`). Read-only: writes nothing. Fills the key-discovery gap that json_diff / json_flatten don't cover directly.",
+    json!({ "type": "object", "properties": {
+        "path": { "type": "string", "description": "Path to a JSON file to read (provide this OR `data`, not both)" },
+        "data": { "type": "string", "description": "Inline JSON text (provide this OR `path`, not both)" },
+        "leaves_only": { "type": "boolean", "description": "Only emit pointers that resolve to a scalar or an empty container, omitting intermediate object/array paths (default false)" }
+    }, "required": [] }),
+),
+        ToolDef::new(
+            "json_flatten",
+            "Flatten a nested JSON document into a single-level object whose keys are dotted paths (e.g. `a.b.0.c`), or reverse the process with `unflatten: true`. Provide exactly one of `path` (a JSON file) or `data` (a JSON string). Array indices become numeric path segments; on unflatten, a segment that parses as a non-negative integer rebuilds an array. Set `separator` to change the join character (default `.`).",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to a JSON file (mutually exclusive with `data`)" },
+                    "data": { "type": "string", "description": "JSON document as a string (mutually exclusive with `path`)" },
+                    "separator": { "type": "string", "description": "Key join character (default \".\")" },
+                    "unflatten": { "type": "boolean", "description": "Rebuild a nested document from a flat object instead of flattening (default false)" }
+                }
+            }),
+        ),
+        ToolDef::new(
+            "unicode_escape",
+            "Escape or unescape the non-ASCII characters in a string. Encodes `data` by default, replacing every non-ASCII char with a `\\uXXXX` escape (astral codepoints become UTF-16 surrogate pairs); set `style: \"braced\"` to emit Rust/ES6-style `\\u{...}` escapes instead. Set `decode: true` to reverse either form back into text. A standalone codec, unrelated to JSON string quoting.",
+            json!({ "type": "object", "properties": {
+                "data": { "type": "string" },
+                "decode": { "type": "boolean", "description": "Unescape `data` instead of escaping it (default false)" },
+                "style": { "type": "string", "description": "Escape form to emit: \"u\" for \\uXXXX (default) or \"braced\" for \\u{...}. Ignored when decoding (both forms are accepted)." }
+            }, "required": ["data"] }),
+        ),
+ToolDef::new(
+            "port_scan",
+            "Scan a host for open TCP ports by attempting a timed connect to each (batch form of `tcp_check`). Give either an explicit `ports` list or an inclusive `start`+`end` range (range width capped at 1024). Probes run with bounded concurrency; only open ports are reported, one `port` per line, plus a summary. Pure reachability probe — sends/reads no bytes.",
+            json!({ "type": "object", "properties": {
+                "host": { "type": "string", "description": "Hostname or IP to scan" },
+                "ports": { "type": "array", "items": { "type": "integer" }, "description": "Explicit list of ports (1..=65535). Mutually exclusive with start/end." },
+                "start": { "type": "integer", "description": "Inclusive range start (1..=65535). Use with `end` instead of `ports`." },
+                "end": { "type": "integer", "description": "Inclusive range end (1..=65535). Range width (end-start+1) capped at 1024." },
+                "timeout_ms": { "type": "integer", "description": "Per-port connect timeout in ms (default 1000, clamped 1..=30000)" }
+            }, "required": ["host"] }),
+        ),
+ToolDef::new(
+            "public_ip",
+            "Return this machine's public (WAN) IP address as seen from the internet. Queries api.ipify.org (falls back to ifconfig.me). 10s timeout. No arguments.",
+            json!({ "type": "object", "properties": {} }),
+        ),
+ToolDef::new(
+            "local_ip",
+            "Report this machine's primary local (LAN) IPv4/IPv6 address — the source address the OS would use to reach the outside network. Uses a UDP connect trick (no packets are sent). Optionally pass `target` (host:port or IP) to discover the egress address toward a specific destination.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "target": { "type": "string", "description": "Optional destination to route toward, e.g. \"8.8.8.8:80\" or \"1.1.1.1\". Defaults to 8.8.8.8:80." }
+                }
+            }),
+        ),
+        ToolDef::new(
+            "ip_geolocate",
+            "Geolocate an IPv4/IPv6 address via the free ip-api.com service (no API key). Returns country, region, city, latitude/longitude, timezone, ISP and org. Omit `ip` to geolocate the caller's own public IP. Read-only network call.",
+            json!({ "type": "object", "properties": {
+                "ip": { "type": "string", "description": "IPv4 or IPv6 address to look up (default: the caller's own public IP)" }
+            }, "required": [] }),
+        ),
+        ToolDef::new(
+            "follow_redirects",
+            "Trace an HTTP redirect chain WITHOUT auto-following: issues requests with redirect following disabled and manually walks each `Location` hop up to `max_hops`, reporting every hop's status code and resolved URL plus the final URL and status. Use over `http_request` when you specifically need to see the redirect chain (e.g. debugging a shortener, an http->https bounce, or a redirect loop). Read-only: uses GET and never sends a body.",
+            json!({ "type": "object", "properties": {
+                "url": { "type": "string", "description": "Fully-qualified http(s) URL to start from" },
+                "max_hops": { "type": "integer", "description": "Maximum number of redirects to follow (default 10, clamped 1..=50)" },
+                "timeout_secs": { "type": "integer", "description": "Per-request timeout in seconds (default 10, clamped 1..=120)" }
+            }, "required": ["url"] }),
+        ),
+ToolDef::new(
+            "http_form_post",
+            "POST an HTML form. `fields` is a string->string map of form field names to values. By default the body is application/x-www-form-urlencoded. Set `multipart` to true to send multipart/form-data instead; only then may you attach `files` (a field-name -> local-file-path map, uploaded as file parts). Optional custom request `headers` are merged in (a caller-supplied Content-Type overrides the computed one). Returns the status line, response headers, and body, like http_request (10s default timeout, 1 MiB body cap).",
+            json!({ "type": "object", "properties": {
+                "url": { "type": "string", "description": "Fully-qualified http(s) URL to POST to" },
+                "fields": { "type": "object", "description": "Form fields as a string->string map", "additionalProperties": { "type": "string" } },
+                "multipart": { "type": "boolean", "description": "Send multipart/form-data instead of urlencoded (default false). Required to be true when `files` is set." },
+                "files": { "type": "object", "description": "File uploads as a field-name -> local file path map (multipart only)", "additionalProperties": { "type": "string" } },
+                "headers": { "type": "object", "description": "Extra request headers as a string->string map", "additionalProperties": { "type": "string" } },
+                "timeout_secs": { "type": "integer", "description": "Request timeout in seconds (default 10, clamped 1..=120)" },
+                "max_bytes": { "type": "integer", "description": "Response body cap in bytes (default 1 MiB, clamped up to 8 MiB)" }
+            }, "required": ["url", "fields"] }),
+        ),
+        ToolDef::new(
+            "mac_lookup",
+            "Look up the hardware vendor / manufacturer for a MAC address by querying the public macvendors.com OUI database. Accepts colon (00:11:22:33:44:55), hyphen (00-11-22-33-44-55), or Cisco dot (0011.2233.4455) formats, as well as a bare 6+ hex-digit OUI prefix. Requires network access.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "mac": { "type": "string", "description": "MAC address in colon, hyphen, or dot notation (or a bare OUI prefix)" }
+                },
+                "required": ["mac"]
+            }),
+        ),
+        ToolDef::new(
+            "pid",
+            "Report the process id (pid) of the teleia tool process itself. Portable across Linux/macOS/Windows via `std::process::id()`. Returns the pid as a plain decimal string. Takes no arguments.",
+            json!({ "type": "object", "properties": {} }),
+        ),
+ToolDef::new(
+            "env_run",
+            "Run a program with a controlled environment and capture its output. Runs `command` directly (no shell) with `args`. `env` sets/overrides environment variables for the child only (the parent process env is never mutated). Set `clear_env: true` to start from an empty environment so the child sees only the vars in `env`. Optional `cwd` sets the working directory. Returns combined stdout/stderr plus an exit-code marker on failure.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string", "description": "Program to execute (looked up on PATH; not run through a shell)" },
+                    "args": { "type": "array", "items": { "type": "string" }, "description": "Arguments passed to the program" },
+                    "env": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Environment variables to set for the child (name -> value)" },
+                    "clear_env": { "type": "boolean", "description": "Start from an empty environment, exposing only `env` (default false)" },
+                    "cwd": { "type": "string", "description": "Working directory for the child process" }
+                },
+                "required": ["command"]
+            }),
+        ),
+ToolDef::new(
+    "git_branch",
+    "Manage git branches in the current repo. `action` is one of list / create / switch / delete. `list` runs `git branch --all` (ignores `name`). `create` runs `git branch NAME`, `switch` runs `git switch NAME`, and `delete` runs `git branch -d NAME` (or `-D` when `force` is true); all three require `name`. Returns git's combined output.",
+    json!({ "type": "object", "properties": {
+        "action": { "type": "string", "enum": ["list", "create", "switch", "delete"] },
+        "name": { "type": "string", "description": "Branch name (required for create/switch/delete)" },
+        "force": { "type": "boolean", "description": "delete: force removal of an unmerged branch (-D)" }
+    }, "required": ["action"] }),
+),
+        ToolDef::new(
+            "git_stash",
+            "Manage the git stash in the current repo. `action` is one of push / pop / list / drop / show. `push` stashes the working tree (optional `message` labels it). `pop` applies and removes the most recent stash. `list` shows all stashes. `drop` and `show` target a stash by optional `index` (the N in stash@{N}, default 0 = most recent). Returns git's combined output.",
+            json!({ "type": "object", "properties": {
+                "action": { "type": "string", "enum": ["push", "pop", "list", "drop", "show"] },
+                "message": { "type": "string", "description": "push: optional label for the stash entry" },
+                "index": { "type": "integer", "description": "drop/show: which stash (N in stash@{N}); default 0 (most recent)" }
+            }, "required": ["action"] }),
+        ),
+ToolDef::new(
+            "git_remote",
+            "List configured git remotes in the current repository. By default returns just the remote names; set `verbose` to true to include fetch/push URLs for each remote. Read-only.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "verbose": {
+                        "type": "boolean",
+                        "description": "Include fetch/push URLs for each remote (like `git remote -v`)."
+                    }
+                }
+            }),
+        ),
+        ToolDef::new(
+            "git_checkout_file",
+            "Restore file(s) in the working tree from git: runs `git checkout [<ref>] -- <paths...>`. `paths` (required, non-empty) are the files to overwrite with their committed contents; `ref` (optional commit/branch/tag) selects the source version, defaulting to the index/HEAD. This DISCARDS uncommitted changes to those paths. Returns git's combined output.",
+            json!({ "type": "object", "properties": {
+                "paths": { "type": "array", "items": { "type": "string" }, "description": "Files to restore (required, at least one)" },
+                "ref": { "type": "string", "description": "Commit/branch/tag to restore from (optional; defaults to the index/HEAD)" }
+            }, "required": ["paths"] }),
+        ),
+ToolDef::new(
+            "run_script",
+            "Run a project script/target by name, auto-detecting the runner from a manifest in the current directory: package.json -> `npm run <name>`, Makefile -> `make <name>`. Verifies the script/target exists before running. Optional args are passed through to the underlying command.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "The npm script or Makefile target to run" },
+                    "args": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Optional extra arguments passed through to the command"
+                    }
+                },
+                "required": ["name"]
+            }),
+        ),
+ToolDef::new(
+    "list_scripts",
+    "List runnable entrypoints in a project directory: package.json scripts, Makefile targets, and Cargo binaries (Cargo.toml [[bin]] names + src/bin/*.rs). Returns a grouped list.",
+    json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string", "description": "Project directory to scan (default: current directory)" }
+        }
+    }),
+),
+ToolDef::new(
+            "coverage",
+            "Run the standard test-coverage tool for the path's language and return its report. Auto-detects via extension: .rs → cargo llvm-cov (fallback cargo tarpaulin), .py → pytest --cov, .go → go test -cover ./..., .js/.jsx/.ts/.tsx → npx jest --coverage. With no path (or a non-language path), defaults to the Rust workspace. Returns combined stdout/stderr + exit code, or an honest error if the coverage tool isn't installed.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "File or directory whose language selects the coverage runner (optional; defaults to the Rust workspace)" }
+                }
+            }),
+        ),
+        ToolDef::new(
+            "bench",
+            "Run the standard benchmark runner for the path's language. Auto-detects via extension: .rs → cargo bench, .go → go test -bench=. ./..., .py → pytest --benchmark-only, .js/.ts/.tsx → npm run bench. Optional `filter` narrows which benchmarks run (cargo bench <filter>, go -bench=<filter>, pytest -k <filter>, npm run bench -- <filter>). Returns combined stdout/stderr + exit code.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string", "description": "File or directory whose language selects the runner" },
+                "filter": { "type": "string", "description": "Optional benchmark name filter" }
+            }, "required": ["path"] }),
+        ),
+ToolDef::new(
+            "build",
+            "Compile artifacts for the path's language (the artifact-producing counterpart to `typecheck`). Auto-detects via extension: .rs → cargo build (add --release when `release` is set), .go → go build ./..., .ts/.tsx → tsc, .js/.jsx → npm run build, .py → python -m build. Returns combined stdout/stderr + exit code.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string", "description": "File or directory whose language selects the builder" },
+                "release": { "type": "boolean", "description": "Rust only: build in release mode (cargo build --release)" }
+            }, "required": ["path"] }),
+        ),
+ToolDef::new(
+    "cargo_expand",
+    "Expand Rust macros in the current crate using the `cargo expand` subcommand (the cargo-expand plugin, which requires a nightly toolchain). Optionally scope to a single path/module/item via `item` (e.g. `module::submodule` or `module::item`), and/or expand the test-configured code with `tests` (--tests). Returns the expanded source, or an honest error if cargo-expand is not installed / nightly is unavailable. Read-only.",
+    json!({ "type": "object", "properties": {
+        "item": { "type": "string", "description": "Path/module/item to expand, e.g. `module::item` (passed positionally to `cargo expand`); omit to expand the whole crate" },
+        "tests": { "type": "boolean", "description": "Expand code compiled under #[cfg(test)] (--tests); default false" }
+    }, "required": [] }),
+),
+ToolDef::new(
+            "clippy_fix",
+            "Run the language's auto-fixing linter, mutating files in place. Auto-detects via the path's extension: .rs → cargo clippy --fix --allow-dirty --allow-staged, .py → ruff check --fix, .js/.jsx/.ts/.tsx → eslint --fix, .go → gofmt -w then go vet. When `path` is omitted, defaults to Rust (cargo clippy --fix on the workspace). `allow_dirty` (Rust only, default true) permits fixing an uncommitted working tree. Returns the fixer's combined output.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string", "description": "File or directory whose language selects the fixer (optional; defaults to Rust)" },
+                "allow_dirty": { "type": "boolean", "description": "Rust only: allow fixing a dirty/uncommitted tree (default true)" }
+            } }),
+        ),
+ToolDef::new(
+            "run_bin",
+            "Build and run the current project's binary/executable, auto-detecting the entrypoint from the working directory. Cargo.toml -> `cargo run [--bin <name>] -- <args>` (with `name` validated against [[bin]] targets and src/bin/*.rs; omit it to run the default/only bin); go.mod -> `go run . <args>`; package.json with a `main` field -> `node <main> <args>`. Distinct from `run_script`, which runs package.json npm scripts. `dir` defaults to the current directory.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Binary/bin-target name (Cargo only). Optional; validated against the manifest." },
+                    "args": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Arguments passed through to the program."
+                    },
+                    "dir": { "type": "string", "description": "Project directory to detect the entrypoint in (default: current directory)." }
+                }
+            }),
+        ),
+ToolDef::new(
+    "changelog_gen",
+    "Generate a Markdown changelog from git history, grouping Conventional-Commit messages (feat/fix/docs/...) into sections. Runs `git log` over the given range in the current repo.",
+    json!({
+        "type": "object",
+        "properties": {
+            "from": { "type": "string", "description": "Starting ref/tag (exclusive). If omitted, includes all history up to `to`." },
+            "to": { "type": "string", "description": "Ending ref (inclusive). Defaults to HEAD." }
+        }
+    }),
+),
+ToolDef::new(
+            "git_grep",
+            "Search tracked files for a regex/string with `git grep -n`. Unlike `grep`, respects .gitignore (tracked files only) and can search a historical ref. Args: pattern (required), ref (optional commit/branch/tree to search instead of the working tree), paths (optional pathspec list).",
+            json!({
+                "type": "object",
+                "properties": {
+                    "pattern": { "type": "string", "description": "Pattern to search for (basic regex, like `git grep`)." },
+                    "ref": { "type": "string", "description": "Optional commit/branch/tree to search; defaults to the working tree." },
+                    "paths": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Optional pathspec to limit the search."
+                    }
+                },
+                "required": ["pattern"]
+            }),
+        ),
+ToolDef::new(
+            "git_log_file",
+            "Show the commit history of a single file via `git log -- <path>`, following renames by default so the file's history is traced across moves. `follow` (default true) toggles `--follow`; `limit` caps the number of commits (`-n`). Returns one line per commit (short hash, date, author, subject).",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string", "description": "File whose history to show" },
+                "follow": { "type": "boolean", "description": "Follow the file across renames (--follow); default true" },
+                "limit": { "type": "integer", "description": "Max number of commits to show (-n)" }
+            }, "required": ["path"] }),
+        ),
+ToolDef::new(
+            "cargo_add",
+            "Add a dependency to a Rust workspace's Cargo.toml via `cargo add`. Optionally enable specific features (--features), add it as a dev-dependency (--dev), and/or target a specific manifest (--manifest-path). Mutates Cargo.toml and Cargo.lock and, on a cold registry, accesses the network to resolve the crate. Returns combined stdout/stderr + exit code.",
+            json!({ "type": "object", "properties": {
+                "crate": { "type": "string", "description": "Crate to add, optionally with a version req (e.g. \"serde\" or \"serde@1.0\")" },
+                "features": { "type": "array", "items": { "type": "string" }, "description": "Features to enable (--features, comma-joined)" },
+                "dev": { "type": "boolean", "description": "Add as a dev-dependency (--dev) (default false)" },
+                "manifest_path": { "type": "string", "description": "Path to Cargo.toml (defaults to the manifest in the current directory)" }
+            }, "required": ["crate"] }),
+        ),
+ToolDef::new(
+            "cargo_search",
+            "Search crates.io for Rust crates matching a query, via `cargo search`. Returns the matching crate names, versions, and descriptions. Read-only (network).",
+            json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Search terms to match against crate names/descriptions" },
+                    "limit": { "type": "integer", "description": "Maximum number of results to return (default 10, max 100)" }
+                },
+                "required": ["query"]
+            }),
+        ),
+        ToolDef::new(
+            "make_target",
+            "Run a Makefile target with `make <target>` in an optional directory, returning its combined stdout/stderr (and a trailing `[exit N]` marker on failure). On Unix this shells out to `make`; on Windows, where `make` is typically absent, it returns an honest error stating `make` is not available on this platform. If `dir` is given it must be an existing directory; `make` is invoked there (equivalent to `make -C dir`).",
+            json!({ "type": "object", "properties": {
+                "target": { "type": "string", "description": "The Makefile target to build (e.g. \"build\", \"test\", \"clean\")" },
+                "dir": { "type": "string", "description": "Optional directory containing the Makefile to run in; must exist if given" }
+            }, "required": ["target"] }),
+        ),
+ToolDef::new(
+            "git_apply",
+            "Apply a real git unified diff via `git apply` (reading the patch from stdin). Unlike apply_patch (which drives `/usr/bin/patch`), this understands git's diff format, the index, and 3-way merges. Set `check` to validate without applying, `three_way` for `--3way`, `reverse` to unapply. Returns git's stdout+stderr; non-zero exit appended as `[exit N]`.",
+            json!({ "type": "object", "properties": {
+                "patch": { "type": "string", "description": "Unified diff text, as `git diff` produces" },
+                "check": { "type": "boolean", "description": "Pass --check: verify the patch applies cleanly without modifying anything" },
+                "three_way": { "type": "boolean", "description": "Pass --3way: fall back to a 3-way merge using blob info in the diff" },
+                "reverse": { "type": "boolean", "description": "Pass -R: apply the patch in reverse (unapply)" }
+            }, "required": ["patch"] }),
+        ),
+ToolDef::new(
+    "git_reset",
+    "Run `git reset` in the current repo to move HEAD and/or unstage changes. `mode` is one of soft (move HEAD only), mixed (default; move HEAD and reset the index, keep the working tree) or hard (move HEAD and discard index + working-tree changes). `ref` is an optional commit/ref to reset to (e.g. HEAD~1, a branch, a SHA). `paths` restricts the reset to specific pathspecs to unstage them; note git forbids combining `paths` with `--soft`/`--hard`, so `mode` must be omitted or mixed when `paths` is given. Returns git's combined output.",
+    json!({ "type": "object", "properties": {
+        "mode": { "type": "string", "enum": ["soft", "mixed", "hard"], "description": "Reset mode (default mixed). Must be omitted/mixed when paths is set." },
+        "ref": { "type": "string", "description": "Commit/ref to reset to (optional; defaults to HEAD)" },
+        "paths": { "type": "array", "items": { "type": "string" }, "description": "Pathspecs to unstage (optional; incompatible with soft/hard)" }
+    } }),
+),
+        ToolDef::new(
+            "npm_install",
+            "Install Node.js dependencies using the project's package manager. With no `packages`, installs everything from package.json (a plain `install`); with `packages`, adds those specific ones. `dev` adds them as devDependencies. `dir` is the project directory to run in (defaults to the current directory, where package.json must live). `manager` forces npm / pnpm / yarn; the default `auto` picks one from the lockfile (pnpm-lock.yaml → pnpm, yarn.lock → yarn, else npm). Runs the install (network + mutating) and returns its combined output.",
+            json!({ "type": "object", "properties": {
+                "packages": { "type": "array", "items": { "type": "string" }, "description": "Specific packages to add; omit to install all deps from package.json" },
+                "dev": { "type": "boolean", "description": "Add the packages as devDependencies (default false)" },
+                "dir": { "type": "string", "description": "Project directory to run in (default: current directory)" },
+                "manager": { "type": "string", "enum": ["npm", "pnpm", "yarn", "auto"], "description": "Package manager to use; `auto` (default) detects from the lockfile" }
+            } }),
+        ),
+ToolDef::new(
+            "audit",
+            "Run a dependency-vulnerability advisory scan for the project in `dir` (default \".\"). `kind` selects the ecosystem: `cargo` (cargo audit), `pip` (pip-audit), `npm` (npm audit), or `auto` (default — detected from Cargo.toml / requirements.txt / pyproject.toml / package.json in `dir`). Read-only. Requires the corresponding audit tool to be installed; if it isn't, the underlying 'not installed' error is surfaced verbatim.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "kind": { "type": "string", "enum": ["cargo", "pip", "npm", "auto"], "description": "Ecosystem to audit (default auto — detected from manifest files in dir)" },
+                    "dir": { "type": "string", "description": "Project directory to scan (default \".\")" }
+                }
+            }),
+        ),
+ToolDef::new(
+    "git_status_json",
+    "Report `git status` as machine-readable JSON: {branch, ahead, behind, entries:[{x,y,path,orig_path}]}. `x`/`y` are the two porcelain status columns (staged/worktree); `orig_path` is set for renames/copies. Parses `git status --porcelain=v1 -z --branch`.",
+    json!({
+        "type": "object",
+        "properties": {
+            "dir": { "type": "string", "description": "Optional path to run git in (via `git -C`); defaults to the current directory" }
+        }
+    }),
+),
+        ToolDef::new(
+            "jwt_verify_hmac",
+            "Verify a JWT's HMAC signature (HS256/HS384/HS512) against a shared secret and return the decoded header + payload. Recomputes HMAC over `header.payload` and compares it in constant time to the token's signature segment; reports `valid: true|false`. The secret is UTF-8 bytes by default, or raw bytes decoded from hex when `secret_hex` is set. `algo` defaults to HS256; if it disagrees with the token header's `alg` the result is `valid: false`. Does not check exp/nbf claims.",
+            json!({ "type": "object", "properties": {
+                "token": { "type": "string", "description": "Compact JWT (three dot-separated base64url segments)" },
+                "secret": { "type": "string", "description": "HMAC shared secret (UTF-8, or hex when secret_hex is true)" },
+                "secret_hex": { "type": "boolean", "description": "Treat secret as hex-encoded raw key bytes (default false)" },
+                "algo": { "type": "string", "enum": ["HS256", "HS384", "HS512"], "description": "Expected HMAC algorithm (default HS256)" }
+            }, "required": ["token", "secret"] }),
+        ),
+        ToolDef::new(
+            "jwt_sign_hmac",
+            "Sign a JWT with an HMAC-SHA2 secret (HS256/HS384/HS512). Encodes `header` and `payload` JSON as base64url, HMACs `header.payload` with `secret`, and appends the base64url signature. Set `secret_hex: true` if `secret` is hex-encoded. `header` defaults to {\"alg\":<algo>,\"typ\":\"JWT\"}; if you pass a header its `alg` is overwritten to match `algo`. Returns the compact JWT string.",
+            json!({ "type": "object", "properties": {
+                "payload": { "type": "object", "description": "JWT claims object to encode as the payload" },
+                "secret": { "type": "string", "description": "HMAC signing secret" },
+                "header": { "type": "object", "description": "Optional JOSE header; its `alg` is forced to `algo`" },
+                "secret_hex": { "type": "boolean", "description": "Decode `secret` from hex to raw bytes first (default false)" },
+                "algo": { "type": "string", "enum": ["HS256", "HS384", "HS512"], "description": "HMAC algorithm (default HS256)" }
+            }, "required": ["payload", "secret"] }),
+        ),
+ToolDef::new(
+    "hmac_verify",
+    "Verify an HMAC tag: recompute HMAC over `data` under `key` (raw UTF-8, or hex bytes if `key_hex`) with `algo` (sha256|sha384|sha512, default sha256) and constant-time-compare against `expected` (lowercase hex). Returns {match, computed, expected}. Complements hmac_sha256 (compute-only).",
+    json!({
+        "type": "object",
+        "properties": {
+            "data": { "type": "string", "description": "Message whose HMAC is checked (UTF-8)." },
+            "key": { "type": "string", "description": "HMAC key. UTF-8 by default, or hex bytes if key_hex=true." },
+            "key_hex": { "type": "boolean", "description": "Interpret `key` as hex-encoded bytes (default false)." },
+            "expected": { "type": "string", "description": "Expected HMAC tag as lowercase hex." },
+            "algo": { "type": "string", "enum": ["sha256", "sha384", "sha512"], "description": "Digest (default sha256)." }
+        },
+        "required": ["data", "key", "expected"],
+        "additionalProperties": false
+    }),
+),
+        ToolDef::new(
+            "totp",
+            "RFC 6238 TOTP code from a base32 `secret`. Options: `digits` (default 6), `period` seconds (default 30), `algo` (sha1|sha256, default sha1), `timestamp` (Unix seconds; default now). Returns the zero-padded code.",
+            json!({ "type": "object", "properties": {
+                "secret": { "type": "string", "description": "Base32-encoded shared secret (RFC 4648, padding optional)" },
+                "digits": { "type": "integer", "description": "Number of code digits (default 6)" },
+                "period": { "type": "integer", "description": "Time step in seconds (default 30)" },
+                "algo": { "type": "string", "enum": ["sha1", "sha256"], "description": "HMAC hash (default sha1)" },
+                "timestamp": { "type": "integer", "description": "Unix seconds to compute the code for (default: current time)" }
+            }, "required": ["secret"] }),
+        ),
+ToolDef::new(
+    "secret_scan",
+    "Scan a file or directory for hard-coded secrets: AWS access keys, GitHub tokens, Slack tokens, private-key (PEM) headers, JWTs, generic key/password/token assignments, and high-entropy base64/hex tokens. Read-only; returns JSON findings with file, line, rule, and a redacted snippet. Binary and hidden/build files are skipped.",
+    json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string", "description": "File or directory to scan" },
+            "min_entropy": { "type": "number", "description": "Shannon-entropy threshold (bits/char) for flagging long base64/hex tokens as generic secrets. Default 4.0; lower is more aggressive." }
+        },
+        "required": ["path"]
+    }),
+),
+ToolDef::new(
+            "sleep",
+            "Pause for a fixed duration, then return. Give either `seconds` (a float) or `ms` (integer milliseconds); if both are present they are added together. The delay is clamped to the range 0..=300 seconds. Useful for backing off between polling attempts.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "seconds": { "type": "number", "description": "Seconds to sleep (may be fractional)" },
+                    "ms": { "type": "integer", "description": "Additional milliseconds to sleep" }
+                }
+            }),
+        ),
+        ToolDef::new(
+            "cat",
+            "Read and concatenate multiple files in order, returning their combined contents. Optionally insert a separator string between files and prefix each line with a 1-based line number.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Absolute or relative paths to read, in order"
+                    },
+                    "separator": { "type": "string", "description": "String inserted between consecutive files (default \"\")" },
+                    "number": { "type": "boolean", "description": "Prefix every line with a 1-based line number (default false)" }
+                },
+                "required": ["paths"]
+            }),
+        ),
+ToolDef::new(
+            "seq",
+            "Generate a numeric sequence from start to end (inclusive) stepping by `step`, joined by `separator`. Emits integers without a decimal point when start, end, and step are all whole numbers; otherwise emits floats. `step` defaults to 1 and may be negative to count down; it must be non-zero and point from start toward end. Output is capped at 100000 values.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "start": { "type": "number", "description": "First value of the sequence" },
+                    "end": { "type": "number", "description": "Last value (inclusive) the sequence may reach" },
+                    "step": { "type": "number", "description": "Increment between values (default 1; may be negative)" },
+                    "separator": { "type": "string", "description": "String placed between values (default newline)" }
+                },
+                "required": ["start", "end"]
+            }),
+        ),
     ]
 }
 
@@ -868,6 +1674,80 @@ pub async fn dispatch(name: &str, arguments: &str) -> Result<String> {
         "dotenv_parse" => dotenv_parse_tool(args).await,
         "ini_to_json" => ini_to_json_tool(args).await,
         "ndjson_to_json" => ndjson_to_json_tool(args).await,
+        "chown" => chown_tool(args).await,
+        "pwd" => pwd_tool(args).await,
+        "file_type" => file_type_tool(args).await,
+        "path_join" => path_join_tool(args).await,
+        "path_normalize" => path_normalize_tool(args).await,
+        "relpath" => relpath_tool(args).await,
+        "split_file" => split_file_tool(args).await,
+        "join_files" => join_files_tool(args).await,
+        "is_dir_empty" => is_dir_empty_tool(args).await,
+        "exists" => exists_tool(args).await,
+        "fallocate" => fallocate_tool(args).await,
+        "uniq" => uniq_tool(args).await,
+        "paste" => paste_tool(args).await,
+        "fold" => fold_tool(args).await,
+        "tac" => tac_tool(args).await,
+        "indent" => indent_tool(args).await,
+        "join" => join_tool(args).await,
+        "squeeze_blank" => squeeze_blank_tool(args).await,
+        "reflow" => reflow_tool(args).await,
+        "trim" => trim_tool(args).await,
+        "crc32c" => crc32c_tool(args).await,
+        "adler32" => adler32_tool(args).await,
+        "crc16" => crc16_tool(args).await,
+        "base64url" => base64url_tool(args).await,
+        "base85" => base85_tool(args).await,
+        "rot13" => rot13_tool(args).await,
+        "json_validate" => json_validate_tool(args).await,
+        "json_format" => json_format_tool(args).await,
+        "ndjson_query" => ndjson_query_tool(args).await,
+        "properties_to_json" => properties_to_json_tool(args).await,
+        "html_to_text" => html_to_text_tool(args).await,
+        "json_keys" => json_keys_tool(args).await,
+        "json_flatten" => json_flatten_tool(args).await,
+        "unicode_escape" => unicode_escape_tool(args).await,
+        "port_scan" => port_scan_tool(args).await,
+        "public_ip" => public_ip_tool(args).await,
+        "local_ip" => local_ip_tool(args).await,
+        "ip_geolocate" => ip_geolocate_tool(args).await,
+        "follow_redirects" => follow_redirects_tool(args).await,
+        "http_form_post" => http_form_post_tool(args).await,
+        "mac_lookup" => mac_lookup_tool(args).await,
+        "pid" => pid_tool(args).await,
+        "env_run" => env_run_tool(args).await,
+        "git_branch" => git_branch_tool(args).await,
+        "git_stash" => git_stash_tool(args).await,
+        "git_remote" => git_remote_tool(args).await,
+        "git_checkout_file" => git_checkout_file_tool(args).await,
+        "run_script" => run_script_tool(args).await,
+        "list_scripts" => list_scripts_tool(args).await,
+        "coverage" => coverage_tool(args).await,
+        "bench" => bench_tool(args).await,
+        "build" => build_tool(args).await,
+        "cargo_expand" => cargo_expand_tool(args).await,
+        "clippy_fix" => clippy_fix_tool(args).await,
+        "run_bin" => run_bin_tool(args).await,
+        "changelog_gen" => changelog_gen_tool(args).await,
+        "git_grep" => git_grep_tool(args).await,
+        "git_log_file" => git_log_file_tool(args).await,
+        "cargo_add" => cargo_add_tool(args).await,
+        "cargo_search" => cargo_search_tool(args).await,
+        "make_target" => make_target_tool(args).await,
+        "git_apply" => git_apply_tool(args).await,
+        "git_reset" => git_reset_tool(args).await,
+        "npm_install" => npm_install_tool(args).await,
+        "audit" => audit_tool(args).await,
+        "git_status_json" => git_status_json_tool(args).await,
+        "jwt_verify_hmac" => jwt_verify_hmac_tool(args).await,
+        "jwt_sign_hmac" => jwt_sign_hmac_tool(args).await,
+        "hmac_verify" => hmac_verify_tool(args).await,
+        "totp" => totp_tool(args).await,
+        "secret_scan" => secret_scan_tool(args).await,
+        "sleep" => sleep_tool(args).await,
+        "cat" => cat_tool(args).await,
+        "seq" => seq_tool(args).await,
         other => Err(anyhow!("unknown tool: {other}")),
     }
 }
@@ -5866,6 +6746,4802 @@ async fn ndjson_to_json_tool(args: Value) -> Result<String> {
     }
 }
 
+#[derive(Deserialize)]
+struct ChownArgs {
+    path: String,
+    owner: String,
+    group: Option<String>,
+    #[serde(default)]
+    recursive: bool,
+}
+
+async fn chown_tool(args: Value) -> Result<String> {
+    let ChownArgs {
+        path,
+        owner,
+        group,
+        recursive,
+    } = serde_json::from_value(args)?;
+    chown_apply(&path, &owner, group.as_deref(), recursive)
+}
+
+#[cfg(unix)]
+fn chown_lookup_uid(owner: &str) -> Result<u32> {
+    let owner = owner.trim();
+    if let Ok(uid) = owner.parse::<u32>() {
+        return Ok(uid);
+    }
+    let cname = std::ffi::CString::new(owner).map_err(|_| anyhow!("invalid owner: {owner}"))?;
+    // Safety: getpwnam reads a static thread-unsafe buffer; we copy out the
+    // uid immediately before any other libc call can clobber it.
+    let pw = unsafe { libc::getpwnam(cname.as_ptr()) };
+    if pw.is_null() {
+        return Err(anyhow!("no such user: {owner}"));
+    }
+    Ok(unsafe { (*pw).pw_uid })
+}
+
+#[cfg(unix)]
+fn chown_lookup_gid(group: &str) -> Result<u32> {
+    let group = group.trim();
+    if let Ok(gid) = group.parse::<u32>() {
+        return Ok(gid);
+    }
+    let cname = std::ffi::CString::new(group).map_err(|_| anyhow!("invalid group: {group}"))?;
+    // Safety: getgrnam returns a pointer into a static buffer; copy gid out now.
+    let gr = unsafe { libc::getgrnam(cname.as_ptr()) };
+    if gr.is_null() {
+        return Err(anyhow!("no such group: {group}"));
+    }
+    Ok(unsafe { (*gr).gr_gid })
+}
+
+#[cfg(unix)]
+fn chown_one(path: &std::path::Path, uid: u32, gid: Option<u32>) -> Result<()> {
+    std::os::unix::fs::chown(path, Some(uid), gid)
+        .with_context(|| format!("chown {}", path.display()))
+}
+
+#[cfg(unix)]
+fn chown_walk(dir: &std::path::Path, uid: u32, gid: Option<u32>, count: &mut u64) -> Result<()> {
+    for entry in std::fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))? {
+        let entry = entry?;
+        let p = entry.path();
+        chown_one(&p, uid, gid)?;
+        *count += 1;
+        // Only descend into real directories; do not follow symlinks.
+        let md = std::fs::symlink_metadata(&p).with_context(|| format!("stat {}", p.display()))?;
+        if md.is_dir() {
+            chown_walk(&p, uid, gid, count)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn chown_apply(path: &str, owner: &str, group: Option<&str>, recursive: bool) -> Result<String> {
+    let uid = chown_lookup_uid(owner)?;
+    let gid = match group {
+        Some(g) => Some(chown_lookup_gid(g)?),
+        None => None,
+    };
+    let root = std::path::Path::new(path);
+    // Fail fast with a clear message if the target is absent.
+    let md = std::fs::symlink_metadata(root).with_context(|| format!("stat {path}"))?;
+    chown_one(root, uid, gid)?;
+    let mut count: u64 = 1;
+    if recursive && md.is_dir() {
+        chown_walk(root, uid, gid, &mut count)?;
+    }
+    let group_note = match gid {
+        Some(g) => format!(":{g}"),
+        None => String::new(),
+    };
+    if recursive {
+        Ok(format!("chown {uid}{group_note} {path} ({count} paths)"))
+    } else {
+        Ok(format!("chown {uid}{group_note} {path}"))
+    }
+}
+
+#[cfg(windows)]
+fn chown_apply(
+    _path: &str,
+    _owner: &str,
+    _group: Option<&str>,
+    _recursive: bool,
+) -> Result<String> {
+    Err(anyhow!(
+        "chown is unsupported on Windows (no POSIX uid/gid ownership model)"
+    ))
+}
+
+async fn pwd_tool(_args: Value) -> Result<String> {
+    let cwd = std::env::current_dir().context("failed to get current working directory")?;
+    Ok(cwd.to_string_lossy().into_owned())
+}
+
+async fn file_type_tool(args: Value) -> Result<String> {
+    let PathArgs { path } = serde_json::from_value(args)?;
+    let m = std::fs::symlink_metadata(&path).with_context(|| format!("stat {path}"))?;
+    if m.is_dir() {
+        return Ok(format!("{path}: directory"));
+    }
+    if m.is_symlink() {
+        return Ok(format!("{path}: symbolic link"));
+    }
+    let data = std::fs::read(&path).with_context(|| format!("read {path}"))?;
+    let head = &data[..data.len().min(8192)];
+    Ok(format!("{path}: {}", file_type_classify(head)))
+}
+
+fn file_type_classify(head: &[u8]) -> String {
+    if let Some(magic) = file_type_magic(head) {
+        return magic.to_string();
+    }
+    if head.is_empty() {
+        return "empty".to_string();
+    }
+    file_type_text_or_binary(head).to_string()
+}
+
+fn file_type_magic(b: &[u8]) -> Option<&'static str> {
+    let starts = |sig: &[u8]| b.len() >= sig.len() && &b[..sig.len()] == sig;
+    if starts(b"\x7fELF") {
+        return Some("ELF binary");
+    }
+    if starts(b"MZ") {
+        return Some("DOS/PE executable");
+    }
+    // Mach-O (thin + fat, little/big endian)
+    if starts(&[0xFE, 0xED, 0xFA, 0xCE])
+        || starts(&[0xFE, 0xED, 0xFA, 0xCF])
+        || starts(&[0xCE, 0xFA, 0xED, 0xFE])
+        || starts(&[0xCF, 0xFA, 0xED, 0xFE])
+        || starts(&[0xCA, 0xFE, 0xBA, 0xBE])
+        || starts(&[0xBE, 0xBA, 0xFE, 0xCA])
+    {
+        return Some("Mach-O binary");
+    }
+    if starts(b"\x89PNG\r\n\x1a\n") {
+        return Some("PNG image");
+    }
+    if starts(&[0xFF, 0xD8, 0xFF]) {
+        return Some("JPEG image");
+    }
+    if starts(b"GIF87a") || starts(b"GIF89a") {
+        return Some("GIF image");
+    }
+    if starts(b"BM") {
+        return Some("BMP image");
+    }
+    if b.len() >= 12 && &b[..4] == b"RIFF" && &b[8..12] == b"WEBP" {
+        return Some("WebP image");
+    }
+    if b.len() >= 12 && &b[..4] == b"RIFF" && &b[8..12] == b"WAVE" {
+        return Some("WAV audio");
+    }
+    if starts(b"%PDF-") {
+        return Some("PDF document");
+    }
+    if starts(&[0x1F, 0x8B]) {
+        return Some("gzip compressed data");
+    }
+    if starts(b"BZh") {
+        return Some("bzip2 compressed data");
+    }
+    if starts(&[0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00]) {
+        return Some("XZ compressed data");
+    }
+    if starts(&[0x28, 0xB5, 0x2F, 0xFD]) {
+        return Some("Zstandard compressed data");
+    }
+    if starts(b"PK\x03\x04") || starts(b"PK\x05\x06") || starts(b"PK\x07\x08") {
+        return Some("ZIP archive");
+    }
+    if starts(b"Rar!\x1a\x07") {
+        return Some("RAR archive");
+    }
+    if starts(b"ustar") || (b.len() >= 262 && &b[257..262] == b"ustar") {
+        return Some("tar archive");
+    }
+    if starts(b"\x00asm") {
+        return Some("WebAssembly binary");
+    }
+    if starts(b"OggS") {
+        return Some("Ogg media");
+    }
+    if starts(b"fLaC") {
+        return Some("FLAC audio");
+    }
+    if starts(b"ID3") {
+        return Some("MP3 audio (ID3)");
+    }
+    if b.len() >= 8 && &b[4..8] == b"ftyp" {
+        return Some("ISO Base Media (MP4/MOV)");
+    }
+    if starts(&[0x25, 0x21, 0x50, 0x53]) {
+        return Some("PostScript document");
+    }
+    if starts(b"SQLite format 3\x00") {
+        return Some("SQLite database");
+    }
+    if starts(b"\xEF\xBB\xBF") {
+        return Some("UTF-8 text (BOM)");
+    }
+    if starts(&[0xFF, 0xFE]) || starts(&[0xFE, 0xFF]) {
+        return Some("UTF-16 text (BOM)");
+    }
+    None
+}
+
+fn file_type_text_or_binary(b: &[u8]) -> &'static str {
+    if b.contains(&0) {
+        return "binary data";
+    }
+    let printable = b
+        .iter()
+        .filter(|&&c| c == b'\t' || c == b'\n' || c == b'\r' || (0x20..=0x7e).contains(&c))
+        .count();
+    if printable * 100 / b.len() >= 90 {
+        "text"
+    } else {
+        "binary data"
+    }
+}
+
+#[derive(Deserialize)]
+struct PathJoinArgs {
+    parts: Vec<String>,
+}
+
+async fn path_join_tool(args: Value) -> Result<String> {
+    let PathJoinArgs { parts } = serde_json::from_value(args)?;
+    if parts.is_empty() {
+        return Err(anyhow!("parts must contain at least one segment"));
+    }
+    let mut joined = PathBuf::new();
+    for p in &parts {
+        joined.push(p);
+    }
+    joined
+        .to_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow!("joined path is not valid UTF-8"))
+}
+
+fn path_normalize_lexical(input: &str) -> String {
+    use std::path::Component;
+    let p = std::path::Path::new(input);
+    // Prefix (Windows drive/UNC) and root are kept verbatim at the front.
+    let mut prefix = std::ffi::OsString::new();
+    let mut has_root = false;
+    // Stack of Normal components (as OsString) plus leading `..` we could not resolve.
+    let mut stack: Vec<std::ffi::OsString> = Vec::new();
+
+    for comp in p.components() {
+        match comp {
+            Component::Prefix(pre) => prefix = pre.as_os_str().to_os_string(),
+            Component::RootDir => has_root = true,
+            Component::CurDir => {}
+            Component::ParentDir => {
+                match stack.last() {
+                    // Pop a real segment.
+                    Some(last) if last != std::ffi::OsStr::new("..") => {
+                        stack.pop();
+                    }
+                    // At an absolute root, `..` has nowhere to go -> drop it.
+                    _ if has_root => {}
+                    // Relative path with no segment to pop -> keep the `..`.
+                    _ => stack.push(std::ffi::OsString::from("..")),
+                }
+            }
+            Component::Normal(seg) => stack.push(seg.to_os_string()),
+        }
+    }
+
+    let mut out = std::path::PathBuf::new();
+    if !prefix.is_empty() {
+        out.push(&prefix);
+    }
+    if has_root {
+        // Joining RootDir portably: push the platform separator root.
+        out.push(std::path::MAIN_SEPARATOR.to_string());
+    }
+    for seg in &stack {
+        out.push(seg);
+    }
+
+    let s = out.to_string_lossy().into_owned();
+    if s.is_empty() {
+        ".".to_string()
+    } else {
+        s
+    }
+}
+
+async fn path_normalize_tool(args: Value) -> Result<String> {
+    let PathArgs { path } = serde_json::from_value(args)?;
+    Ok(path_normalize_lexical(&path))
+}
+
+#[derive(Deserialize)]
+struct RelpathArgs {
+    path: String,
+    base: String,
+}
+
+async fn relpath_tool(args: Value) -> Result<String> {
+    let RelpathArgs { path, base } = serde_json::from_value(args)?;
+    relpath_compute(&path, &base)
+}
+
+/// Compute the relative path from `base` to `path` by diffing components.
+/// Pure: never touches the filesystem. Requires both paths to be the same
+/// kind (both absolute or both relative) so a common prefix is meaningful.
+fn relpath_compute(path: &str, base: &str) -> Result<String> {
+    use std::path::Component;
+    let path_p = std::path::Path::new(path);
+    let base_p = std::path::Path::new(base);
+
+    if path_p.is_absolute() != base_p.is_absolute() {
+        return Err(anyhow!(
+            "cannot relativize: `path` and `base` must both be absolute or both be relative"
+        ));
+    }
+
+    let mut ita = path_p.components();
+    let mut itb = base_p.components();
+    let mut comps: Vec<Component> = Vec::new();
+
+    loop {
+        match (ita.next(), itb.next()) {
+            (None, None) => break,
+            (Some(a), None) => {
+                comps.push(a);
+                comps.extend(ita.by_ref());
+                break;
+            }
+            (None, _) => comps.push(Component::ParentDir),
+            (Some(a), Some(b)) if comps.is_empty() && a == b => {}
+            (Some(a), Some(Component::CurDir)) => comps.push(a),
+            (Some(_), Some(Component::ParentDir)) => {
+                // A `..` in base cannot be reversed without touching the fs.
+                return Err(anyhow!(
+                    "cannot relativize: `base` contains a `..` component that has no counterpart in `path`"
+                ));
+            }
+            (Some(a), Some(_)) => {
+                comps.push(Component::ParentDir);
+                for _ in itb.by_ref() {
+                    comps.push(Component::ParentDir);
+                }
+                comps.push(a);
+                comps.extend(ita.by_ref());
+                break;
+            }
+        }
+    }
+
+    if comps.is_empty() {
+        return Ok(".".to_string());
+    }
+    let result: PathBuf = comps.iter().map(|c| c.as_os_str()).collect();
+    Ok(result.to_string_lossy().into_owned())
+}
+
+#[derive(Deserialize)]
+struct SplitFileArgs {
+    path: String,
+    #[serde(default)]
+    bytes: Option<u64>,
+    #[serde(default)]
+    lines: Option<usize>,
+    #[serde(default)]
+    prefix: Option<String>,
+}
+
+/// Build the chunk path for index `idx`, zero-padded to `width` digits:
+/// `prefix.00`, `prefix.01`, ...
+fn split_file_chunk_path(prefix: &str, idx: usize, width: usize) -> String {
+    format!("{prefix}.{idx:0width$}")
+}
+
+async fn split_file_tool(args: Value) -> Result<String> {
+    let SplitFileArgs {
+        path,
+        bytes,
+        lines,
+        prefix,
+    } = serde_json::from_value(args)?;
+
+    // Exactly one of bytes / lines.
+    let mode = match (bytes, lines) {
+        (Some(_), Some(_)) => {
+            return Err(anyhow!(
+                "provide exactly one of `bytes` or `lines`, not both"
+            ))
+        }
+        (None, None) => return Err(anyhow!("provide exactly one of `bytes` or `lines`")),
+        (Some(0), None) => return Err(anyhow!("bytes must be >= 1")),
+        (None, Some(0)) => return Err(anyhow!("lines must be >= 1")),
+        (Some(b), None) => Ok::<_, anyhow::Error>((Some(b), None)),
+        (None, Some(l)) => Ok((None, Some(l))),
+    }?;
+
+    let prefix = prefix.unwrap_or_else(|| format!("{path}.part"));
+
+    // Collect chunks as byte buffers so both modes share one write path.
+    let chunks: Vec<Vec<u8>> = match mode {
+        (Some(b), None) => {
+            let data = std::fs::read(&path).with_context(|| format!("read {path}"))?;
+            let size = b as usize;
+            if data.is_empty() {
+                Vec::new()
+            } else {
+                data.chunks(size).map(|c| c.to_vec()).collect()
+            }
+        }
+        (None, Some(l)) => {
+            let text =
+                std::fs::read_to_string(&path).with_context(|| format!("read_to_string {path}"))?;
+            if text.is_empty() {
+                Vec::new()
+            } else {
+                // Preserve line terminators by keeping them attached; the
+                // final line has no trailing newline appended if the source
+                // lacked one.
+                let mut lines_with_nl: Vec<&str> = Vec::new();
+                let mut start = 0usize;
+                let bytes = text.as_bytes();
+                for (i, ch) in bytes.iter().enumerate() {
+                    if *ch == b'\n' {
+                        lines_with_nl.push(&text[start..=i]);
+                        start = i + 1;
+                    }
+                }
+                if start < text.len() {
+                    lines_with_nl.push(&text[start..]);
+                }
+                lines_with_nl
+                    .chunks(l)
+                    .map(|group| group.concat().into_bytes())
+                    .collect()
+            }
+        }
+        _ => unreachable!(),
+    };
+
+    if chunks.is_empty() {
+        return Err(anyhow!("nothing to split: {path} is empty"));
+    }
+
+    // Width: at least 2 digits, grow to fit the highest index.
+    let last = chunks.len() - 1;
+    let width = std::cmp::max(2, last.to_string().len());
+
+    let mut written = Vec::with_capacity(chunks.len());
+    for (i, chunk) in chunks.iter().enumerate() {
+        let out = split_file_chunk_path(&prefix, i, width);
+        std::fs::write(&out, chunk).with_context(|| format!("write {out}"))?;
+        written.push(out);
+    }
+
+    Ok(written.join("\n"))
+}
+
+#[derive(Deserialize)]
+struct JoinFilesArgs {
+    inputs: Vec<String>,
+    output: String,
+}
+
+async fn join_files_tool(args: Value) -> Result<String> {
+    let JoinFilesArgs { inputs, output } = serde_json::from_value(args)?;
+    if inputs.is_empty() {
+        return Err(anyhow!("inputs must not be empty"));
+    }
+    let mut buf: Vec<u8> = Vec::new();
+    for input in &inputs {
+        let bytes = std::fs::read(input).with_context(|| format!("reading {input}"))?;
+        buf.extend_from_slice(&bytes);
+    }
+    let total = buf.len();
+    std::fs::write(&output, &buf).with_context(|| format!("writing {output}"))?;
+    Ok(format!(
+        "joined {} file(s) into {output} ({})",
+        inputs.len(),
+        human_bytes(total as u64)
+    ))
+}
+
+async fn is_dir_empty_tool(args: Value) -> Result<String> {
+    let PathArgs { path } = serde_json::from_value(args)?;
+    let m = std::fs::metadata(&path).with_context(|| format!("is_dir_empty {path}"))?;
+    if !m.is_dir() {
+        return Err(anyhow!("{path} is not a directory"));
+    }
+    let empty = std::fs::read_dir(&path)
+        .with_context(|| format!("read_dir {path}"))?
+        .next()
+        .is_none();
+    Ok(if empty { "empty" } else { "not empty" }.to_string())
+}
+
+async fn exists_tool(args: Value) -> Result<String> {
+    let PathArgs { path } = serde_json::from_value(args)?;
+    match std::fs::symlink_metadata(&path) {
+        Ok(m) => {
+            let kind = if m.is_dir() {
+                "dir"
+            } else if m.is_symlink() {
+                "symlink"
+            } else if m.is_file() {
+                "file"
+            } else {
+                "other"
+            };
+            Ok(format!("exists: true\nkind:   {kind}"))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok("exists: false".to_string()),
+        Err(e) => Err(anyhow!("exists {path}: {e}")),
+    }
+}
+
+#[derive(Deserialize)]
+struct FallocateArgs {
+    path: String,
+    size: u64,
+}
+
+async fn fallocate_tool(args: Value) -> Result<String> {
+    let FallocateArgs { path, size } = serde_json::from_value(args)?;
+    // create(true).write(true): unlike `truncate`, fallocate creates the file
+    // if it is absent. No truncate(true) flag (that would zero an existing
+    // file to 0 and ignore `size`). set_len maps to ftruncate on unix and
+    // SetEndOfFile on Windows — portable, no cfg split.
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)
+        .with_context(|| format!("fallocate {path}"))?;
+    f.set_len(size).with_context(|| format!("set_len {path}"))?;
+    Ok(format!(
+        "allocated {path} to {size} bytes ({})",
+        human_bytes(size)
+    ))
+}
+
+#[derive(Deserialize)]
+struct UniqArgs {
+    path: String,
+    #[serde(default)]
+    count: bool,
+    #[serde(default)]
+    repeated: bool,
+    #[serde(default)]
+    unique_only: bool,
+    #[serde(default)]
+    ignore_case: bool,
+}
+
+async fn uniq_tool(args: Value) -> Result<String> {
+    let UniqArgs {
+        path,
+        count,
+        repeated,
+        unique_only,
+        ignore_case,
+    } = serde_json::from_value(args)?;
+    if repeated && unique_only {
+        return Err(anyhow!(
+            "`repeated` and `unique_only` are mutually exclusive"
+        ));
+    }
+    let content = std::fs::read_to_string(&path).with_context(|| format!("read {path}"))?;
+    // Collapse adjacent equal runs, comparing case-insensitively when asked
+    // but keeping the first line of each run verbatim for output.
+    let mut runs: Vec<(&str, usize)> = Vec::new();
+    for line in content.lines() {
+        let key_matches = |prev: &str| {
+            if ignore_case {
+                prev.eq_ignore_ascii_case(line)
+            } else {
+                prev == line
+            }
+        };
+        match runs.last_mut() {
+            Some((first, n)) if key_matches(first) => *n += 1,
+            _ => runs.push((line, 1)),
+        }
+    }
+    let mut out: Vec<String> = Vec::new();
+    for (line, n) in runs {
+        if repeated && n < 2 {
+            continue;
+        }
+        if unique_only && n != 1 {
+            continue;
+        }
+        if count {
+            out.push(format!("{n:>7} {line}"));
+        } else {
+            out.push(line.to_string());
+        }
+        if out.len() >= MAX_LINES {
+            break;
+        }
+    }
+    Ok(out.join("\n"))
+}
+
+#[derive(Deserialize)]
+struct PasteArgs {
+    paths: Vec<String>,
+    delimiter: Option<String>,
+}
+
+async fn paste_tool(args: Value) -> Result<String> {
+    const MAX_ROWS: usize = 10_000;
+    let PasteArgs { paths, delimiter } = serde_json::from_value(args)?;
+    if paths.is_empty() {
+        return Err(anyhow!("paste requires at least one path"));
+    }
+    let delim = delimiter.unwrap_or_else(|| "\t".to_string());
+
+    let mut columns: Vec<Vec<String>> = Vec::with_capacity(paths.len());
+    for path in &paths {
+        let content = tokio::fs::read_to_string(path)
+            .await
+            .with_context(|| format!("read {path}"))?;
+        columns.push(content.lines().map(|l| l.to_string()).collect());
+    }
+
+    let row_count = columns.iter().map(|c| c.len()).max().unwrap_or(0);
+    let capped = row_count.min(MAX_ROWS);
+
+    let mut out: Vec<String> = Vec::with_capacity(capped);
+    for row in 0..capped {
+        let cells: Vec<&str> = columns
+            .iter()
+            .map(|col| col.get(row).map(|s| s.as_str()).unwrap_or(""))
+            .collect();
+        out.push(cells.join(&delim));
+    }
+
+    let mut result = out.join("\n");
+    if row_count > capped {
+        result.push_str(&format!(
+            "\n... ({} more rows truncated)",
+            row_count - capped
+        ));
+    }
+    Ok(result)
+}
+
+#[derive(Deserialize)]
+struct FoldArgs {
+    path: String,
+    #[serde(default = "fold_default_width")]
+    width: usize,
+    #[serde(default)]
+    spaces: bool,
+}
+
+fn fold_default_width() -> usize {
+    80
+}
+
+async fn fold_tool(args: Value) -> Result<String> {
+    let FoldArgs {
+        path,
+        width,
+        spaces,
+    } = serde_json::from_value(args)?;
+    if width == 0 {
+        return Err(anyhow!("width must be >= 1"));
+    }
+    let source = tokio::fs::read_to_string(&path)
+        .await
+        .with_context(|| format!("read {path}"))?;
+
+    // Wrap line-by-line. `split('\n')` preserves the exact line structure
+    // (trailing newline, blank lines) the way the `expand` tool does.
+    let mut out = String::with_capacity(source.len());
+    let mut first = true;
+    for line in source.split('\n') {
+        if !first {
+            out.push('\n');
+        }
+        first = false;
+        out.push_str(&fold_line(line, width, spaces));
+    }
+    Ok(out)
+}
+
+/// Wrap a single logical line (no embedded '\n') to at most `width` chars,
+/// emitting '\n'-separated segments. In `spaces` mode, break at the last
+/// space at or before the limit; a word longer than `width` is still hard-
+/// broken so no output segment ever exceeds `width`.
+fn fold_line(line: &str, width: usize, spaces: bool) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    if chars.len() <= width {
+        return line.to_string();
+    }
+    let mut out = String::with_capacity(line.len() + line.len() / width);
+    let mut start = 0usize;
+    let mut first = true;
+    while start < chars.len() {
+        let remaining = chars.len() - start;
+        if remaining <= width {
+            if !first {
+                out.push('\n');
+            }
+            out.extend(&chars[start..]);
+            break;
+        }
+        let hard_end = start + width;
+        let mut end = hard_end;
+        if spaces {
+            // Search backwards within [start, hard_end) for a whitespace to
+            // break after. If none, fall back to the hard break.
+            if let Some(pos) = chars[start..hard_end]
+                .iter()
+                .rposition(|c| c.is_whitespace())
+            {
+                let brk = start + pos;
+                if brk > start {
+                    end = brk + 1; // include the breaking whitespace on this segment
+                }
+            }
+        }
+        if !first {
+            out.push('\n');
+        }
+        first = false;
+        out.extend(&chars[start..end]);
+        start = end;
+    }
+    out
+}
+
+async fn tac_tool(args: Value) -> Result<String> {
+    let PathArgs { path } = serde_json::from_value(args)?;
+    let content =
+        std::fs::read_to_string(&path).with_context(|| format!("read_to_string {path}"))?;
+    let out: Vec<&str> = content.lines().rev().take(MAX_LINES).collect();
+    Ok(out.join("\n"))
+}
+
+#[derive(Deserialize)]
+struct IndentArgs {
+    path: String,
+    #[serde(default)]
+    prefix: Option<String>,
+    #[serde(default)]
+    width: Option<usize>,
+    #[serde(default)]
+    tabs: bool,
+    #[serde(default = "default_true")]
+    skip_blank: bool,
+}
+
+async fn indent_tool(args: Value) -> Result<String> {
+    let IndentArgs {
+        path,
+        prefix,
+        width,
+        tabs,
+        skip_blank,
+    } = serde_json::from_value(args)?;
+    let pad = match prefix {
+        Some(p) => p,
+        None => {
+            let n = width.unwrap_or(4);
+            let ch = if tabs { '\t' } else { ' ' };
+            std::iter::repeat_n(ch, n).collect()
+        }
+    };
+    let content = tokio::fs::read_to_string(&path)
+        .await
+        .with_context(|| format!("read {path}"))?;
+    let ends_with_newline = content.ends_with('\n');
+    let mut out = String::with_capacity(content.len() + pad.len() * 8);
+    let mut first = true;
+    for line in content.lines() {
+        if !first {
+            out.push('\n');
+        }
+        first = false;
+        let blank = line.trim().is_empty();
+        if !(skip_blank && blank) {
+            out.push_str(&pad);
+        }
+        out.push_str(line);
+    }
+    if ends_with_newline {
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+#[derive(Deserialize)]
+struct JoinArgs {
+    path_a: String,
+    path_b: String,
+    field_a: Option<usize>,
+    field_b: Option<usize>,
+    delimiter: Option<String>,
+}
+
+/// Split `line` into fields using `delim` (a single char) or, when `None`, on
+/// runs of whitespace (skipping leading/empty fields, like the Unix `join`).
+fn join_split(line: &str, delim: Option<char>) -> Vec<&str> {
+    match delim {
+        Some(d) => line.split(d).collect(),
+        None => line.split_whitespace().collect(),
+    }
+}
+
+/// Return (key, rest) for a line: the value of the 1-based `field` and the
+/// whole line with that one field removed, re-joined with `sep`. Returns
+/// `None` if the field index is out of range for this line.
+fn join_key_rest(fields: &[&str], field: usize, sep: &str) -> Option<(String, String)> {
+    if field == 0 || field > fields.len() {
+        return None;
+    }
+    let key = fields[field - 1].to_string();
+    let rest: Vec<&str> = fields
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != field - 1)
+        .map(|(_, f)| *f)
+        .collect();
+    Some((key, rest.join(sep)))
+}
+
+async fn join_tool(args: Value) -> Result<String> {
+    let JoinArgs {
+        path_a,
+        path_b,
+        field_a,
+        field_b,
+        delimiter,
+    } = serde_json::from_value(args)?;
+
+    let delim: Option<char> = match delimiter.as_deref() {
+        None => None,
+        Some(s) => {
+            let mut chars = s.chars();
+            let c = chars
+                .next()
+                .ok_or_else(|| anyhow!("delimiter must be a single non-empty character"))?;
+            if chars.next().is_some() {
+                return Err(anyhow!("delimiter must be a single character"));
+            }
+            Some(c)
+        }
+    };
+    let sep: String = delim
+        .map(|c| c.to_string())
+        .unwrap_or_else(|| " ".to_string());
+    let fa = field_a.unwrap_or(1);
+    let fb = field_b.unwrap_or(1);
+    if fa == 0 || fb == 0 {
+        return Err(anyhow!(
+            "join fields are 1-based; field_a/field_b must be >= 1"
+        ));
+    }
+
+    let text_b = std::fs::read_to_string(&path_b).with_context(|| format!("reading {path_b}"))?;
+    // Map key -> list of "rest of B" strings (preserve duplicates, in order).
+    let mut map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for line in text_b.lines() {
+        let fields = join_split(line, delim);
+        if let Some((key, rest)) = join_key_rest(&fields, fb, &sep) {
+            map.entry(key).or_default().push(rest);
+        }
+    }
+
+    let text_a = std::fs::read_to_string(&path_a).with_context(|| format!("reading {path_a}"))?;
+    const CAP: usize = 10_000;
+    let mut out: Vec<String> = Vec::new();
+    let mut truncated = false;
+    'outer: for line in text_a.lines() {
+        let fields = join_split(line, delim);
+        let Some((key, rest_a)) = join_key_rest(&fields, fa, &sep) else {
+            continue;
+        };
+        if let Some(rests_b) = map.get(&key) {
+            for rest_b in rests_b {
+                if out.len() >= CAP {
+                    truncated = true;
+                    break 'outer;
+                }
+                let mut row = key.clone();
+                if !rest_a.is_empty() {
+                    row.push_str(&sep);
+                    row.push_str(&rest_a);
+                }
+                if !rest_b.is_empty() {
+                    row.push_str(&sep);
+                    row.push_str(rest_b);
+                }
+                out.push(row);
+            }
+        }
+    }
+
+    if out.is_empty() {
+        return Ok("(no matching keys)".to_string());
+    }
+    let mut result = out.join("\n");
+    if truncated {
+        result.push_str(&format!("\n... (output capped at {CAP} lines)"));
+    }
+    Ok(result)
+}
+
+async fn squeeze_blank_tool(args: Value) -> Result<String> {
+    let PathArgs { path } = serde_json::from_value(args)?;
+    let content = tokio::fs::read_to_string(&path)
+        .await
+        .with_context(|| format!("read {path}"))?;
+
+    // Split on '\n' so we keep each line's own '\r' (if any) in `line`,
+    // faithfully preserving CRLF vs LF per line. `split('\n')` yields a
+    // trailing empty element when the text ends in '\n', which we use to
+    // reconstruct the trailing newline exactly.
+    let lines: Vec<&str> = content.split('\n').collect();
+    let mut out = String::with_capacity(content.len());
+    let mut prev_blank = false;
+    let mut first = true;
+
+    for line in &lines {
+        // A blank line is one that is empty ignoring only a trailing '\r'.
+        let is_blank = line.is_empty() || *line == "\r";
+        if is_blank && prev_blank {
+            continue;
+        }
+        if !first {
+            out.push('\n');
+        }
+        out.push_str(line);
+        first = false;
+        prev_blank = is_blank;
+    }
+
+    Ok(out)
+}
+
+#[derive(Deserialize)]
+struct ReflowArgs {
+    text: String,
+    width: Option<usize>,
+}
+
+/// Greedy word-wrap a single paragraph's words to `width` columns.
+/// A word longer than `width` still gets its own line, unbroken.
+fn reflow_wrap(words: &[&str], width: usize) -> String {
+    let mut out = String::new();
+    let mut line_len = 0usize;
+    for &word in words {
+        if line_len == 0 {
+            out.push_str(word);
+            line_len = word.chars().count();
+        } else if line_len + 1 + word.chars().count() <= width {
+            out.push(' ');
+            out.push_str(word);
+            line_len += 1 + word.chars().count();
+        } else {
+            out.push('\n');
+            out.push_str(word);
+            line_len = word.chars().count();
+        }
+    }
+    out
+}
+
+async fn reflow_tool(args: Value) -> Result<String> {
+    let ReflowArgs { text, width } = serde_json::from_value(args)?;
+    let width = width.unwrap_or(80);
+    if width == 0 {
+        return Err(anyhow!("width must be greater than 0"));
+    }
+    // Paragraphs are runs of non-blank lines separated by one-or-more blank lines.
+    let mut paragraphs: Vec<String> = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            if !current.is_empty() {
+                let words: Vec<&str> = current.iter().flat_map(|l| l.split_whitespace()).collect();
+                paragraphs.push(reflow_wrap(&words, width));
+                current.clear();
+            }
+        } else {
+            current.push(line);
+        }
+    }
+    if !current.is_empty() {
+        let words: Vec<&str> = current.iter().flat_map(|l| l.split_whitespace()).collect();
+        paragraphs.push(reflow_wrap(&words, width));
+    }
+    Ok(paragraphs.join("\n\n"))
+}
+
+#[derive(Deserialize)]
+struct TrimArgs {
+    data: String,
+    #[serde(default)]
+    mode: TrimMode,
+    #[serde(default)]
+    normalize_eol: bool,
+}
+
+#[derive(Deserialize, Default, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+enum TrimMode {
+    #[default]
+    Both,
+    Leading,
+    Trailing,
+}
+
+async fn trim_tool(args: Value) -> Result<String> {
+    let TrimArgs {
+        data,
+        mode,
+        normalize_eol,
+    } = serde_json::from_value(args)?;
+    let normalized;
+    let source: &str = if normalize_eol {
+        normalized = data.replace("\r\n", "\n").replace('\r', "\n");
+        &normalized
+    } else {
+        &data
+    };
+    // Preserve a trailing newline: split_inclusive keeps the terminator so we
+    // only trim the line content, then reattach the "\n" (or "\r\n").
+    let mut out = String::with_capacity(source.len());
+    for line in source.split_inclusive('\n') {
+        let (content, eol) = match line.strip_suffix('\n') {
+            Some(rest) => match rest.strip_suffix('\r') {
+                Some(r) => (r, "\r\n"),
+                None => (rest, "\n"),
+            },
+            None => (line, ""),
+        };
+        let trimmed = match mode {
+            TrimMode::Both => content.trim(),
+            TrimMode::Leading => content.trim_start(),
+            TrimMode::Trailing => content.trim_end(),
+        };
+        out.push_str(trimmed);
+        out.push_str(eol);
+    }
+    Ok(out)
+}
+
+/// CRC-32C (Castagnoli polynomial 0x1EDC6F41, reflected 0x82F63B78) via the
+/// branchless bit-at-a-time algorithm — used by iSCSI, ext4, SSE4.2 CRC.
+fn crc32c(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &b in data {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            let mask = (crc & 1).wrapping_neg();
+            crc = (crc >> 1) ^ (0x82F6_3B78 & mask);
+        }
+    }
+    !crc
+}
+
+async fn crc32c_tool(args: Value) -> Result<String> {
+    let HashInputArgs { path, data } = serde_json::from_value(args)?;
+    let crc = crc32c(&one_input_bytes(path, data)?);
+    Ok(format!("{crc:#010x} {crc}"))
+}
+
+/// Adler-32 checksum (RFC 1950 / zlib): two mod-65521 accumulators.
+fn adler32(data: &[u8]) -> u32 {
+    const MOD: u32 = 65521;
+    let mut a: u32 = 1;
+    let mut b: u32 = 0;
+    for &byte in data {
+        a = (a + byte as u32) % MOD;
+        b = (b + a) % MOD;
+    }
+    (b << 16) | a
+}
+
+async fn adler32_tool(args: Value) -> Result<String> {
+    let HashInputArgs { path, data } = serde_json::from_value(args)?;
+    let sum = adler32(&one_input_bytes(path, data)?);
+    Ok(format!("{sum:#010x} {sum}"))
+}
+
+/// Bitwise CRC-16 with a variant-selected polynomial/init/reflect.
+/// For reflected variants the reflected polynomial is supplied (e.g. 0xA001
+/// for 0x8005) and both input bytes and the register step shift right.
+fn crc16_compute(data: &[u8], poly: u16, init: u16, reflect: bool) -> u16 {
+    let mut crc = init;
+    if reflect {
+        for &b in data {
+            crc ^= b as u16;
+            for _ in 0..8 {
+                let mask = (crc & 1).wrapping_neg();
+                crc = (crc >> 1) ^ (poly & mask);
+            }
+        }
+    } else {
+        for &b in data {
+            crc ^= (b as u16) << 8;
+            for _ in 0..8 {
+                if crc & 0x8000 != 0 {
+                    crc = (crc << 1) ^ poly;
+                } else {
+                    crc <<= 1;
+                }
+            }
+        }
+    }
+    crc
+}
+
+#[derive(Deserialize)]
+struct Crc16Args {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    data: Option<String>,
+    #[serde(default)]
+    variant: Option<String>,
+}
+
+async fn crc16_tool(args: Value) -> Result<String> {
+    let Crc16Args {
+        path,
+        data,
+        variant,
+    } = serde_json::from_value(args)?;
+    let bytes = one_input_bytes(path, data)?;
+    // (poly, init, reflect); reflected variants use the reflected polynomial.
+    let (poly, init, reflect) = match variant.as_deref().unwrap_or("ccitt") {
+        "ccitt" => (0x1021u16, 0xFFFFu16, false),
+        "xmodem" => (0x1021, 0x0000, false),
+        "modbus" => (0xA001, 0xFFFF, true),
+        "ibm" => (0xA001, 0x0000, true),
+        other => {
+            return Err(anyhow!(
+                "unknown variant `{other}` (want ccitt|xmodem|modbus|ibm)"
+            ))
+        }
+    };
+    let crc = crc16_compute(&bytes, poly, init, reflect);
+    Ok(format!("{crc:#06x} {crc}"))
+}
+
+#[derive(Deserialize)]
+struct Base64UrlArgs {
+    data: String,
+    #[serde(default)]
+    decode: bool,
+    #[serde(default)]
+    pad: bool,
+}
+
+async fn base64url_tool(args: Value) -> Result<String> {
+    let Base64UrlArgs { data, decode, pad } = serde_json::from_value(args)?;
+    if decode {
+        // Translate URL-safe alphabet back to the standard one, then reuse the
+        // standard decoder (which tolerates missing `=` padding).
+        let standard: String = data
+            .chars()
+            .map(|c| match c {
+                '-' => '+',
+                '_' => '/',
+                other => other,
+            })
+            .collect();
+        let bytes = base64_decode(&standard)?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    } else {
+        let standard = base64_encode(data.as_bytes());
+        let out: String = standard
+            .chars()
+            .filter(|&c| pad || c != '=')
+            .map(|c| match c {
+                '+' => '-',
+                '/' => '_',
+                other => other,
+            })
+            .collect();
+        Ok(out)
+    }
+}
+
+#[derive(Deserialize)]
+struct Base85Args {
+    data: String,
+    #[serde(default)]
+    decode: bool,
+    #[serde(default)]
+    variant: Base85Variant,
+}
+
+#[derive(Deserialize, Default, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum Base85Variant {
+    #[default]
+    Ascii85,
+    Z85,
+}
+
+async fn base85_tool(args: Value) -> Result<String> {
+    let Base85Args {
+        data,
+        decode,
+        variant,
+    } = serde_json::from_value(args)?;
+    match (decode, variant) {
+        (false, Base85Variant::Ascii85) => Ok(ascii85_encode(data.as_bytes())),
+        (false, Base85Variant::Z85) => z85_encode(data.as_bytes()),
+        (true, Base85Variant::Ascii85) => {
+            Ok(String::from_utf8_lossy(&ascii85_decode(&data)?).into_owned())
+        }
+        (true, Base85Variant::Z85) => Ok(String::from_utf8_lossy(&z85_decode(&data)?).into_owned()),
+    }
+}
+
+fn ascii85_encode(data: &[u8]) -> String {
+    let mut out = String::new();
+    for chunk in data.chunks(4) {
+        let mut n = 0u32;
+        for i in 0..4 {
+            n = n.wrapping_shl(8) | (*chunk.get(i).unwrap_or(&0) as u32);
+        }
+        if chunk.len() == 4 && n == 0 {
+            out.push('z');
+            continue;
+        }
+        let mut group = [0u8; 5];
+        let mut v = n;
+        for slot in group.iter_mut().rev() {
+            *slot = b'!' + (v % 85) as u8;
+            v /= 85;
+        }
+        for &g in &group[..chunk.len() + 1] {
+            out.push(g as char);
+        }
+    }
+    out
+}
+
+fn ascii85_decode(s: &str) -> Result<Vec<u8>> {
+    let body = s
+        .strip_prefix("<~")
+        .map(|r| r.strip_suffix("~>").unwrap_or(r))
+        .unwrap_or(s);
+    let mut out = Vec::new();
+    let mut group = [0u8; 5];
+    let mut gi = 0usize;
+    for c in body.bytes() {
+        if c.is_ascii_whitespace() {
+            continue;
+        }
+        if c == b'z' {
+            if gi != 0 {
+                return Err(anyhow!("`z` shorthand cannot appear inside a group"));
+            }
+            out.extend_from_slice(&[0, 0, 0, 0]);
+            continue;
+        }
+        if !(b'!'..=b'u').contains(&c) {
+            return Err(anyhow!("invalid ascii85 character: {:?}", c as char));
+        }
+        group[gi] = c - b'!';
+        gi += 1;
+        if gi == 5 {
+            let mut n = 0u32;
+            for &g in &group {
+                n = n.wrapping_mul(85).wrapping_add(g as u32);
+            }
+            out.extend_from_slice(&n.to_be_bytes());
+            gi = 0;
+        }
+    }
+    if gi == 1 {
+        return Err(anyhow!(
+            "truncated ascii85 input (dangling single character)"
+        ));
+    }
+    if gi > 0 {
+        for slot in group.iter_mut().skip(gi) {
+            *slot = 84;
+        }
+        let mut n = 0u32;
+        for &g in &group {
+            n = n.wrapping_mul(85).wrapping_add(g as u32);
+        }
+        out.extend_from_slice(&n.to_be_bytes()[..gi - 1]);
+    }
+    Ok(out)
+}
+
+const Z85_ALPHABET: &[u8; 85] =
+    b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-:+=^!/*?&<>()[]{}@%$#";
+
+fn z85_encode(data: &[u8]) -> Result<String> {
+    if !data.len().is_multiple_of(4) {
+        return Err(anyhow!(
+            "z85 encoding requires the input length to be a multiple of 4 bytes (got {})",
+            data.len()
+        ));
+    }
+    let mut out = String::with_capacity(data.len() / 4 * 5);
+    for chunk in data.chunks(4) {
+        let mut n = 0u32;
+        for &b in chunk {
+            n = n.wrapping_shl(8) | (b as u32);
+        }
+        let mut group = [0u8; 5];
+        let mut v = n;
+        for slot in group.iter_mut().rev() {
+            *slot = Z85_ALPHABET[(v % 85) as usize];
+            v /= 85;
+        }
+        for &g in &group {
+            out.push(g as char);
+        }
+    }
+    Ok(out)
+}
+
+fn z85_decode(s: &str) -> Result<Vec<u8>> {
+    let clean: Vec<u8> = s.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    if !clean.len().is_multiple_of(5) {
+        return Err(anyhow!(
+            "z85 decoding requires the input length to be a multiple of 5 characters (got {})",
+            clean.len()
+        ));
+    }
+    let mut out = Vec::with_capacity(clean.len() / 5 * 4);
+    for chunk in clean.chunks(5) {
+        let mut n = 0u32;
+        for &c in chunk {
+            let v = Z85_ALPHABET
+                .iter()
+                .position(|&x| x == c)
+                .ok_or_else(|| anyhow!("invalid z85 character: {:?}", c as char))?
+                as u32;
+            n = n.wrapping_mul(85).wrapping_add(v);
+        }
+        out.extend_from_slice(&n.to_be_bytes());
+    }
+    Ok(out)
+}
+
+#[derive(Deserialize)]
+struct Rot13Args {
+    data: String,
+}
+
+async fn rot13_tool(args: Value) -> Result<String> {
+    let Rot13Args { data } = serde_json::from_value(args)?;
+    let out: String = data
+        .chars()
+        .map(|c| match c {
+            'A'..='Z' => (((c as u8 - b'A' + 13) % 26) + b'A') as char,
+            'a'..='z' => (((c as u8 - b'a' + 13) % 26) + b'a') as char,
+            _ => c,
+        })
+        .collect();
+    Ok(out)
+}
+
+#[derive(Deserialize)]
+struct JsonValidateArgs {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    data: Option<String>,
+}
+
+async fn json_validate_tool(args: Value) -> Result<String> {
+    let JsonValidateArgs { path, data } = serde_json::from_value(args)?;
+    let bytes = one_input_bytes(path, data)?;
+    let text = std::str::from_utf8(&bytes).context("input is not valid UTF-8")?;
+    match serde_json::from_str::<Value>(text) {
+        Ok(value) => Ok(format!("valid: top-level {}", json_validate_kind(&value))),
+        Err(e) => Ok(format!(
+            "invalid: {} at line {} column {}",
+            e,
+            e.line(),
+            e.column()
+        )),
+    }
+}
+
+fn json_validate_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+#[derive(Deserialize)]
+struct JsonFormatArgs {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    data: Option<String>,
+    #[serde(default)]
+    minify: bool,
+}
+
+async fn json_format_tool(args: Value) -> Result<String> {
+    let JsonFormatArgs { path, data, minify } = serde_json::from_value(args)?;
+    let bytes = one_input_bytes(path, data)?;
+    let doc: Value = serde_json::from_slice(&bytes).context("parsing JSON")?;
+    if minify {
+        Ok(serde_json::to_string(&doc)?)
+    } else {
+        Ok(serde_json::to_string_pretty(&doc)?)
+    }
+}
+
+#[derive(Deserialize)]
+struct NdjsonQueryArgs {
+    path: String,
+    filter_pointer: String,
+    #[serde(default)]
+    equals: Option<String>,
+    #[serde(default)]
+    pointer: Option<String>,
+}
+
+async fn ndjson_query_tool(args: Value) -> Result<String> {
+    let NdjsonQueryArgs {
+        path,
+        filter_pointer,
+        equals,
+        pointer,
+    } = serde_json::from_value(args)?;
+    let text = tokio::fs::read_to_string(&path)
+        .await
+        .with_context(|| format!("read {path}"))?;
+    let mut out: Vec<String> = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let doc: Value = serde_json::from_str(line)
+            .with_context(|| format!("parsing JSON on line {} of {path}", i + 1))?;
+        // A record is kept only when the filter pointer resolves.
+        let Some(fv) = doc.pointer(&filter_pointer) else {
+            continue;
+        };
+        if let Some(want) = &equals {
+            if !ndjson_query_value_matches(fv, want) {
+                continue;
+            }
+        }
+        let rendered = match &pointer {
+            Some(p) if !p.is_empty() => {
+                let v = doc
+                    .pointer(p)
+                    .ok_or_else(|| anyhow!("no value at pointer `{p}` on line {}", i + 1))?;
+                serde_json::to_string(v)?
+            }
+            _ => serde_json::to_string(&doc)?,
+        };
+        out.push(rendered);
+    }
+    Ok(out.join("\n"))
+}
+
+/// Compare a JSON value against a string predicate: a string matches its
+/// own contents directly; any other value matches its compact JSON form
+/// (so `"2"` matches the number 2, `"true"` matches the boolean true).
+fn ndjson_query_value_matches(v: &Value, want: &str) -> bool {
+    match v {
+        Value::String(s) => s == want,
+        other => serde_json::to_string(other)
+            .map(|s| s == want)
+            .unwrap_or(false),
+    }
+}
+
+#[derive(Deserialize)]
+struct PropertiesArgs {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    data: Option<String>,
+}
+
+async fn properties_to_json_tool(args: Value) -> Result<String> {
+    let PropertiesArgs { path, data } = serde_json::from_value(args)?;
+    let text = match (path, data) {
+        (Some(p), None) => tokio::fs::read_to_string(&p)
+            .await
+            .with_context(|| format!("read {p}"))?,
+        (None, Some(d)) => d,
+        _ => return Err(anyhow!("provide exactly one of `path` or `data`")),
+    };
+
+    let mut map = serde_json::Map::new();
+    let logical = properties_logical_lines(&text);
+    for line in logical {
+        // Comments and blanks: inspect the first non-whitespace char.
+        let trimmed = line.trim_start_matches([' ', '\t', '\x0c']);
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('!') {
+            continue;
+        }
+        // Find the key terminator: first unescaped whitespace, `=`, or `:`.
+        // Any run of whitespace, optionally followed by one `=`/`:`, that
+        // separates key from value is consumed.
+        let chars: Vec<char> = trimmed.chars().collect();
+        let mut i = 0;
+        // Key ends at first unescaped separator char.
+        while i < chars.len() {
+            let c = chars[i];
+            if c == '\\' {
+                i += 2; // skip the escaped char
+                continue;
+            }
+            if c == ' ' || c == '\t' || c == '\x0c' || c == '=' || c == ':' {
+                break;
+            }
+            i += 1;
+        }
+        let key_raw: String = chars[..i.min(chars.len())].iter().collect();
+        // Consume the separator: leading whitespace, then at most one `=`/`:`,
+        // then more whitespace.
+        let mut j = i;
+        while j < chars.len() && (chars[j] == ' ' || chars[j] == '\t' || chars[j] == '\x0c') {
+            j += 1;
+        }
+        if j < chars.len() && (chars[j] == '=' || chars[j] == ':') {
+            j += 1;
+            while j < chars.len() && (chars[j] == ' ' || chars[j] == '\t' || chars[j] == '\x0c') {
+                j += 1;
+            }
+        }
+        let val_raw: String = chars[j..].iter().collect();
+        let key = properties_unescape(&key_raw);
+        let val = properties_unescape(&val_raw);
+        map.insert(key, Value::String(val));
+    }
+    Ok(serde_json::to_string_pretty(&Value::Object(map))?)
+}
+
+/// Fold physical lines into logical lines. A physical line that ends with an
+/// odd number of backslashes continues onto the next; the trailing backslash is
+/// dropped and leading whitespace of the continuation is stripped. `str::lines`
+/// handles both `\n` and `\r\n`.
+fn properties_logical_lines(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut buf = String::new();
+    let mut continuing = false;
+    for raw in text.lines() {
+        let piece = if continuing {
+            raw.trim_start_matches([' ', '\t', '\x0c'])
+        } else {
+            raw
+        };
+        // Count trailing backslashes to decide continuation.
+        let trailing = piece.chars().rev().take_while(|&c| c == '\\').count();
+        if trailing % 2 == 1 {
+            // Drop the final continuation backslash, keep the rest.
+            buf.push_str(&piece[..piece.len() - 1]);
+            continuing = true;
+        } else {
+            buf.push_str(piece);
+            out.push(std::mem::take(&mut buf));
+            continuing = false;
+        }
+    }
+    if continuing {
+        out.push(std::mem::take(&mut buf));
+    }
+    out
+}
+
+/// Expand `.properties` escape sequences: `\t \n \r \f`, `\uXXXX`, and any other
+/// `\x` collapses to `x` (covering `\\`, `\=`, `\:`, `\#`, `\!`, `\ `). A lone
+/// trailing backslash is dropped; a malformed `\u` (too few hex digits) yields
+/// the literal `u` and passes the remaining chars through.
+fn properties_unescape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('t') => out.push('\t'),
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some('f') => out.push('\x0c'),
+            Some('u') => {
+                let mut hex = String::new();
+                for _ in 0..4 {
+                    match chars.peek() {
+                        Some(h) if h.is_ascii_hexdigit() => {
+                            hex.push(*h);
+                            chars.next();
+                        }
+                        _ => break,
+                    }
+                }
+                match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                    Some(ch) if hex.len() == 4 => out.push(ch),
+                    _ => {
+                        // Malformed: emit `u` then the collected hex verbatim.
+                        out.push('u');
+                        out.push_str(&hex);
+                    }
+                }
+            }
+            Some(other) => out.push(other),
+            None => {}
+        }
+    }
+    out
+}
+
+async fn html_to_text_tool(args: Value) -> Result<String> {
+    let HashInputArgs { path, data } = serde_json::from_value(args)?;
+    let bytes = one_input_bytes(path, data)?;
+    let html = String::from_utf8_lossy(&bytes);
+    Ok(html_to_text_render(&html))
+}
+
+/// Convert HTML to readable plain text: drop tags (the `strip_html` shipped
+/// tool only removes tags), decode a handful of common entities, then collapse
+/// runs of whitespace to single spaces and trim. Script/style contents are
+/// discarded so their bodies don't leak into the output.
+fn html_to_text_render(s: &str) -> String {
+    // Drop <script>/<style> bodies wholesale, then strip remaining tags.
+    let mut stripped = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let rest = &s[i..];
+        let lower_starts = |tag: &str| {
+            rest.len() >= tag.len()
+                && rest.as_bytes()[..tag.len()].eq_ignore_ascii_case(tag.as_bytes())
+        };
+        if lower_starts("<script") || lower_starts("<style") {
+            let close = if lower_starts("<script") {
+                "</script"
+            } else {
+                "</style"
+            };
+            // Skip to the matching close tag (case-insensitive), then past '>'.
+            match rest.to_ascii_lowercase().find(close) {
+                Some(rel) => {
+                    let after = i + rel + close.len();
+                    match s[after..].find('>') {
+                        Some(gt) => i = after + gt + 1,
+                        None => i = s.len(),
+                    }
+                }
+                None => i = s.len(),
+            }
+            continue;
+        }
+        if bytes[i] == b'<' {
+            match s[i..].find('>') {
+                Some(gt) => i += gt + 1,
+                None => i = s.len(),
+            }
+            // Treat block/line-break tags as whitespace so words don't merge.
+            stripped.push(' ');
+            continue;
+        }
+        let ch = rest.chars().next().unwrap();
+        stripped.push(ch);
+        i += ch.len_utf8();
+    }
+    let decoded = html_to_text_decode_entities(&stripped);
+    decoded.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Decode the common named/numeric HTML entities. Unknown entities are left
+/// verbatim (mirrors browser leniency without pulling a table).
+fn html_to_text_decode_entities(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let tail = &rest[amp..];
+        let semi = match tail[..tail.len().min(32)].find(';') {
+            Some(p) => p,
+            None => {
+                out.push('&');
+                rest = &rest[amp + 1..];
+                continue;
+            }
+        };
+        let entity = &tail[1..semi];
+        let replacement = match entity {
+            "amp" => Some("&".to_string()),
+            "lt" => Some("<".to_string()),
+            "gt" => Some(">".to_string()),
+            "quot" => Some("\"".to_string()),
+            "apos" => Some("'".to_string()),
+            "nbsp" => Some(" ".to_string()),
+            _ => {
+                let num = entity.strip_prefix('#');
+                num.and_then(|n| {
+                    let code =
+                        if let Some(hex) = n.strip_prefix('x').or_else(|| n.strip_prefix('X')) {
+                            u32::from_str_radix(hex, 16).ok()
+                        } else {
+                            n.parse::<u32>().ok()
+                        };
+                    code.and_then(char::from_u32).map(|c| c.to_string())
+                })
+            }
+        };
+        match replacement {
+            Some(r) => {
+                out.push_str(&r);
+                rest = &tail[semi + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &tail[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+#[derive(Deserialize)]
+struct JsonKeysArgs {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    data: Option<String>,
+    #[serde(default)]
+    leaves_only: bool,
+}
+
+async fn json_keys_tool(args: Value) -> Result<String> {
+    let JsonKeysArgs {
+        path,
+        data,
+        leaves_only,
+    } = serde_json::from_value(args)?;
+    let bytes = one_input_bytes(path, data)?;
+    let doc: Value = serde_json::from_slice(&bytes).context("parsing JSON")?;
+    let mut out = Vec::new();
+    json_keys_walk("", &doc, leaves_only, &mut out);
+    if out.is_empty() {
+        return Ok("(no keys)".to_string());
+    }
+    out.sort();
+    Ok(out
+        .into_iter()
+        .map(|p| {
+            if p.is_empty() {
+                "(root)".to_string()
+            } else {
+                p
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
+/// Recursively emit RFC-6901 JSON Pointer paths for every node in `v`.
+/// Object keys are escaped per RFC 6901 (`~` -> `~0`, `/` -> `~1`); array
+/// elements use their index. When `leaves_only` is true, only scalars and
+/// empty containers are emitted (intermediate object/array paths are skipped).
+/// Pure sync fn so it is unit-testable without touching the filesystem.
+fn json_keys_walk(path: &str, v: &Value, leaves_only: bool, out: &mut Vec<String>) {
+    match v {
+        Value::Object(m) if !m.is_empty() => {
+            if !leaves_only {
+                out.push(path.to_string());
+            }
+            for (k, child) in m {
+                let esc = k.replace('~', "~0").replace('/', "~1");
+                let p = format!("{path}/{esc}");
+                json_keys_walk(&p, child, leaves_only, out);
+            }
+        }
+        Value::Array(a) if !a.is_empty() => {
+            if !leaves_only {
+                out.push(path.to_string());
+            }
+            for (i, child) in a.iter().enumerate() {
+                let p = format!("{path}/{i}");
+                json_keys_walk(&p, child, leaves_only, out);
+            }
+        }
+        // Scalars and empty containers are always leaf paths.
+        _ => out.push(path.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct JsonFlattenArgs {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    data: Option<String>,
+    #[serde(default)]
+    separator: Option<String>,
+    #[serde(default)]
+    unflatten: bool,
+}
+
+/// Walk a nested JSON value, emitting `(dotted_key, leaf)` pairs into `out`.
+/// Empty objects/arrays are preserved as their own leaves so a round trip
+/// through flatten/unflatten does not silently drop them.
+fn json_flatten_walk(
+    prefix: &str,
+    sep: &str,
+    value: &Value,
+    out: &mut serde_json::Map<String, Value>,
+) {
+    match value {
+        Value::Object(map) if !map.is_empty() => {
+            for (k, v) in map {
+                let key = if prefix.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{prefix}{sep}{k}")
+                };
+                json_flatten_walk(&key, sep, v, out);
+            }
+        }
+        Value::Array(arr) if !arr.is_empty() => {
+            for (i, v) in arr.iter().enumerate() {
+                let key = if prefix.is_empty() {
+                    i.to_string()
+                } else {
+                    format!("{prefix}{sep}{i}")
+                };
+                json_flatten_walk(&key, sep, v, out);
+            }
+        }
+        _ => {
+            out.insert(prefix.to_string(), value.clone());
+        }
+    }
+}
+
+/// Insert `leaf` at the location described by `segments` inside `target`,
+/// creating intermediate objects/arrays. A segment that parses as a
+/// non-negative integer builds an array; otherwise an object.
+fn json_flatten_insert(target: &mut Value, segments: &[&str], leaf: Value) -> Result<()> {
+    let (seg, rest) = match segments.split_first() {
+        Some(pair) => pair,
+        None => {
+            *target = leaf;
+            return Ok(());
+        }
+    };
+    let as_index = seg.parse::<usize>().ok();
+    match as_index {
+        Some(idx) => {
+            if target.is_null() {
+                *target = Value::Array(Vec::new());
+            }
+            let arr = target.as_array_mut().ok_or_else(|| {
+                anyhow!("key `{seg}` treats an existing non-array value as an array")
+            })?;
+            if idx >= arr.len() {
+                arr.resize(idx + 1, Value::Null);
+            }
+            json_flatten_insert(&mut arr[idx], rest, leaf)
+        }
+        None => {
+            if target.is_null() {
+                *target = Value::Object(serde_json::Map::new());
+            }
+            let obj = target.as_object_mut().ok_or_else(|| {
+                anyhow!("key `{seg}` treats an existing non-object value as an object")
+            })?;
+            let entry = obj.entry(seg.to_string()).or_insert(Value::Null);
+            json_flatten_insert(entry, rest, leaf)
+        }
+    }
+}
+
+async fn json_flatten_tool(args: Value) -> Result<String> {
+    let JsonFlattenArgs {
+        path,
+        data,
+        separator,
+        unflatten,
+    } = serde_json::from_value(args)?;
+    let sep = separator.unwrap_or_else(|| ".".to_string());
+    if sep.is_empty() {
+        return Err(anyhow!("`separator` must not be empty"));
+    }
+    let bytes = one_input_bytes(path, data)?;
+    let text = String::from_utf8(bytes).map_err(|_| anyhow!("input is not valid UTF-8"))?;
+    let doc: Value = serde_json::from_str(&text).context("parsing JSON input")?;
+
+    if unflatten {
+        let obj = doc
+            .as_object()
+            .ok_or_else(|| anyhow!("unflatten expects a flat JSON object"))?;
+        let mut result = Value::Null;
+        for (key, leaf) in obj {
+            let segments: Vec<&str> = key.split(sep.as_str()).collect();
+            json_flatten_insert(&mut result, &segments, leaf.clone())?;
+        }
+        if result.is_null() {
+            result = Value::Object(serde_json::Map::new());
+        }
+        Ok(serde_json::to_string_pretty(&result)?)
+    } else {
+        let mut out = serde_json::Map::new();
+        json_flatten_walk("", &sep, &doc, &mut out);
+        Ok(serde_json::to_string_pretty(&Value::Object(out))?)
+    }
+}
+
+#[derive(Deserialize)]
+struct UnicodeEscapeArgs {
+    data: String,
+    #[serde(default)]
+    decode: bool,
+    #[serde(default)]
+    style: Option<String>,
+}
+
+async fn unicode_escape_tool(args: Value) -> Result<String> {
+    let UnicodeEscapeArgs {
+        data,
+        decode,
+        style,
+    } = serde_json::from_value(args)?;
+    if decode {
+        return unicode_escape_decode(&data);
+    }
+    let braced = match style.as_deref() {
+        None | Some("u") | Some("") => false,
+        Some("braced") => true,
+        Some(other) => return Err(anyhow!("unknown style {other:?}; use \"u\" or \"braced\"")),
+    };
+    let mut out = String::with_capacity(data.len());
+    for ch in data.chars() {
+        if ch.is_ascii() {
+            out.push(ch);
+        } else if braced {
+            out.push_str(&format!("\\u{{{:x}}}", ch as u32));
+        } else {
+            let cp = ch as u32;
+            if cp <= 0xFFFF {
+                out.push_str(&format!("\\u{cp:04x}"));
+            } else {
+                // UTF-16 surrogate pair for astral codepoints.
+                let v = cp - 0x1_0000;
+                let hi = 0xD800 + (v >> 10);
+                let lo = 0xDC00 + (v & 0x3FF);
+                out.push_str(&format!("\\u{hi:04x}\\u{lo:04x}"));
+            }
+        }
+    }
+    Ok(out)
+}
+
+// Decode both `\uXXXX` (with surrogate pairing) and `\u{...}` escapes.
+fn unicode_escape_decode(data: &str) -> Result<String> {
+    let bytes = data.as_bytes();
+    let mut out = String::with_capacity(data.len());
+    let mut i = 0;
+    let mut pending_high: Option<u32> = None;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 1 < bytes.len() && bytes[i + 1] == b'u' {
+            let (code, next) = if i + 2 < bytes.len() && bytes[i + 2] == b'{' {
+                // \u{...}
+                let start = i + 3;
+                let end = data[start..]
+                    .find('}')
+                    .map(|p| start + p)
+                    .ok_or_else(|| anyhow!("unterminated \\u{{...}} escape at byte {i}"))?;
+                let hex = &data[start..end];
+                if hex.is_empty() || hex.len() > 6 {
+                    return Err(anyhow!("invalid \\u{{{hex}}} escape"));
+                }
+                let n = u32::from_str_radix(hex, 16)
+                    .map_err(|_| anyhow!("invalid hex in \\u{{{hex}}}"))?;
+                (n, end + 1)
+            } else {
+                // \uXXXX
+                if i + 6 > bytes.len() {
+                    return Err(anyhow!("truncated \\uXXXX escape at byte {i}"));
+                }
+                let hex = &data[i + 2..i + 6];
+                let n =
+                    u32::from_str_radix(hex, 16).map_err(|_| anyhow!("invalid hex in \\u{hex}"))?;
+                (n, i + 6)
+            };
+            if let Some(hi) = pending_high.take() {
+                // Expect a low surrogate to complete the pair.
+                if (0xDC00..=0xDFFF).contains(&code) {
+                    let cp = 0x1_0000 + ((hi - 0xD800) << 10) + (code - 0xDC00);
+                    out.push(
+                        char::from_u32(cp)
+                            .ok_or_else(|| anyhow!("invalid surrogate pair -> U+{cp:X}"))?,
+                    );
+                    i = next;
+                    continue;
+                }
+                return Err(anyhow!(
+                    "high surrogate U+{hi:04X} not followed by a low surrogate"
+                ));
+            }
+            if (0xD800..=0xDBFF).contains(&code) {
+                pending_high = Some(code);
+                i = next;
+                continue;
+            }
+            if (0xDC00..=0xDFFF).contains(&code) {
+                return Err(anyhow!("unpaired low surrogate U+{code:04X}"));
+            }
+            out.push(char::from_u32(code).ok_or_else(|| anyhow!("invalid codepoint U+{code:X}"))?);
+            i = next;
+        } else {
+            if pending_high.is_some() {
+                return Err(anyhow!("high surrogate not followed by a low surrogate"));
+            }
+            let ch = data[i..]
+                .chars()
+                .next()
+                .ok_or_else(|| anyhow!("malformed input"))?;
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+    }
+    if pending_high.is_some() {
+        return Err(anyhow!("trailing unpaired high surrogate"));
+    }
+    Ok(out)
+}
+
+#[derive(Deserialize)]
+struct PortScanArgs {
+    host: String,
+    #[serde(default)]
+    ports: Option<Vec<u32>>,
+    #[serde(default)]
+    start: Option<u32>,
+    #[serde(default)]
+    end: Option<u32>,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+}
+
+/// Build the deduplicated, validated port list from either an explicit
+/// `ports` array or an inclusive `start..=end` range. Enforces 1..=65535
+/// and caps a range's width at 1024 to bound the scan.
+fn port_scan_ports(
+    ports: Option<Vec<u32>>,
+    start: Option<u32>,
+    end: Option<u32>,
+) -> Result<Vec<u16>> {
+    let valid = |p: u32| -> Result<u16> {
+        if (1..=65535).contains(&p) {
+            Ok(p as u16)
+        } else {
+            Err(anyhow!("port {p} out of range 1..=65535"))
+        }
+    };
+    match (ports, start, end) {
+        (Some(_), Some(_), _) | (Some(_), _, Some(_)) => {
+            Err(anyhow!("provide either `ports` or `start`/`end`, not both"))
+        }
+        (Some(list), None, None) => {
+            if list.is_empty() {
+                return Err(anyhow!("`ports` is empty"));
+            }
+            if list.len() > 1024 {
+                return Err(anyhow!("too many ports ({}) — cap is 1024", list.len()));
+            }
+            let mut out = Vec::with_capacity(list.len());
+            for p in list {
+                out.push(valid(p)?);
+            }
+            out.sort_unstable();
+            out.dedup();
+            Ok(out)
+        }
+        (None, Some(s), Some(e)) => {
+            let s = valid(s)?;
+            let e = valid(e)?;
+            if s > e {
+                return Err(anyhow!("start ({s}) must be <= end ({e})"));
+            }
+            let width = e as u32 - s as u32 + 1;
+            if width > 1024 {
+                return Err(anyhow!("range width {width} exceeds cap of 1024"));
+            }
+            Ok((s..=e).collect())
+        }
+        (None, None, None) => Err(anyhow!("provide `ports` or both `start` and `end`")),
+        (None, Some(_), None) | (None, None, Some(_)) => {
+            Err(anyhow!("range needs both `start` and `end`"))
+        }
+    }
+}
+
+async fn port_scan_tool(args: Value) -> Result<String> {
+    let PortScanArgs {
+        host,
+        ports,
+        start,
+        end,
+        timeout_ms,
+    } = serde_json::from_value(args)?;
+    let ports = port_scan_ports(ports, start, end)?;
+    let timeout_ms = timeout_ms.unwrap_or(1000).clamp(1, 30_000);
+    let total = ports.len();
+
+    // Bounded concurrency: probe in fixed-size chunks of blocking tasks so a
+    // wide scan doesn't spawn hundreds of threads at once. Each probe reuses
+    // tcp_probe (the tcp_check core); a port is "open" iff its report starts
+    // with "open". DNS/other errors abort the whole scan.
+    let mut open: Vec<u16> = Vec::new();
+    for chunk in ports.chunks(64) {
+        let mut handles = Vec::with_capacity(chunk.len());
+        for &port in chunk {
+            let host = host.clone();
+            handles.push(tokio::task::spawn_blocking(move || {
+                tcp_probe(&host, port, timeout_ms).map(|r| (port, r))
+            }));
+        }
+        for h in handles {
+            let (port, report) = h.await.context("port_scan probe task panicked")??;
+            if report.starts_with("open") {
+                open.push(port);
+            }
+        }
+    }
+    open.sort_unstable();
+
+    if open.is_empty() {
+        return Ok(format!(
+            "no open ports on {host} ({total} scanned, timeout {timeout_ms}ms)"
+        ));
+    }
+    let mut out = String::new();
+    for p in &open {
+        out.push_str(&p.to_string());
+        out.push('\n');
+    }
+    out.push_str(&format!(
+        "{} open / {total} scanned on {host} (timeout {timeout_ms}ms)",
+        open.len()
+    ));
+    Ok(out)
+}
+
+async fn public_ip_tool(_args: Value) -> Result<String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()?;
+    let endpoints = ["https://api.ipify.org", "https://ifconfig.me/ip"];
+    let mut last_err: Option<String> = None;
+    for url in endpoints {
+        match client.get(url).send().await {
+            Ok(resp) => {
+                let status = resp.status();
+                if !status.is_success() {
+                    last_err = Some(format!("{url} returned {status}"));
+                    continue;
+                }
+                match resp.text().await {
+                    Ok(body) => match public_ip_parse(&body) {
+                        Ok(ip) => return Ok(ip),
+                        Err(e) => last_err = Some(format!("{url}: {e}")),
+                    },
+                    Err(e) => last_err = Some(format!("reading body from {url}: {e}")),
+                }
+            }
+            Err(e) => last_err = Some(format!("GET {url}: {e}")),
+        }
+    }
+    Err(anyhow!(
+        "could not determine public IP: {}",
+        last_err.unwrap_or_else(|| "no endpoints reachable".to_string())
+    ))
+}
+
+fn public_ip_parse(body: &str) -> Result<String> {
+    let trimmed = body.trim();
+    let ip: std::net::IpAddr = trimmed
+        .parse()
+        .map_err(|_| anyhow!("response {trimmed:?} is not a valid IP address"))?;
+    Ok(ip.to_string())
+}
+
+#[derive(Deserialize)]
+struct LocalIpArgs {
+    target: Option<String>,
+}
+
+/// Normalize a user-supplied target into a `host:port` string. A bare host or
+/// IP (no port) gets `:80` appended. IPv6 literals must already be bracketed
+/// if a port is included (standard `[::1]:80` form).
+fn local_ip_normalize_target(target: &str) -> String {
+    let t = target.trim();
+    // Bracketed IPv6 with a port, e.g. "[::1]:80" -> has ']' then ':'.
+    if let Some(close) = t.rfind(']') {
+        if t[close..].contains(':') {
+            return t.to_string();
+        }
+        // Bracketed IPv6 without a port, e.g. "[::1]".
+        return format!("{t}:80");
+    }
+    // A bare IPv6 literal contains multiple ':' and no brackets — wrap it.
+    if t.matches(':').count() >= 2 {
+        return format!("[{t}]:80");
+    }
+    // IPv4 or hostname: append default port only if none present.
+    if t.contains(':') {
+        t.to_string()
+    } else {
+        format!("{t}:80")
+    }
+}
+
+async fn local_ip_tool(args: Value) -> Result<String> {
+    let args: LocalIpArgs =
+        serde_json::from_value(args).context("invalid arguments for `local_ip`")?;
+    let target = local_ip_normalize_target(args.target.as_deref().unwrap_or("8.8.8.8:80"));
+
+    // Bind to an unspecified address; connecting a UDP socket only sets the
+    // default route/peer and lets the OS pick a source address — no packets
+    // are transmitted. Try IPv4 first, then IPv6.
+    let mut last_err: Option<std::io::Error> = None;
+    for bind in ["0.0.0.0:0", "[::]:0"] {
+        let sock = match std::net::UdpSocket::bind(bind) {
+            Ok(s) => s,
+            Err(e) => {
+                last_err = Some(e);
+                continue;
+            }
+        };
+        match sock.connect(&target) {
+            Ok(()) => match sock.local_addr() {
+                Ok(addr) => return Ok(addr.ip().to_string()),
+                Err(e) => last_err = Some(e),
+            },
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(anyhow!(
+        "could not determine local IP toward `{target}`: {}",
+        last_err
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "no usable socket".to_string())
+    ))
+}
+
+#[derive(Deserialize)]
+struct IpGeolocateArgs {
+    #[serde(default)]
+    ip: Option<String>,
+}
+
+/// Reject anything that isn't a bare IPv4/IPv6 literal *before* any network
+/// call. This keeps the query path (`http://ip-api.com/json/{ip}`) from being
+/// abused to reach an arbitrary host/path, and gives the offline test a pure
+/// seam to exercise. Empty string is treated as "look up my own IP".
+fn ip_geolocate_validate(ip: &str) -> Result<()> {
+    if ip.parse::<std::net::IpAddr>().is_ok() {
+        Ok(())
+    } else {
+        Err(anyhow!("not a valid IP address: {ip}"))
+    }
+}
+
+async fn ip_geolocate_tool(args: Value) -> Result<String> {
+    let IpGeolocateArgs { ip } = serde_json::from_value(args)?;
+
+    // Build the path segment: empty => ip-api geolocates the requester.
+    let ip = ip.unwrap_or_default();
+    let ip = ip.trim();
+    if !ip.is_empty() {
+        ip_geolocate_validate(ip)?;
+    }
+
+    let url = format!("http://ip-api.com/json/{ip}?fields=status,message,query,country,regionName,city,lat,lon,timezone,isp,org,as");
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()?;
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .with_context(|| format!("GET {url}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(anyhow!("ip-api.com -> HTTP {}", status.as_u16()));
+    }
+    let body: Value = resp
+        .json()
+        .await
+        .context("decoding ip-api.com JSON response")?;
+
+    // ip-api returns {"status":"fail","message":"...","query":"..."} on error.
+    if body.get("status").and_then(|s| s.as_str()) == Some("fail") {
+        let msg = body
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown error");
+        let q = body.get("query").and_then(|q| q.as_str()).unwrap_or(ip);
+        return Err(anyhow!("ip-api.com lookup failed for {q}: {msg}"));
+    }
+
+    let field = |k: &str| -> String {
+        body.get(k)
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("-")
+            .to_string()
+    };
+    let num = |k: &str| -> String {
+        match body.get(k) {
+            Some(v) if v.is_number() => v.to_string(),
+            _ => "-".to_string(),
+        }
+    };
+
+    Ok(format!(
+        "ip:       {}\ncountry:  {}\nregion:   {}\ncity:     {}\nlat/lon:  {}, {}\ntimezone: {}\nisp:      {}\norg:      {}\nas:       {}",
+        field("query"),
+        field("country"),
+        field("regionName"),
+        field("city"),
+        num("lat"),
+        num("lon"),
+        field("timezone"),
+        field("isp"),
+        field("org"),
+        field("as"),
+    ))
+}
+
+#[derive(Deserialize)]
+struct FollowRedirectsArgs {
+    url: String,
+    #[serde(default)]
+    max_hops: Option<u32>,
+    #[serde(default)]
+    timeout_secs: Option<u64>,
+}
+
+/// True if `status` is a redirect that carries a `Location` we should follow
+/// (301/302/303/307/308). Split out so the hop-classification seam can be
+/// unit-tested without a network round-trip.
+fn follow_redirects_is_redirect(status: u16) -> bool {
+    matches!(status, 301 | 302 | 303 | 307 | 308)
+}
+
+async fn follow_redirects_tool(args: Value) -> Result<String> {
+    let FollowRedirectsArgs {
+        url,
+        max_hops,
+        timeout_secs,
+    } = serde_json::from_value(args)?;
+
+    let timeout = timeout_secs.unwrap_or(10).clamp(1, 120);
+    let max_hops = max_hops.unwrap_or(10).clamp(1, 50);
+
+    // Disable reqwest's own redirect handling so we can record each hop.
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(timeout))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
+
+    let mut current = reqwest::Url::parse(&url).with_context(|| format!("invalid url: {url}"))?;
+    let mut chain = String::new();
+    let mut hops = 0u32;
+    let final_status;
+
+    loop {
+        let resp = client
+            .get(current.clone())
+            .send()
+            .await
+            .with_context(|| format!("GET {current}"))?;
+        let status = resp.status();
+        chain.push_str(&format!("{} {}\n", status.as_u16(), current));
+
+        if !follow_redirects_is_redirect(status.as_u16()) {
+            final_status = status.as_u16();
+            break;
+        }
+
+        let location = resp
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+        let location = match location {
+            Some(l) => l,
+            None => {
+                // Redirect status with no Location — treat as terminal.
+                final_status = status.as_u16();
+                break;
+            }
+        };
+
+        if hops >= max_hops {
+            chain.push_str(&format!("[stopped: exceeded max_hops={max_hops}]\n"));
+            return Ok(chain);
+        }
+        hops += 1;
+
+        // Resolve the (possibly relative) Location against the current URL.
+        current = current
+            .join(&location)
+            .with_context(|| format!("resolving Location {location:?} against {current}"))?;
+    }
+
+    Ok(format!(
+        "{chain}\nfinal: {final_status} {current}\nhops: {hops}"
+    ))
+}
+
+#[derive(Deserialize)]
+struct HttpFormPostArgs {
+    url: String,
+    fields: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    multipart: bool,
+    #[serde(default)]
+    files: Option<std::collections::BTreeMap<String, String>>,
+    #[serde(default)]
+    headers: Option<std::collections::HashMap<String, String>>,
+    #[serde(default)]
+    timeout_secs: Option<u64>,
+    #[serde(default)]
+    max_bytes: Option<usize>,
+}
+
+/// Encode a set of form fields as an `application/x-www-form-urlencoded` body.
+/// Reuses `url_percent_encode` in component mode (spaces -> %20, which servers
+/// accept). Split out so it can be unit-tested without a network round-trip.
+fn http_form_post_urlencode(fields: &std::collections::BTreeMap<String, String>) -> String {
+    fields
+        .iter()
+        .map(|(k, v)| {
+            format!(
+                "{}={}",
+                url_percent_encode(k.as_bytes(), true),
+                url_percent_encode(v.as_bytes(), true)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+/// Build a `multipart/form-data` body. `text_parts` are (name, value) field
+/// pairs; `file_parts` are (name, filename, bytes) uploads. The boundary must
+/// not occur in any part — the caller derives it from a content hash to
+/// guarantee that. Split out so body assembly is unit-testable offline.
+fn http_form_post_multipart_body(
+    boundary: &str,
+    text_parts: &[(String, String)],
+    file_parts: &[(String, String, Vec<u8>)],
+) -> Vec<u8> {
+    let mut body: Vec<u8> = Vec::new();
+    for (name, value) in text_parts {
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        body.extend_from_slice(
+            format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+        );
+        body.extend_from_slice(value.as_bytes());
+        body.extend_from_slice(b"\r\n");
+    }
+    for (name, filename, bytes) in file_parts {
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        body.extend_from_slice(
+            format!("Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n")
+                .as_bytes(),
+        );
+        body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    body
+}
+
+async fn http_form_post_tool(args: Value) -> Result<String> {
+    let HttpFormPostArgs {
+        url,
+        fields,
+        multipart,
+        files,
+        headers,
+        timeout_secs,
+        max_bytes,
+    } = serde_json::from_value(args)?;
+
+    let files = files.unwrap_or_default();
+    if !files.is_empty() && !multipart {
+        return Err(anyhow!("files can only be attached when multipart is true"));
+    }
+
+    let timeout = timeout_secs.unwrap_or(10).clamp(1, 120);
+    const HARD_CAP: usize = 8 * 1024 * 1024;
+    let cap = max_bytes.unwrap_or(1024 * 1024).clamp(1, HARD_CAP);
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(timeout))
+        .build()?;
+
+    let (body, content_type): (Vec<u8>, String) = if multipart {
+        // Read each file (before any network access, so a bad path fails fast
+        // and offline) and hash all content to derive a boundary guaranteed
+        // not to appear inside any part.
+        let text_parts: Vec<(String, String)> = fields.into_iter().collect();
+        let mut file_parts: Vec<(String, String, Vec<u8>)> = Vec::new();
+        for (field, path) in &files {
+            let bytes = tokio::fs::read(path)
+                .await
+                .with_context(|| format!("reading upload file {path}"))?;
+            let filename = std::path::Path::new(path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file")
+                .to_string();
+            file_parts.push((field.clone(), filename, bytes));
+        }
+
+        let mut hash_input: Vec<u8> = Vec::new();
+        for (n, v) in &text_parts {
+            hash_input.extend_from_slice(n.as_bytes());
+            hash_input.extend_from_slice(v.as_bytes());
+        }
+        for (n, f, b) in &file_parts {
+            hash_input.extend_from_slice(n.as_bytes());
+            hash_input.extend_from_slice(f.as_bytes());
+            hash_input.extend_from_slice(b);
+        }
+        let boundary = format!("----teleia{}", &sha256(&hash_input)[..32]);
+        let body = http_form_post_multipart_body(&boundary, &text_parts, &file_parts);
+        (body, format!("multipart/form-data; boundary={boundary}"))
+    } else {
+        (
+            http_form_post_urlencode(&fields).into_bytes(),
+            "application/x-www-form-urlencoded".to_string(),
+        )
+    };
+
+    let mut req = client
+        .post(url.as_str())
+        .header(reqwest::header::CONTENT_TYPE, &content_type);
+    // Caller headers are applied last so an explicit Content-Type wins.
+    if let Some(hs) = &headers {
+        for (k, v) in hs {
+            req = req.header(k, v);
+        }
+    }
+    req = req.body(body);
+
+    let mut resp = req.send().await.with_context(|| format!("POST {url}"))?;
+
+    let status = resp.status();
+    let mut header_block = String::new();
+    for (name, value) in resp.headers().iter() {
+        let v = value.to_str().unwrap_or("<non-utf8>");
+        header_block.push_str(&format!("{name}: {v}\n"));
+    }
+
+    let mut buf: Vec<u8> = Vec::new();
+    let mut truncated = false;
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .with_context(|| format!("reading body from {url}"))?
+    {
+        buf.extend_from_slice(&chunk);
+        if buf.len() > cap {
+            truncated = true;
+            break;
+        }
+    }
+    let slice = if truncated { &buf[..cap] } else { &buf[..] };
+    let body_text = String::from_utf8_lossy(slice);
+
+    let mut out = format!("HTTP {}\n{header_block}\n{body_text}", status.as_u16());
+    if truncated {
+        out.push_str(&format!("\n\n[truncated at {cap} bytes]"));
+    }
+    Ok(out)
+}
+
+#[derive(Deserialize)]
+struct MacLookupArgs {
+    mac: String,
+}
+
+/// Strip separators from a MAC address and return the first 6 hex digits (the
+/// OUI, uppercased). Errors if fewer than 6 hex digits are present or if a
+/// non-hex character is found.
+fn mac_lookup_normalize(mac: &str) -> Result<String> {
+    let mut hex = String::new();
+    for c in mac.chars() {
+        if matches!(c, ':' | '-' | '.' | ' ') {
+            continue;
+        }
+        if !c.is_ascii_hexdigit() {
+            return Err(anyhow!("invalid character '{c}' in MAC address"));
+        }
+        hex.push(c.to_ascii_uppercase());
+        if hex.len() == 6 {
+            break;
+        }
+    }
+    if hex.len() < 6 {
+        return Err(anyhow!(
+            "MAC address must contain at least 6 hex digits (an OUI), got {}",
+            hex.len()
+        ));
+    }
+    Ok(hex)
+}
+
+async fn mac_lookup_tool(args: Value) -> Result<String> {
+    let MacLookupArgs { mac } = serde_json::from_value(args)?;
+    let oui = mac_lookup_normalize(&mac)?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()?;
+    let url = format!("https://api.macvendors.com/{oui}");
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .with_context(|| format!("GET {url}"))?;
+    let status = resp.status();
+    if status.as_u16() == 404 {
+        return Ok(format!("{oui}: no vendor found for this OUI"));
+    }
+    let body = resp
+        .text()
+        .await
+        .with_context(|| format!("reading body from {url}"))?;
+    if !status.is_success() {
+        return Err(anyhow!(
+            "macvendors.com returned HTTP {}: {body}",
+            status.as_u16()
+        ));
+    }
+    Ok(format!("{oui}: {}", body.trim()))
+}
+
+async fn pid_tool(_args: Value) -> Result<String> {
+    Ok(std::process::id().to_string())
+}
+
+#[derive(Deserialize)]
+struct EnvRunArgs {
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    env: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    clear_env: bool,
+    #[serde(default)]
+    cwd: Option<String>,
+}
+
+async fn env_run_tool(args: Value) -> Result<String> {
+    let EnvRunArgs {
+        command,
+        args,
+        env,
+        clear_env,
+        cwd,
+    } = serde_json::from_value(args)?;
+    if command.is_empty() {
+        return Err(anyhow!("command must not be empty"));
+    }
+    let mut c = Command::new(&command);
+    c.args(&args);
+    // Child env only — never touches the parent via set_var, so this
+    // sidesteps the getenv/setenv-in-a-live-process unsoundness.
+    if clear_env {
+        c.env_clear();
+    }
+    c.envs(&env);
+    if let Some(dir) = &cwd {
+        c.current_dir(dir);
+    }
+    c.stdin(Stdio::null());
+    c.stdout(Stdio::piped());
+    c.stderr(Stdio::piped());
+    let out = c
+        .output()
+        .await
+        .with_context(|| format!("running `{command}`"))?;
+    let mut body = String::from_utf8_lossy(&out.stdout).into_owned();
+    let err = String::from_utf8_lossy(&out.stderr);
+    if !err.is_empty() {
+        if !body.is_empty() {
+            body.push('\n');
+        }
+        body.push_str(&err);
+    }
+    if !out.status.success() {
+        body.push_str(&format!("\n[exit {}]", out.status.code().unwrap_or(-1)));
+    }
+    if body.trim().is_empty() {
+        body = "(no output)".to_string();
+    }
+    Ok(body)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum GitBranchAction {
+    List,
+    Create,
+    Switch,
+    Delete,
+}
+
+#[derive(Deserialize)]
+struct GitBranchArgs {
+    action: GitBranchAction,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    force: bool,
+}
+
+async fn git_branch_tool(args: Value) -> Result<String> {
+    let GitBranchArgs {
+        action,
+        name,
+        force,
+    } = serde_json::from_value(args)?;
+    match action {
+        GitBranchAction::List => run_command("git", &["branch", "--all"]).await,
+        GitBranchAction::Create => {
+            let n = name
+                .as_deref()
+                .ok_or_else(|| anyhow!("git_branch create requires `name`"))?;
+            if n.starts_with('-') {
+                return Err(anyhow!("invalid branch name"));
+            }
+            run_command("git", &["branch", n]).await
+        }
+        GitBranchAction::Switch => {
+            let n = name
+                .as_deref()
+                .ok_or_else(|| anyhow!("git_branch switch requires `name`"))?;
+            if n.starts_with('-') {
+                return Err(anyhow!("invalid branch name"));
+            }
+            run_command("git", &["switch", n]).await
+        }
+        GitBranchAction::Delete => {
+            let n = name
+                .as_deref()
+                .ok_or_else(|| anyhow!("git_branch delete requires `name`"))?;
+            if n.starts_with('-') {
+                return Err(anyhow!("invalid branch name"));
+            }
+            let flag = if force { "-D" } else { "-d" };
+            run_command("git", &["branch", flag, n]).await
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct GitStashArgs {
+    action: GitStashAction,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    index: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum GitStashAction {
+    Push,
+    Pop,
+    List,
+    Drop,
+    Show,
+}
+
+async fn git_stash_tool(args: Value) -> Result<String> {
+    let GitStashArgs {
+        action,
+        message,
+        index,
+    } = serde_json::from_value(args)?;
+    match action {
+        GitStashAction::Push => {
+            let mut argv: Vec<&str> = vec!["stash", "push"];
+            if let Some(m) = message.as_deref() {
+                argv.push("-m");
+                argv.push(m);
+            }
+            run_command("git", &argv).await
+        }
+        GitStashAction::Pop => run_command("git", &["stash", "pop"]).await,
+        GitStashAction::List => run_command("git", &["stash", "list"]).await,
+        GitStashAction::Drop => {
+            let target = format!("stash@{{{}}}", index.unwrap_or(0));
+            run_command("git", &["stash", "drop", &target]).await
+        }
+        GitStashAction::Show => {
+            let target = format!("stash@{{{}}}", index.unwrap_or(0));
+            run_command("git", &["stash", "show", "-p", &target]).await
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct GitRemoteArgs {
+    #[serde(default)]
+    verbose: bool,
+}
+
+/// Parse the output of `git remote -v` into deduplicated `name\turl (kind)` lines,
+/// preserving first-seen order. Each input line looks like:
+/// `origin\thttps://example.com/x.git (fetch)`.
+fn git_remote_parse(raw: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim_end();
+        if line.is_empty() {
+            continue;
+        }
+        // Split "name<TAB or spaces>url (kind)".
+        let mut parts = line.split_whitespace();
+        let name = match parts.next() {
+            Some(n) => n,
+            None => continue,
+        };
+        let url = parts.next().unwrap_or("");
+        let kind = parts.next().unwrap_or("");
+        let entry = if kind.is_empty() {
+            format!("{name}\t{url}")
+        } else {
+            format!("{name}\t{url} {kind}")
+        };
+        if !out.contains(&entry) {
+            out.push(entry);
+        }
+    }
+    out
+}
+
+async fn git_remote_tool(args: Value) -> Result<String> {
+    let GitRemoteArgs { verbose } = serde_json::from_value(args)?;
+    if verbose {
+        let raw = run_command("git", &["remote", "-v"]).await?;
+        if raw.trim() == "(no output)" || raw.trim().is_empty() {
+            return Ok("(no remotes configured)".to_string());
+        }
+        let lines = git_remote_parse(&raw);
+        if lines.is_empty() {
+            return Ok(raw);
+        }
+        Ok(lines.join("\n"))
+    } else {
+        let raw = run_command("git", &["remote"]).await?;
+        if raw.trim().is_empty() {
+            return Ok("(no remotes configured)".to_string());
+        }
+        Ok(raw)
+    }
+}
+
+#[derive(Deserialize)]
+struct GitCheckoutFileArgs {
+    paths: Vec<String>,
+    #[serde(default, rename = "ref")]
+    reference: Option<String>,
+}
+
+async fn git_checkout_file_tool(args: Value) -> Result<String> {
+    let GitCheckoutFileArgs { paths, reference } = serde_json::from_value(args)?;
+    if paths.is_empty() {
+        return Err(anyhow!("git_checkout_file requires at least one path"));
+    }
+    let mut argv: Vec<&str> = vec!["checkout"];
+    if let Some(r) = reference.as_deref() {
+        if r.starts_with('-') {
+            return Err(anyhow!("invalid ref"));
+        }
+        argv.push(r);
+    }
+    argv.push("--");
+    argv.extend(paths.iter().map(String::as_str));
+    run_command("git", &argv).await
+}
+
+#[derive(Deserialize)]
+struct RunScriptArgs {
+    name: String,
+    #[serde(default)]
+    args: Vec<String>,
+}
+
+/// Return true if `content` (a package.json body) defines a `scripts` entry
+/// named `name`.
+fn run_script_npm_has(content: &str, name: &str) -> bool {
+    let parsed: Value = match serde_json::from_str(content) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    parsed
+        .get("scripts")
+        .and_then(|s| s.as_object())
+        .map(|m| m.contains_key(name))
+        .unwrap_or(false)
+}
+
+/// Return true if `content` (a Makefile body) defines a target named `name`.
+/// Matches a line beginning with `name` followed by a colon, ignoring leading
+/// whitespace, and skips `.PHONY`-style special targets by matching the exact
+/// name token.
+fn run_script_make_has(content: &str, name: &str) -> bool {
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        // Skip comments and recipe lines (recipes are tab-indented).
+        if trimmed.starts_with('#') || line.starts_with('\t') {
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix(name) {
+            // The target name must be followed immediately by ':' (optionally
+            // with intervening whitespace before the colon).
+            let after = rest.trim_start();
+            if after.starts_with(':') && !name.is_empty() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+async fn run_script_tool(args: Value) -> Result<String> {
+    let RunScriptArgs { name, args } = serde_json::from_value(args)?;
+    let cwd = std::env::current_dir().context("determining current directory")?;
+
+    let package_json = cwd.join("package.json");
+    let makefile = if cwd.join("Makefile").is_file() {
+        Some(cwd.join("Makefile"))
+    } else if cwd.join("makefile").is_file() {
+        Some(cwd.join("makefile"))
+    } else {
+        None
+    };
+
+    if package_json.is_file() {
+        let content = std::fs::read_to_string(&package_json)
+            .with_context(|| format!("reading {}", package_json.display()))?;
+        if !run_script_npm_has(&content, &name) {
+            return Err(anyhow!("no npm script named `{name}` in package.json"));
+        }
+        let mut cmd_args: Vec<&str> = vec!["run", &name];
+        // npm requires `--` before passthrough args.
+        if !args.is_empty() {
+            cmd_args.push("--");
+        }
+        for a in &args {
+            cmd_args.push(a);
+        }
+        return run_command("npm", &cmd_args).await;
+    }
+
+    if let Some(makefile) = makefile {
+        let content = std::fs::read_to_string(&makefile)
+            .with_context(|| format!("reading {}", makefile.display()))?;
+        if !run_script_make_has(&content, &name) {
+            return Err(anyhow!("no Makefile target named `{name}`"));
+        }
+        let mut cmd_args: Vec<&str> = vec![&name];
+        for a in &args {
+            cmd_args.push(a);
+        }
+        return run_command("make", &cmd_args).await;
+    }
+
+    Err(anyhow!(
+        "no runner detected: expected package.json or Makefile in the current directory"
+    ))
+}
+
+#[derive(Deserialize)]
+struct ListScriptsArgs {
+    path: Option<String>,
+}
+
+async fn list_scripts_tool(args: Value) -> Result<String> {
+    let ListScriptsArgs { path } = serde_json::from_value(args)?;
+    let root = PathBuf::from(path.unwrap_or_else(|| ".".to_string()));
+    if !root.is_dir() {
+        return Err(anyhow!("not a directory: {}", root.display()));
+    }
+
+    let mut groups: Vec<String> = Vec::new();
+
+    // package.json /scripts
+    let pkg = root.join("package.json");
+    if let Ok(text) = std::fs::read_to_string(&pkg) {
+        if let Ok(v) = serde_json::from_str::<Value>(&text) {
+            if let Some(obj) = v.get("scripts").and_then(|s| s.as_object()) {
+                let mut lines: Vec<String> = obj
+                    .iter()
+                    .map(|(k, val)| format!("  {k}: {}", val.as_str().unwrap_or("")))
+                    .collect();
+                lines.sort();
+                if !lines.is_empty() {
+                    groups.push(format!("package.json scripts:\n{}", lines.join("\n")));
+                }
+            }
+        }
+    }
+
+    // Makefile targets
+    let mk_re = regex::Regex::new(r"(?m)^([A-Za-z0-9_][A-Za-z0-9_.-]*):").unwrap();
+    for name in ["Makefile", "makefile", "GNUmakefile"] {
+        let mk = root.join(name);
+        if let Ok(text) = std::fs::read_to_string(&mk) {
+            let re = &mk_re;
+            let mut targets: Vec<String> = Vec::new();
+            for cap in re.captures_iter(&text) {
+                let t = cap[1].to_string();
+                if !targets.contains(&t) {
+                    targets.push(t);
+                }
+            }
+            targets.sort();
+            if !targets.is_empty() {
+                groups.push(format!(
+                    "{name} targets:\n{}",
+                    targets
+                        .iter()
+                        .map(|t| format!("  {t}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                ));
+            }
+            break;
+        }
+    }
+
+    // Cargo binaries: [[bin]] name = "..." + src/bin/*.rs
+    let cargo = root.join("Cargo.toml");
+    let mut bins: Vec<String> = Vec::new();
+    if let Ok(text) = std::fs::read_to_string(&cargo) {
+        // Extract `name = "..."` entries that appear under a [[bin]] table.
+        let mut in_bin = false;
+        let name_re = regex::Regex::new(r#"^\s*name\s*=\s*"([^"]+)""#).unwrap();
+        for line in text.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with('[') {
+                in_bin = trimmed.starts_with("[[bin]]");
+                continue;
+            }
+            if in_bin {
+                if let Some(cap) = name_re.captures(line) {
+                    let n = cap[1].to_string();
+                    if !bins.contains(&n) {
+                        bins.push(n);
+                    }
+                    in_bin = false;
+                }
+            }
+        }
+    }
+    let bin_dir = root.join("src").join("bin");
+    if let Ok(rd) = std::fs::read_dir(&bin_dir) {
+        for entry in rd.filter_map(|r| r.ok()) {
+            let p = entry.path();
+            if p.extension().and_then(|e| e.to_str()) == Some("rs") {
+                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                    let n = stem.to_string();
+                    if !bins.contains(&n) {
+                        bins.push(n);
+                    }
+                }
+            }
+        }
+    }
+    bins.sort();
+    if !bins.is_empty() {
+        groups.push(format!(
+            "Cargo binaries:\n{}",
+            bins.iter()
+                .map(|b| format!("  {b}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+
+    if groups.is_empty() {
+        Ok(format!("{}: no runnable entrypoints found", root.display()))
+    } else {
+        Ok(groups.join("\n\n"))
+    }
+}
+
+#[derive(Deserialize)]
+struct CoverageArgs {
+    #[serde(default)]
+    path: Option<String>,
+}
+
+async fn coverage_tool(args: Value) -> Result<String> {
+    let CoverageArgs { path } = serde_json::from_value(args)?;
+    // No path (or a path without a language extension) defaults to the Rust
+    // workspace, matching `test`/`typecheck` whose runners are workspace-wide.
+    let ext = path.as_deref().and_then(ext_of);
+    match ext.as_deref() {
+        None | Some("rs") => {
+            // cargo llvm-cov is workspace-wide; the path is informational.
+            // Fall back to tarpaulin if llvm-cov isn't on PATH.
+            match run_command("cargo", &["llvm-cov"]).await {
+                Ok(o) => Ok(o),
+                Err(_) => run_command("cargo", &["tarpaulin"]).await,
+            }
+        }
+        Some("py") => {
+            let target = path.as_deref().unwrap_or(".");
+            run_command("pytest", &["--cov", target]).await
+        }
+        Some("go") => run_command("go", &["test", "-cover", "./..."]).await,
+        Some("js") | Some("jsx") | Some("ts") | Some("tsx") => {
+            run_command("npx", &["jest", "--coverage"]).await
+        }
+        Some(other) => Err(anyhow!("no coverage tool known for .{other} files")),
+    }
+}
+
+#[derive(Deserialize)]
+struct BenchArgs {
+    path: String,
+    #[serde(default)]
+    filter: Option<String>,
+}
+
+async fn bench_tool(args: Value) -> Result<String> {
+    let BenchArgs { path, filter } = serde_json::from_value(args)?;
+    let ext = ext_of(&path);
+    let mut argv =
+        bench_argv(ext.as_deref(), filter.as_deref()).ok_or_else(|| match ext.as_deref() {
+            Some(other) => anyhow!("no benchmark runner known for .{other} files"),
+            None => anyhow!("no extension on {path} — can't pick a benchmark runner"),
+        })?;
+    let cmd = argv.remove(0);
+    let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    run_command(&cmd, &refs).await
+}
+
+// Build the argv for `bench`, `None` when the extension has no known runner.
+// The leading element is the program; the rest are its arguments.
+fn bench_argv(ext: Option<&str>, filter: Option<&str>) -> Option<Vec<String>> {
+    let mut argv: Vec<String> = match ext {
+        // cargo bench operates on the whole workspace; the path is
+        // informational only here, matching `test`.
+        Some("rs") => vec!["cargo".into(), "bench".into()],
+        Some("go") => vec![
+            "go".into(),
+            "test".into(),
+            "-bench=.".into(),
+            "./...".into(),
+        ],
+        Some("py") => vec!["pytest".into(), "--benchmark-only".into()],
+        Some("js") | Some("jsx") | Some("ts") | Some("tsx") => {
+            vec!["npm".into(), "run".into(), "bench".into()]
+        }
+        _ => return None,
+    };
+    if let Some(f) = filter {
+        match ext {
+            Some("rs") => argv.push(f.to_string()),
+            Some("go") => {
+                // Replace the default -bench=. with the requested filter.
+                if let Some(slot) = argv.iter_mut().find(|a| a.starts_with("-bench=")) {
+                    *slot = format!("-bench={f}");
+                }
+            }
+            Some("py") => {
+                argv.push("-k".into());
+                argv.push(f.to_string());
+            }
+            // npm needs `--` to forward args to the underlying script.
+            _ => {
+                argv.push("--".into());
+                argv.push(f.to_string());
+            }
+        }
+    }
+    Some(argv)
+}
+
+#[derive(Deserialize)]
+struct BuildArgs {
+    path: String,
+    #[serde(default)]
+    release: bool,
+}
+
+async fn build_tool(args: Value) -> Result<String> {
+    let BuildArgs { path, release } = serde_json::from_value(args)?;
+    let ext = ext_of(&path);
+    match ext.as_deref() {
+        // cargo build operates on the whole workspace; the path is
+        // informational only here, matching `typecheck`.
+        Some("rs") => {
+            let mut cargo_args = vec!["build", "--all-targets"];
+            if release {
+                cargo_args.push("--release");
+            }
+            run_command("cargo", &cargo_args).await
+        }
+        Some("go") => run_command("go", &["build", "./..."]).await,
+        Some("ts") | Some("tsx") => run_command("tsc", &[&path]).await,
+        Some("js") | Some("jsx") => run_command("npm", &["run", "build"]).await,
+        Some("py") => run_command("python", &["-m", "build"]).await,
+        Some(other) => Err(anyhow!("no builder known for .{other} files")),
+        None => Err(anyhow!("no extension on {path} — can't pick a builder")),
+    }
+}
+
+#[derive(Deserialize)]
+struct CargoExpandArgs {
+    #[serde(default)]
+    item: Option<String>,
+    #[serde(default)]
+    tests: Option<bool>,
+}
+
+fn cargo_expand_argv(item: Option<&str>, tests: bool) -> Vec<String> {
+    let mut argv: Vec<String> = vec!["expand".into()];
+    if tests {
+        argv.push("--tests".into());
+    }
+    if let Some(i) = item {
+        argv.push(i.to_string());
+    }
+    argv
+}
+
+async fn cargo_expand_tool(args: Value) -> Result<String> {
+    let CargoExpandArgs { item, tests } = serde_json::from_value(args)?;
+    let argv = cargo_expand_argv(item.as_deref(), tests.unwrap_or(false));
+    let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    // `cargo expand` is the cargo-expand plugin (needs a nightly toolchain). If
+    // it isn't installed, cargo prints "no such command: `expand`" and exits
+    // non-zero; run_command surfaces that verbatim as an honest error/output.
+    run_command("cargo", &refs).await
+}
+
+#[derive(Deserialize)]
+struct ClippyFixArgs {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default = "default_true")]
+    allow_dirty: bool,
+}
+
+async fn clippy_fix_tool(args: Value) -> Result<String> {
+    let ClippyFixArgs { path, allow_dirty } = serde_json::from_value(args)?;
+    // No path → default to Rust; cargo operates on the whole workspace, so the
+    // path is informational only for .rs (matching `lint`/`typecheck`).
+    let ext = path.as_deref().and_then(ext_of);
+    match ext.as_deref() {
+        Some("rs") | None => {
+            let mut argv: Vec<&str> = vec!["clippy", "--fix", "--allow-staged"];
+            if allow_dirty {
+                argv.push("--allow-dirty");
+            }
+            run_command("cargo", &argv).await
+        }
+        Some("py") => {
+            let p = path.as_deref().unwrap();
+            run_command("ruff", &["check", "--fix", p]).await
+        }
+        Some("js") | Some("jsx") | Some("ts") | Some("tsx") => {
+            let p = path.as_deref().unwrap();
+            run_command("eslint", &["--fix", p]).await
+        }
+        Some("go") => {
+            let p = path.as_deref().unwrap();
+            let fmt = run_command("gofmt", &["-w", p]).await?;
+            let vet = run_command("go", &["vet", p]).await?;
+            Ok(format!("{fmt}\n{vet}"))
+        }
+        Some(other) => Err(anyhow!("no auto-fixer known for .{other} files")),
+    }
+}
+
+#[derive(Deserialize)]
+struct RunBinArgs {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    dir: Option<String>,
+}
+
+/// List Cargo bin-target names for a project directory: names from `[[bin]]`
+/// tables in Cargo.toml plus the file stems of `src/bin/*.rs`. Best-effort and
+/// deliberately shallow — enough to validate/list a requested `--bin` name.
+fn run_bin_cargo_targets(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    if let Ok(manifest) = std::fs::read_to_string(dir.join("Cargo.toml")) {
+        // Minimal scan: inside a `[[bin]]` section, grab the first `name = "..."`.
+        let mut in_bin = false;
+        for line in manifest.lines() {
+            let t = line.trim();
+            if t.starts_with('[') {
+                in_bin = t == "[[bin]]";
+                continue;
+            }
+            if in_bin {
+                if let Some(rest) = t.strip_prefix("name") {
+                    let rest = rest.trim_start();
+                    if let Some(v) = rest.strip_prefix('=') {
+                        let v = v.trim().trim_matches('"');
+                        if !v.is_empty() {
+                            names.push(v.to_string());
+                        }
+                        in_bin = false;
+                    }
+                }
+            }
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(dir.join("src").join("bin")) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.extension().and_then(|s| s.to_str()) == Some("rs") {
+                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                    names.push(stem.to_string());
+                }
+            }
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Decide the runner and argument vector for `run_bin`, given the project
+/// directory and the passthrough inputs. Pure (only reads the filesystem to
+/// detect the entrypoint) so the detection logic is unit-testable offline.
+fn run_bin_argv(
+    dir: &std::path::Path,
+    name: Option<&str>,
+    args: &[String],
+) -> Result<(&'static str, Vec<String>)> {
+    if dir.join("Cargo.toml").exists() {
+        let mut argv: Vec<String> = vec!["run".into()];
+        if let Some(n) = name {
+            let targets = run_bin_cargo_targets(dir);
+            if !targets.is_empty() && !targets.iter().any(|t| t == n) {
+                return Err(anyhow!(
+                    "no bin target `{n}`; available: {}",
+                    targets.join(", ")
+                ));
+            }
+            argv.push("--bin".into());
+            argv.push(n.to_string());
+        }
+        argv.push("--".into());
+        argv.extend(args.iter().cloned());
+        return Ok(("cargo", argv));
+    }
+    if dir.join("go.mod").exists() {
+        let mut argv: Vec<String> = vec!["run".into(), ".".into()];
+        argv.extend(args.iter().cloned());
+        return Ok(("go", argv));
+    }
+    let pkg_path = dir.join("package.json");
+    if pkg_path.exists() {
+        let text = std::fs::read_to_string(&pkg_path)
+            .with_context(|| format!("read {}", pkg_path.display()))?;
+        let pkg: Value = serde_json::from_str(&text).with_context(|| "parse package.json")?;
+        let main = pkg
+            .get("main")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("package.json has no `main` entrypoint to run"))?;
+        let mut argv: Vec<String> = vec![main.to_string()];
+        argv.extend(args.iter().cloned());
+        return Ok(("node", argv));
+    }
+    Err(anyhow!(
+        "no runnable entrypoint in {}: expected Cargo.toml, go.mod, or package.json",
+        dir.display()
+    ))
+}
+
+async fn run_bin_tool(args: Value) -> Result<String> {
+    let RunBinArgs { name, args, dir } = serde_json::from_value(args)?;
+    let dir = dir.map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+    let (runner, argv) = run_bin_argv(&dir, name.as_deref(), &args)?;
+    let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    // NOTE: on Windows `Command::new("go")`/`Command::new("node")` resolve the
+    // real executables fine, but the project must have the toolchain on PATH;
+    // a missing toolchain surfaces as a spawn error from run_command.
+    run_command(runner, &refs).await
+}
+
+#[derive(Deserialize)]
+struct ChangelogGenArgs {
+    from: Option<String>,
+    to: Option<String>,
+}
+
+async fn changelog_gen_tool(args: Value) -> Result<String> {
+    let ChangelogGenArgs { from, to } = serde_json::from_value(args)?;
+    let to = to.unwrap_or_else(|| "HEAD".to_string());
+    if to.starts_with('-') {
+        return Err(anyhow!("invalid `to` ref"));
+    }
+    let range = match from.as_deref() {
+        Some(f) => {
+            if f.starts_with('-') {
+                return Err(anyhow!("invalid `from` ref"));
+            }
+            format!("{f}..{to}")
+        }
+        None => to.clone(),
+    };
+    let raw = run_command(
+        "git",
+        &["log", "--no-merges", "--pretty=format:%s (%h)", &range],
+    )
+    .await?;
+    Ok(changelog_gen_group(&raw))
+}
+
+// Group `git log` subject lines by their Conventional-Commit prefix into
+// Markdown sections. Pure formatting so it is unit-testable offline.
+fn changelog_gen_group(log: &str) -> String {
+    // (prefix, heading) in output order; anything unmatched falls under "Other".
+    let sections: [(&str, &str); 8] = [
+        ("feat", "Features"),
+        ("fix", "Bug Fixes"),
+        ("perf", "Performance"),
+        ("refactor", "Refactoring"),
+        ("docs", "Documentation"),
+        ("test", "Tests"),
+        ("build", "Build"),
+        ("ci", "CI"),
+    ];
+    let mut buckets: Vec<Vec<String>> = vec![Vec::new(); sections.len()];
+    let mut other: Vec<String> = Vec::new();
+
+    for line in log.lines() {
+        let line = line.trim();
+        if line.is_empty() || line == "(no output)" {
+            continue;
+        }
+        // Split off a leading `type` or `type(scope)` before an optional `!` and `:`.
+        let head = line.split(':').next().unwrap_or("");
+        let kind = head.split('(').next().unwrap_or("").trim_end_matches('!');
+        match sections.iter().position(|(p, _)| *p == kind) {
+            Some(idx) if head.len() < line.len() => {
+                // strip the `prefix:` and re-attach the description
+                let desc = line[head.len() + 1..].trim();
+                buckets[idx].push(desc.to_string());
+            }
+            _ => other.push(line.to_string()),
+        }
+    }
+
+    let mut out = String::from("# Changelog\n");
+    for (idx, (_, heading)) in sections.iter().enumerate() {
+        if buckets[idx].is_empty() {
+            continue;
+        }
+        out.push_str(&format!("\n## {heading}\n\n"));
+        for item in &buckets[idx] {
+            out.push_str(&format!("- {item}\n"));
+        }
+    }
+    if !other.is_empty() {
+        out.push_str("\n## Other\n\n");
+        for item in &other {
+            out.push_str(&format!("- {item}\n"));
+        }
+    }
+    if out == "# Changelog\n" {
+        out.push_str("\n(no commits)\n");
+    }
+    out
+}
+
+#[derive(Deserialize)]
+struct GitGrepArgs {
+    pattern: String,
+    #[serde(default)]
+    r#ref: Option<String>,
+    #[serde(default)]
+    paths: Vec<String>,
+}
+
+async fn git_grep_tool(args: Value) -> Result<String> {
+    let GitGrepArgs {
+        pattern,
+        r#ref,
+        paths,
+    } = serde_json::from_value(args)?;
+    if pattern.is_empty() {
+        return Err(anyhow!("git_grep requires a non-empty `pattern`"));
+    }
+    // `-e <pattern>` keeps a leading-dash pattern from being read as a flag.
+    let mut argv: Vec<&str> = vec!["grep", "-n", "-e", &pattern];
+    if let Some(r) = r#ref.as_deref() {
+        if r.starts_with('-') {
+            return Err(anyhow!("invalid ref"));
+        }
+        argv.push(r);
+    }
+    for p in &paths {
+        if p.starts_with('-') {
+            return Err(anyhow!("invalid path `{p}`"));
+        }
+    }
+    if !paths.is_empty() {
+        argv.push("--");
+        argv.extend(paths.iter().map(String::as_str));
+    }
+    run_command("git", &argv).await
+}
+
+#[derive(Deserialize)]
+struct GitLogFileArgs {
+    path: String,
+    #[serde(default = "default_true")]
+    follow: bool,
+    #[serde(default)]
+    limit: Option<u64>,
+}
+
+async fn git_log_file_tool(args: Value) -> Result<String> {
+    let GitLogFileArgs {
+        path,
+        follow,
+        limit,
+    } = serde_json::from_value(args)?;
+    if path.starts_with('-') {
+        return Err(anyhow!("invalid path"));
+    }
+    let mut argv: Vec<&str> = vec!["log", "--pretty=format:%h %ad %an %s", "--date=short"];
+    if follow {
+        argv.push("--follow");
+    }
+    let limit_str;
+    if let Some(n) = limit {
+        limit_str = n.to_string();
+        argv.push("-n");
+        argv.push(&limit_str);
+    }
+    argv.push("--");
+    argv.push(&path);
+    run_command("git", &argv).await
+}
+
+#[derive(Deserialize)]
+struct CargoAddArgs {
+    #[serde(rename = "crate")]
+    krate: String,
+    #[serde(default)]
+    features: Option<Vec<String>>,
+    #[serde(default)]
+    dev: bool,
+    #[serde(default)]
+    manifest_path: Option<String>,
+}
+
+async fn cargo_add_tool(args: Value) -> Result<String> {
+    let CargoAddArgs {
+        krate,
+        features,
+        dev,
+        manifest_path,
+    } = serde_json::from_value(args)?;
+    let mut argv: Vec<String> = vec!["add".into(), krate];
+    if dev {
+        argv.push("--dev".into());
+    }
+    if let Some(feats) = features {
+        if !feats.is_empty() {
+            argv.push("--features".into());
+            argv.push(feats.join(","));
+        }
+    }
+    if let Some(p) = manifest_path {
+        argv.push("--manifest-path".into());
+        argv.push(p);
+    }
+    let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    run_command("cargo", &refs).await
+}
+
+#[derive(Deserialize)]
+struct CargoSearchArgs {
+    query: String,
+    limit: Option<u32>,
+}
+
+async fn cargo_search_tool(args: Value) -> Result<String> {
+    let CargoSearchArgs { query, limit } = serde_json::from_value(args)?;
+    let query = query.trim();
+    if query.is_empty() {
+        return Err(anyhow!("query must not be empty"));
+    }
+    let limit = limit.unwrap_or(10).clamp(1, 100);
+    let limit_str = limit.to_string();
+    run_command("cargo", &["search", query, "--limit", &limit_str]).await
+}
+
+#[derive(Deserialize)]
+struct MakeTargetArgs {
+    target: String,
+    #[serde(default)]
+    dir: Option<String>,
+}
+
+async fn make_target_tool(args: Value) -> Result<String> {
+    let MakeTargetArgs { target, dir } = serde_json::from_value(args)?;
+    if let Some(d) = &dir {
+        let meta = std::fs::metadata(d).with_context(|| format!("stat dir {d}"))?;
+        if !meta.is_dir() {
+            return Err(anyhow!("not a directory: {d}"));
+        }
+    }
+    make_target_run(&target, dir.as_deref()).await
+}
+
+#[cfg(unix)]
+async fn make_target_run(target: &str, dir: Option<&str>) -> Result<String> {
+    let mut c = Command::new("make");
+    c.arg(target);
+    if let Some(d) = dir {
+        c.current_dir(d);
+    }
+    c.stdin(Stdio::null());
+    c.stdout(Stdio::piped());
+    c.stderr(Stdio::piped());
+    let out = c.output().await.with_context(|| "running `make`")?;
+    let mut body = String::from_utf8_lossy(&out.stdout).into_owned();
+    let err = String::from_utf8_lossy(&out.stderr);
+    if !err.is_empty() {
+        if !body.is_empty() {
+            body.push('\n');
+        }
+        body.push_str(&err);
+    }
+    if !out.status.success() {
+        body.push_str(&format!("\n[exit {}]", out.status.code().unwrap_or(-1)));
+    }
+    if body.trim().is_empty() {
+        body = "(no output)".to_string();
+    }
+    Ok(body)
+}
+
+#[cfg(windows)]
+async fn make_target_run(_target: &str, _dir: Option<&str>) -> Result<String> {
+    // `make` is not part of a standard Windows toolchain and there is no
+    // faithful substitute, so report honestly rather than pretending to run.
+    Err(anyhow!("make is not available on this platform (Windows)"))
+}
+
+#[derive(Deserialize)]
+struct GitApplyArgs {
+    patch: String,
+    #[serde(default)]
+    check: bool,
+    #[serde(default)]
+    three_way: bool,
+    #[serde(default)]
+    reverse: bool,
+}
+
+async fn git_apply_tool(args: Value) -> Result<String> {
+    use tokio::io::AsyncWriteExt;
+    let GitApplyArgs {
+        patch,
+        check,
+        three_way,
+        reverse,
+    } = serde_json::from_value(args)?;
+    let mut cmd = Command::new("git");
+    cmd.arg("apply");
+    if check {
+        cmd.arg("--check");
+    }
+    if three_way {
+        cmd.arg("--3way");
+    }
+    if reverse {
+        cmd.arg("-R");
+    }
+    // `-` makes git read the patch from stdin.
+    cmd.arg("-");
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| "spawning git apply")?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(patch.as_bytes()).await?;
+        stdin.flush().await?;
+    }
+    drop(child.stdin.take());
+    let out = child.wait_with_output().await?;
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let err = String::from_utf8_lossy(&out.stderr);
+    if !err.is_empty() {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&err);
+    }
+    if !out.status.success() {
+        text.push_str(&format!("\n[exit {}]", out.status.code().unwrap_or(-1)));
+    }
+    Ok(text)
+}
+
+#[derive(Deserialize)]
+enum GitResetMode {
+    #[serde(rename = "soft")]
+    Soft,
+    #[serde(rename = "mixed")]
+    Mixed,
+    #[serde(rename = "hard")]
+    Hard,
+}
+
+#[derive(Deserialize)]
+struct GitResetArgs {
+    #[serde(default)]
+    mode: Option<GitResetMode>,
+    #[serde(default, rename = "ref")]
+    reference: Option<String>,
+    #[serde(default)]
+    paths: Vec<String>,
+}
+
+async fn git_reset_tool(args: Value) -> Result<String> {
+    let GitResetArgs {
+        mode,
+        reference,
+        paths,
+    } = serde_json::from_value(args)?;
+
+    // git reset forbids --soft/--hard together with pathspecs.
+    if !paths.is_empty() && matches!(mode, Some(GitResetMode::Soft) | Some(GitResetMode::Hard)) {
+        return Err(anyhow!(
+            "git reset: `paths` cannot be combined with soft/hard mode"
+        ));
+    }
+
+    let mut argv: Vec<&str> = vec!["reset"];
+    match mode {
+        Some(GitResetMode::Soft) => argv.push("--soft"),
+        Some(GitResetMode::Hard) => argv.push("--hard"),
+        Some(GitResetMode::Mixed) | None => {}
+    }
+    if let Some(r) = reference.as_deref() {
+        if r.starts_with('-') {
+            return Err(anyhow!("invalid ref"));
+        }
+        argv.push(r);
+    }
+    if !paths.is_empty() {
+        for p in &paths {
+            if p.starts_with('-') {
+                return Err(anyhow!("invalid path: {p}"));
+            }
+        }
+        argv.push("--");
+        argv.extend(paths.iter().map(String::as_str));
+    }
+    run_command("git", &argv).await
+}
+
+#[derive(Deserialize)]
+struct NpmInstallArgs {
+    #[serde(default)]
+    packages: Vec<String>,
+    #[serde(default)]
+    dev: bool,
+    #[serde(default)]
+    dir: Option<String>,
+    #[serde(default)]
+    manager: Option<String>,
+}
+
+/// Pick the package manager for `npm_install`. An explicit `manager` (other
+/// than "auto") wins; otherwise detect from lockfiles present in `dir`,
+/// falling back to npm. Split out so detection is unit-testable offline.
+fn npm_install_manager(dir: &std::path::Path, manager: Option<&str>) -> Result<&'static str> {
+    match manager {
+        Some("npm") => Ok("npm"),
+        Some("pnpm") => Ok("pnpm"),
+        Some("yarn") => Ok("yarn"),
+        Some("auto") | None => {
+            if dir.join("pnpm-lock.yaml").exists() {
+                Ok("pnpm")
+            } else if dir.join("yarn.lock").exists() {
+                Ok("yarn")
+            } else {
+                Ok("npm")
+            }
+        }
+        Some(other) => Err(anyhow!("unknown manager `{other}`")),
+    }
+}
+
+/// Build the argv for a package manager install. `add`/`install` and the
+/// dev flag differ per manager. Split out so it can be unit-tested offline.
+fn npm_install_argv(manager: &str, packages: &[String], dev: bool) -> Vec<String> {
+    let mut argv: Vec<String> = Vec::new();
+    if packages.is_empty() {
+        // Install everything from package.json.
+        argv.push("install".into());
+    } else {
+        match manager {
+            "yarn" => argv.push("add".into()),
+            "pnpm" => argv.push("add".into()),
+            _ => argv.push("install".into()),
+        }
+        if dev {
+            match manager {
+                "yarn" | "pnpm" => argv.push("--dev".into()),
+                _ => argv.push("--save-dev".into()),
+            }
+        }
+        for p in packages {
+            argv.push(p.clone());
+        }
+    }
+    argv
+}
+
+async fn npm_install_tool(args: Value) -> Result<String> {
+    let NpmInstallArgs {
+        packages,
+        dev,
+        dir,
+        manager,
+    } = serde_json::from_value(args)?;
+
+    let workdir: PathBuf = match dir.as_deref() {
+        Some(d) => PathBuf::from(d),
+        None => std::env::current_dir().context("resolving current directory")?,
+    };
+    if !workdir.is_dir() {
+        return Err(anyhow!("directory does not exist: {}", workdir.display()));
+    }
+
+    let manager = npm_install_manager(&workdir, manager.as_deref())?;
+    let argv = npm_install_argv(manager, &packages, dev);
+
+    let mut c = Command::new(manager);
+    c.args(&argv);
+    c.current_dir(&workdir);
+    c.stdin(Stdio::null());
+    c.stdout(Stdio::piped());
+    c.stderr(Stdio::piped());
+    let out = c
+        .output()
+        .await
+        .with_context(|| format!("running `{manager}`"))?;
+    let mut body = String::from_utf8_lossy(&out.stdout).into_owned();
+    let err = String::from_utf8_lossy(&out.stderr);
+    if !err.is_empty() {
+        if !body.is_empty() {
+            body.push('\n');
+        }
+        body.push_str(&err);
+    }
+    if !out.status.success() {
+        body.push_str(&format!("\n[exit {}]", out.status.code().unwrap_or(-1)));
+    }
+    if body.trim().is_empty() {
+        body = "(no output)".to_string();
+    }
+    Ok(body)
+}
+
+#[derive(Deserialize)]
+struct AuditArgs {
+    #[serde(default)]
+    kind: Option<AuditKind>,
+    #[serde(default)]
+    dir: Option<String>,
+}
+
+#[derive(Deserialize, Clone, Copy, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum AuditKind {
+    Cargo,
+    Pip,
+    Npm,
+    Auto,
+}
+
+// Run a command with an explicit working directory, mirroring `run_command`'s
+// output handling. `run_command` uses the process cwd, so `audit` needs its own
+// dir-aware runner.
+async fn audit_run(dir: &std::path::Path, cmd: &str, args: &[&str]) -> Result<String> {
+    let mut c = Command::new(cmd);
+    c.args(args);
+    c.current_dir(dir);
+    c.stdin(Stdio::null());
+    c.stdout(Stdio::piped());
+    c.stderr(Stdio::piped());
+    let out = c
+        .output()
+        .await
+        .with_context(|| format!("running `{cmd}` in {}", dir.display()))?;
+    let mut body = String::from_utf8_lossy(&out.stdout).into_owned();
+    let err = String::from_utf8_lossy(&out.stderr);
+    if !err.is_empty() {
+        if !body.is_empty() {
+            body.push('\n');
+        }
+        body.push_str(&err);
+    }
+    // Audit tools exit non-zero when advisories are found; that is a successful
+    // scan, not a runner failure, so we always return the report body.
+    if !out.status.success() {
+        body.push_str(&format!("\n[exit {}]", out.status.code().unwrap_or(-1)));
+    }
+    if body.trim().is_empty() {
+        body = "(no output)".to_string();
+    }
+    Ok(body)
+}
+
+fn audit_detect(dir: &std::path::Path) -> Result<AuditKind> {
+    if dir.join("Cargo.toml").is_file() {
+        Ok(AuditKind::Cargo)
+    } else if dir.join("requirements.txt").is_file() || dir.join("pyproject.toml").is_file() {
+        Ok(AuditKind::Pip)
+    } else if dir.join("package.json").is_file() {
+        Ok(AuditKind::Npm)
+    } else {
+        Err(anyhow!(
+            "could not detect ecosystem in {}: no Cargo.toml, requirements.txt, pyproject.toml, or package.json — pass `kind` explicitly",
+            dir.display()
+        ))
+    }
+}
+
+async fn audit_tool(args: Value) -> Result<String> {
+    let AuditArgs { kind, dir } = serde_json::from_value(args)?;
+    let dir = PathBuf::from(dir.unwrap_or_else(|| ".".to_string()));
+    if !dir.is_dir() {
+        return Err(anyhow!("{} is not a directory", dir.display()));
+    }
+    let kind = match kind.unwrap_or(AuditKind::Auto) {
+        AuditKind::Auto => audit_detect(&dir)?,
+        other => other,
+    };
+    match kind {
+        AuditKind::Cargo => audit_run(&dir, "cargo", &["audit"]).await,
+        AuditKind::Pip => audit_run(&dir, "pip-audit", &[]).await,
+        AuditKind::Npm => audit_run(&dir, "npm", &["audit"]).await,
+        AuditKind::Auto => unreachable!("auto resolved above"),
+    }
+}
+
+#[derive(Deserialize)]
+struct GitStatusJsonArgs {
+    dir: Option<String>,
+}
+
+fn git_status_json_parse(stdout: &[u8]) -> Value {
+    let mut branch = Value::Null;
+    let mut ahead: i64 = 0;
+    let mut behind: i64 = 0;
+    let mut entries: Vec<Value> = Vec::new();
+
+    let mut records = stdout.split(|&b| b == 0);
+    // With --branch the first NUL-terminated record is the `## ...` header.
+    if let Some(first) = records.next() {
+        let header = String::from_utf8_lossy(first);
+        if let Some(rest) = header.strip_prefix("## ") {
+            if let Some(unborn) = rest.strip_prefix("No commits yet on ") {
+                branch = Value::String(unborn.trim().to_string());
+            } else if rest.starts_with("HEAD (no branch)") {
+                branch = Value::Null;
+            } else {
+                // "name" or "name...upstream [ahead N, behind M]"
+                let name_part = rest.split("...").next().unwrap_or(rest);
+                let name = name_part.split_whitespace().next().unwrap_or("");
+                if !name.is_empty() {
+                    branch = Value::String(name.to_string());
+                }
+                if let (Some(lb), Some(rb)) = (rest.find('['), rest.rfind(']')) {
+                    if rb > lb {
+                        for part in rest[lb + 1..rb].split(',') {
+                            let p = part.trim();
+                            if let Some(n) = p.strip_prefix("ahead ") {
+                                ahead = n.trim().parse().unwrap_or(0);
+                            } else if let Some(n) = p.strip_prefix("behind ") {
+                                behind = n.trim().parse().unwrap_or(0);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    while let Some(rec) = records.next() {
+        if rec.is_empty() {
+            continue;
+        }
+        let s = String::from_utf8_lossy(rec);
+        if s.len() < 3 {
+            continue;
+        }
+        let bytes = s.as_bytes();
+        let x = bytes[0] as char;
+        let y = bytes[1] as char;
+        // Byte 2 is a space separator; the path follows.
+        let path = s[3..].to_string();
+        // Renames/copies emit the original path as the next NUL record.
+        let orig_path = if x == 'R' || x == 'C' {
+            records
+                .next()
+                .map(|r| String::from_utf8_lossy(r).into_owned())
+        } else {
+            None
+        };
+        entries.push(json!({
+            "x": x.to_string(),
+            "y": y.to_string(),
+            "path": path,
+            "orig_path": orig_path,
+        }));
+    }
+
+    json!({
+        "branch": branch,
+        "ahead": ahead,
+        "behind": behind,
+        "entries": entries,
+    })
+}
+
+async fn git_status_json_tool(args: Value) -> Result<String> {
+    let GitStatusJsonArgs { dir } = serde_json::from_value(args)?;
+    let mut argv: Vec<String> = Vec::new();
+    if let Some(d) = dir.as_deref() {
+        argv.push("-C".to_string());
+        argv.push(d.to_string());
+    }
+    argv.push("status".to_string());
+    argv.push("--porcelain=v1".to_string());
+    argv.push("-z".to_string());
+    argv.push("--branch".to_string());
+
+    let mut c = Command::new("git");
+    c.args(&argv);
+    c.stdin(Stdio::null());
+    c.stdout(Stdio::piped());
+    c.stderr(Stdio::piped());
+    let out = c.output().await.context("running `git status`")?;
+    if !out.status.success() {
+        return Err(anyhow!(
+            "git status failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    let value = git_status_json_parse(&out.stdout);
+    Ok(serde_json::to_string_pretty(&value)?)
+}
+
+#[derive(Deserialize)]
+struct JwtVerifyHmacArgs {
+    token: String,
+    secret: String,
+    #[serde(default)]
+    secret_hex: bool,
+    #[serde(default)]
+    algo: Option<String>,
+}
+
+/// Raw HMAC (RFC 2104) of `msg` under `key` for the given JWT `algo`,
+/// A raw-bytes hash function (one of the SHA-2 cores), selected by JWT algo.
+type JwtRawHashFn = fn(&[u8]) -> Vec<u8>;
+
+/// returning the digest bytes. Reuses the file's SHA-2 cores rather than
+/// reimplementing hashing. Block size is 64 bytes for SHA-256, 128 for
+/// SHA-384/512.
+fn jwt_verify_hmac_sign(algo: &str, key: &[u8], msg: &[u8]) -> Vec<u8> {
+    // (block_size, key-shortening/message hash).
+    let (block, hash): (usize, JwtRawHashFn) = match algo {
+        "HS256" => (64, |d| sha256_raw(d).to_vec()),
+        "HS384" => (128, |d| {
+            let h = sha512_core(d, SHA384_IV);
+            h[..6].iter().flat_map(|w| w.to_be_bytes()).collect()
+        }),
+        "HS512" => (128, |d| {
+            let h = sha512_core(d, SHA512_IV);
+            h.iter().flat_map(|w| w.to_be_bytes()).collect()
+        }),
+        _ => unreachable!("algo validated by caller"),
+    };
+    let mut k = if key.len() > block {
+        hash(key)
+    } else {
+        key.to_vec()
+    };
+    k.resize(block, 0);
+    let mut inner: Vec<u8> = k.iter().map(|b| b ^ 0x36).collect();
+    inner.extend_from_slice(msg);
+    let inner_digest = hash(&inner);
+    let mut outer: Vec<u8> = k.iter().map(|b| b ^ 0x5c).collect();
+    outer.extend_from_slice(&inner_digest);
+    hash(&outer)
+}
+
+/// base64url-encode without padding (reuses standard base64, then remaps
+/// `+`/`/` and strips `=`).
+fn jwt_verify_hmac_b64url(data: &[u8]) -> String {
+    base64_encode(data)
+        .trim_end_matches('=')
+        .replace('+', "-")
+        .replace('/', "_")
+}
+
+/// Constant-time byte comparison (avoids leaking the signature via timing).
+fn jwt_verify_hmac_ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+async fn jwt_verify_hmac_tool(args: Value) -> Result<String> {
+    let JwtVerifyHmacArgs {
+        token,
+        secret,
+        secret_hex,
+        algo,
+    } = serde_json::from_value(args)?;
+
+    let algo = algo.unwrap_or_else(|| "HS256".to_string());
+    if !matches!(algo.as_str(), "HS256" | "HS384" | "HS512") {
+        return Err(anyhow!("algo must be one of HS256|HS384|HS512, got {algo}"));
+    }
+
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 {
+        return Err(anyhow!(
+            "not a JWT: expected 3 dot-separated segments, got {}",
+            parts.len()
+        ));
+    }
+
+    let decode_seg = |seg: &str| -> Result<Value> {
+        let standard = seg.replace('-', "+").replace('_', "/");
+        let bytes = base64_decode(&standard).context("segment is not valid base64url")?;
+        let text = String::from_utf8(bytes).context("segment is not UTF-8")?;
+        serde_json::from_str::<Value>(&text).context("segment is not JSON")
+    };
+    let header = decode_seg(parts[0])?;
+    let payload = decode_seg(parts[1])?;
+
+    let key = if secret_hex {
+        hex_decode(&secret).context("secret_hex")?
+    } else {
+        secret.into_bytes()
+    };
+
+    let signing_input = format!("{}.{}", parts[0], parts[1]);
+    let expected =
+        jwt_verify_hmac_b64url(&jwt_verify_hmac_sign(&algo, &key, signing_input.as_bytes()));
+
+    // Only accept the token if the header's alg matches what we verified with;
+    // otherwise a valid HMAC over a mismatched alg would be misleading.
+    let header_alg = header.get("alg").and_then(|v| v.as_str());
+    let alg_ok = header_alg == Some(algo.as_str());
+    let valid = alg_ok && jwt_verify_hmac_ct_eq(expected.as_bytes(), parts[2].as_bytes());
+
+    Ok(serde_json::to_string_pretty(&json!({
+        "valid": valid,
+        "algo": algo,
+        "header": header,
+        "payload": payload,
+    }))?)
+}
+
+/// Standard base64 to base64url (no padding): translate +/ to -_ and drop `=`.
+fn jwt_sign_hmac_b64url(data: &[u8]) -> String {
+    base64_encode(data)
+        .chars()
+        .filter(|&c| c != '=')
+        .map(|c| match c {
+            '+' => '-',
+            '/' => '_',
+            other => other,
+        })
+        .collect()
+}
+
+/// Raw HMAC-SHA384/512 digest of `msg` under `key` (block size 128).
+/// `words` selects the digest width: 6 words (48 bytes) for SHA-384,
+/// 8 words (64 bytes) for SHA-512. Reuses `sha512_core`.
+fn jwt_sign_hmac_sha512(key: &[u8], msg: &[u8], iv: [u64; 8], words: usize) -> Vec<u8> {
+    let raw = |data: &[u8]| -> Vec<u8> {
+        let h = sha512_core(data, iv);
+        let mut out = Vec::with_capacity(words * 8);
+        for word in &h[..words] {
+            out.extend_from_slice(&word.to_be_bytes());
+        }
+        out
+    };
+    let mut k = if key.len() > 128 {
+        raw(key)
+    } else {
+        key.to_vec()
+    };
+    k.resize(128, 0);
+    let ipad: Vec<u8> = k.iter().map(|b| b ^ 0x36).collect();
+    let opad: Vec<u8> = k.iter().map(|b| b ^ 0x5c).collect();
+    let mut inner = ipad;
+    inner.extend_from_slice(msg);
+    let inner_digest = raw(&inner);
+    let mut outer = opad;
+    outer.extend_from_slice(&inner_digest);
+    raw(&outer)
+}
+
+#[derive(Deserialize)]
+struct JwtSignHmacArgs {
+    payload: Value,
+    secret: String,
+    #[serde(default)]
+    header: Option<Value>,
+    #[serde(default)]
+    secret_hex: bool,
+    #[serde(default)]
+    algo: Option<String>,
+}
+
+async fn jwt_sign_hmac_tool(args: Value) -> Result<String> {
+    let JwtSignHmacArgs {
+        payload,
+        secret,
+        header,
+        secret_hex,
+        algo,
+    } = serde_json::from_value(args)?;
+    let algo = algo.unwrap_or_else(|| "HS256".to_string());
+    if !matches!(algo.as_str(), "HS256" | "HS384" | "HS512") {
+        return Err(anyhow!("unknown algo: {algo} (want HS256|HS384|HS512)"));
+    }
+    let mut header = header.unwrap_or_else(|| json!({ "typ": "JWT" }));
+    match header.as_object_mut() {
+        Some(map) => {
+            map.insert("alg".to_string(), Value::String(algo.clone()));
+        }
+        None => return Err(anyhow!("header must be a JSON object")),
+    }
+    let key = if secret_hex {
+        hex_decode(&secret).context("secret_hex")?
+    } else {
+        secret.into_bytes()
+    };
+    let header_b64 = jwt_sign_hmac_b64url(serde_json::to_string(&header)?.as_bytes());
+    let payload_b64 = jwt_sign_hmac_b64url(serde_json::to_string(&payload)?.as_bytes());
+    let signing_input = format!("{header_b64}.{payload_b64}");
+    let sig = match algo.as_str() {
+        "HS256" => hex_decode(&hmac_sha256(&key, signing_input.as_bytes()))
+            .expect("hmac_sha256 returns valid hex"),
+        "HS384" => jwt_sign_hmac_sha512(&key, signing_input.as_bytes(), SHA384_IV, 6),
+        _ => jwt_sign_hmac_sha512(&key, signing_input.as_bytes(), SHA512_IV, 8),
+    };
+    Ok(format!("{signing_input}.{}", jwt_sign_hmac_b64url(&sig)))
+}
+
+/// Raw HMAC (RFC 2104) over the SHA-512 family: 128-byte block, `words`
+/// leading u64 of the digest kept (8 for sha512, 6 for sha384). Lowercase hex.
+fn hmac_verify_sha512(key: &[u8], msg: &[u8], iv: [u64; 8], words: usize) -> String {
+    let mut k = if key.len() > 128 {
+        // Key longer than block: hash it, keep the leading `words` u64 as bytes.
+        let h = sha512_core(key, iv);
+        let mut bytes = Vec::with_capacity(words * 8);
+        for word in &h[..words] {
+            bytes.extend_from_slice(&word.to_be_bytes());
+        }
+        bytes
+    } else {
+        key.to_vec()
+    };
+    k.resize(128, 0);
+    let ipad: Vec<u8> = k.iter().map(|b| b ^ 0x36).collect();
+    let opad: Vec<u8> = k.iter().map(|b| b ^ 0x5c).collect();
+    let mut inner = ipad;
+    inner.extend_from_slice(msg);
+    let inner_h = sha512_core(&inner, iv);
+    let mut inner_bytes = Vec::with_capacity(words * 8);
+    for word in &inner_h[..words] {
+        inner_bytes.extend_from_slice(&word.to_be_bytes());
+    }
+    let mut outer = opad;
+    outer.extend_from_slice(&inner_bytes);
+    sha512_hex(&outer, iv, words)
+}
+
+/// Constant-time byte-slice equality (no early return on mismatch).
+fn hmac_verify_ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+#[derive(Deserialize)]
+struct HmacVerifyArgs {
+    data: String,
+    key: String,
+    #[serde(default)]
+    key_hex: bool,
+    expected: String,
+    #[serde(default)]
+    algo: Option<String>,
+}
+
+async fn hmac_verify_tool(args: Value) -> Result<String> {
+    let HmacVerifyArgs {
+        data,
+        key,
+        key_hex,
+        expected,
+        algo,
+    } = serde_json::from_value(args)?;
+    let key_bytes = if key_hex {
+        hex_decode(&key).context("key_hex")?
+    } else {
+        key.into_bytes()
+    };
+    let algo = algo.unwrap_or_else(|| "sha256".to_string());
+    let (computed, expect_len) = match algo.as_str() {
+        "sha256" => (hmac_sha256(&key_bytes, data.as_bytes()), 64),
+        "sha384" => (
+            hmac_verify_sha512(&key_bytes, data.as_bytes(), SHA384_IV, 6),
+            96,
+        ),
+        "sha512" => (
+            hmac_verify_sha512(&key_bytes, data.as_bytes(), SHA512_IV, 8),
+            128,
+        ),
+        other => return Err(anyhow!("unknown algo: {other} (want sha256|sha384|sha512)")),
+    };
+    let expected_norm = expected.trim().to_ascii_lowercase();
+    if expected_norm.len() != expect_len || !expected_norm.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(anyhow!(
+            "expected must be a {expect_len}-char hex {algo} HMAC tag"
+        ));
+    }
+    Ok(serde_json::to_string_pretty(&json!({
+        "match": hmac_verify_ct_eq(computed.as_bytes(), expected_norm.as_bytes()),
+        "computed": computed,
+        "expected": expected_norm,
+    }))?)
+}
+
+#[derive(Deserialize)]
+struct TotpArgs {
+    secret: String,
+    digits: Option<u32>,
+    period: Option<u64>,
+    algo: Option<String>,
+    timestamp: Option<u64>,
+}
+
+/// Raw 20-byte SHA-1 digest, reusing the file's hex-returning `sha1()` core.
+fn totp_sha1_raw(data: &[u8]) -> [u8; 20] {
+    let hex = sha1(data);
+    let bytes = hex_decode(&hex).expect("sha1() always returns valid hex");
+    let mut out = [0u8; 20];
+    out.copy_from_slice(&bytes);
+    out
+}
+
+/// HMAC-SHA1 over 64-byte blocks, mirroring the existing `hmac_sha256`
+/// construction but using the SHA-1 core.
+fn totp_hmac_sha1(key: &[u8], msg: &[u8]) -> [u8; 20] {
+    let mut k = if key.len() > 64 {
+        totp_sha1_raw(key).to_vec()
+    } else {
+        key.to_vec()
+    };
+    k.resize(64, 0);
+    let mut inner: Vec<u8> = k.iter().map(|b| b ^ 0x36).collect();
+    inner.extend_from_slice(msg);
+    let inner_digest = totp_sha1_raw(&inner);
+    let mut outer: Vec<u8> = k.iter().map(|b| b ^ 0x5c).collect();
+    outer.extend_from_slice(&inner_digest);
+    totp_sha1_raw(&outer)
+}
+
+/// RFC 6238 dynamic truncation of an HMAC digest into a `digits`-long code.
+fn totp_truncate(mac: &[u8], digits: u32) -> String {
+    let offset = (mac[mac.len() - 1] & 0x0f) as usize;
+    let bin = ((mac[offset] as u32 & 0x7f) << 24)
+        | ((mac[offset + 1] as u32) << 16)
+        | ((mac[offset + 2] as u32) << 8)
+        | (mac[offset + 3] as u32);
+    let modulo = 10u32.pow(digits);
+    format!("{:0width$}", bin % modulo, width = digits as usize)
+}
+
+async fn totp_tool(args: Value) -> Result<String> {
+    let TotpArgs {
+        secret,
+        digits,
+        period,
+        algo,
+        timestamp,
+    } = serde_json::from_value(args)?;
+    let digits = digits.unwrap_or(6);
+    if !(1..=9).contains(&digits) {
+        return Err(anyhow!("digits must be between 1 and 9"));
+    }
+    let period = period.unwrap_or(30);
+    if period == 0 {
+        return Err(anyhow!("period must be greater than 0"));
+    }
+    let algo = algo.unwrap_or_else(|| "sha1".to_string());
+    let key = base32_decode(&secret, false).context("secret (base32)")?;
+    let now = match timestamp {
+        Some(t) => t,
+        None => std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| anyhow!("system clock is before the Unix epoch"))?
+            .as_secs(),
+    };
+    let counter = now / period;
+    let msg = counter.to_be_bytes();
+    let code = match algo.as_str() {
+        "sha1" => totp_truncate(&totp_hmac_sha1(&key, &msg), digits),
+        "sha256" => {
+            let hex = hmac_sha256(&key, &msg);
+            let mac = hex_decode(&hex).expect("hmac_sha256() returns valid hex");
+            totp_truncate(&mac, digits)
+        }
+        other => return Err(anyhow!("unsupported algo: {other} (use sha1 or sha256)")),
+    };
+    Ok(code)
+}
+
+#[derive(Deserialize)]
+struct SecretScanArgs {
+    path: String,
+    min_entropy: Option<f64>,
+}
+
+async fn secret_scan_tool(args: Value) -> Result<String> {
+    let SecretScanArgs { path, min_entropy } = serde_json::from_value(args)?;
+    let root = PathBuf::from(&path);
+
+    let mut files = Vec::new();
+    if root.is_file() {
+        files.push(root);
+    } else if root.is_dir() {
+        // Reuse grep_tool's bounded walk (skips hidden/target/node_modules/dist/build).
+        walk_files(&root, &mut files, 5000)?;
+    } else {
+        return Err(anyhow!("not found: {path}"));
+    }
+
+    let entropy_threshold = min_entropy.unwrap_or(4.0);
+
+    // (rule name, compiled regex). Anchored, provider-specific patterns first;
+    // the generic assignment rule is handled separately so we can entropy-gate it.
+    let rules: [(&str, regex::Regex); 6] = [
+        (
+            "aws_access_key_id",
+            regex::Regex::new(r"\b(?:AKIA|ASIA|AGPA|AIDA|AROA|ANPA|ANVA)[0-9A-Z]{16}\b").unwrap(),
+        ),
+        (
+            "github_token",
+            regex::Regex::new(r"\bgh[pousr]_[0-9A-Za-z]{36,}\b").unwrap(),
+        ),
+        (
+            "slack_token",
+            regex::Regex::new(r"\bxox[baprs]-[0-9A-Za-z-]{10,}\b").unwrap(),
+        ),
+        (
+            "private_key",
+            regex::Regex::new(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----")
+                .unwrap(),
+        ),
+        (
+            "jwt",
+            regex::Regex::new(r"\beyJ[0-9A-Za-z_-]{8,}\.eyJ[0-9A-Za-z_-]{8,}\.[0-9A-Za-z_-]{8,}\b")
+                .unwrap(),
+        ),
+        (
+            "google_api_key",
+            regex::Regex::new(r"\bAIza[0-9A-Za-z_-]{35}\b").unwrap(),
+        ),
+    ];
+
+    // Generic `name = "value"` style secret assignment. We only keep it when the
+    // value looks high-entropy, to cut down on config-noise false positives.
+    let assign_re = regex::Regex::new(
+        r#"(?i)(?:password|passwd|secret|api[_-]?key|token|access[_-]?key|client[_-]?secret|private[_-]?key)"?\s*[:=]\s*["']?([0-9A-Za-z+/._=-]{12,})["']?"#,
+    )
+    .unwrap();
+    // Standalone long base64/hex blobs, entropy-gated.
+    let token_re = regex::Regex::new(r"\b[0-9A-Za-z+/]{20,}={0,2}\b").unwrap();
+
+    const MAX_FINDINGS: usize = 200;
+    let mut findings: Vec<Value> = Vec::new();
+
+    'outer: for file in &files {
+        let content = match std::fs::read_to_string(file) {
+            Ok(c) => c,
+            // Binary / unreadable files are silently skipped.
+            Err(_) => continue,
+        };
+        let fname = file.display().to_string();
+        for (i, line) in content.lines().enumerate() {
+            let lineno = i + 1;
+            let mut hit = |rule: &str, m: &str| -> bool {
+                findings.push(json!({
+                    "file": fname,
+                    "line": lineno,
+                    "rule": rule,
+                    "match": secret_scan_redact(m),
+                }));
+                findings.len() >= MAX_FINDINGS
+            };
+
+            for (rule, re) in &rules {
+                if let Some(m) = re.find(line) {
+                    if hit(rule, m.as_str()) {
+                        break 'outer;
+                    }
+                }
+            }
+
+            if let Some(caps) = assign_re.captures(line) {
+                let val = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                if secret_scan_shannon_entropy(val) >= entropy_threshold
+                    && hit("generic_secret_assignment", val)
+                {
+                    break 'outer;
+                }
+            }
+
+            for m in token_re.find_iter(line) {
+                let tok = m.as_str();
+                if tok.len() >= 24
+                    && secret_scan_shannon_entropy(tok) >= entropy_threshold
+                    && hit("high_entropy_token", tok)
+                {
+                    break 'outer;
+                }
+            }
+        }
+    }
+
+    let truncated = findings.len() >= MAX_FINDINGS;
+    let out = json!({
+        "scanned_files": files.len(),
+        "findings": findings,
+        "truncated": truncated,
+    });
+    Ok(serde_json::to_string_pretty(&out)?)
+}
+
+/// Shannon entropy in bits per character. Empty string scores 0.
+fn secret_scan_shannon_entropy(s: &str) -> f64 {
+    if s.is_empty() {
+        return 0.0;
+    }
+    let mut counts = std::collections::HashMap::new();
+    for c in s.chars() {
+        *counts.entry(c).or_insert(0usize) += 1;
+    }
+    let len = s.chars().count() as f64;
+    counts
+        .values()
+        .map(|&n| {
+            let p = n as f64 / len;
+            -p * p.log2()
+        })
+        .sum()
+}
+
+/// Redact a matched secret so scan output never leaks the full value:
+/// keep the first 4 chars, mask the rest.
+fn secret_scan_redact(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= 4 {
+        return "*".repeat(chars.len());
+    }
+    let head: String = chars[..4].iter().collect();
+    format!("{head}{}", "*".repeat(chars.len() - 4))
+}
+
+#[derive(Deserialize)]
+struct SleepArgs {
+    #[serde(default)]
+    seconds: Option<f64>,
+    #[serde(default)]
+    ms: Option<u64>,
+}
+
+/// Resolve the requested seconds+ms into a single delay clamped to
+/// 0..=300 seconds. NaN/negative inputs collapse to 0.
+fn sleep_clamp_secs(seconds: Option<f64>, ms: Option<u64>) -> f64 {
+    let s = seconds.unwrap_or(0.0);
+    let s = if s.is_finite() && s > 0.0 { s } else { 0.0 };
+    let total = s + (ms.unwrap_or(0) as f64) / 1000.0;
+    total.clamp(0.0, 300.0)
+}
+
+async fn sleep_tool(args: Value) -> Result<String> {
+    let a: SleepArgs = serde_json::from_value(args).context("invalid sleep arguments")?;
+    let secs = sleep_clamp_secs(a.seconds, a.ms);
+    tokio::time::sleep(Duration::from_secs_f64(secs)).await;
+    Ok(format!("slept {secs}s"))
+}
+
+#[derive(Deserialize)]
+struct CatArgs {
+    paths: Vec<String>,
+    #[serde(default)]
+    separator: String,
+    #[serde(default)]
+    number: bool,
+}
+
+async fn cat_tool(args: Value) -> Result<String> {
+    let CatArgs {
+        paths,
+        separator,
+        number,
+    } = serde_json::from_value(args)?;
+    let mut out = String::new();
+    for (i, path) in paths.iter().enumerate() {
+        if i > 0 {
+            out.push_str(&separator);
+        }
+        let contents = tokio::fs::read_to_string(path)
+            .await
+            .with_context(|| format!("cat {path}"))?;
+        if number {
+            out.push_str(&cat_number_lines(&contents));
+        } else {
+            out.push_str(&contents);
+        }
+    }
+    Ok(out)
+}
+
+fn cat_number_lines(contents: &str) -> String {
+    let mut out = String::new();
+    for (i, line) in contents.lines().enumerate() {
+        out.push_str(&format!("{:>6}\t{}\n", i + 1, line));
+    }
+    out
+}
+
+#[derive(Deserialize)]
+struct SeqArgs {
+    start: f64,
+    end: f64,
+    step: Option<f64>,
+    separator: Option<String>,
+}
+
+const SEQ_MAX: usize = 100_000;
+
+// Format a sequence value: emit whole numbers without a trailing `.0` when the
+// whole sequence is integral, otherwise a plain float rendering.
+fn seq_format(value: f64, integral: bool) -> String {
+    if integral {
+        format!("{}", value as i64)
+    } else {
+        format!("{value}")
+    }
+}
+
+async fn seq_tool(args: Value) -> Result<String> {
+    let SeqArgs {
+        start,
+        end,
+        step,
+        separator,
+    } = serde_json::from_value(args)?;
+    let step = step.unwrap_or(1.0);
+    let separator = separator.unwrap_or_else(|| "\n".to_string());
+
+    if !start.is_finite() || !end.is_finite() || !step.is_finite() {
+        return Err(anyhow!("start, end, and step must be finite numbers"));
+    }
+    if step == 0.0 {
+        return Err(anyhow!("step must be non-zero"));
+    }
+    if start != end && (end - start).signum() != step.signum() {
+        return Err(anyhow!(
+            "step {step} points away from end (start {start}, end {end})"
+        ));
+    }
+
+    let integral = start.fract() == 0.0 && end.fract() == 0.0 && step.fract() == 0.0;
+
+    let mut out = String::new();
+    let mut count = 0usize;
+    // Iterate as `start + n*step` (rather than accumulating) to avoid drifting
+    // float error, and compare against `end` in the step direction.
+    loop {
+        let value = start + (count as f64) * step;
+        if step > 0.0 && value > end {
+            break;
+        }
+        if step < 0.0 && value < end {
+            break;
+        }
+        if count > 0 {
+            out.push_str(&separator);
+        }
+        out.push_str(&seq_format(value, integral));
+        count += 1;
+        if count >= SEQ_MAX {
+            if start + (count as f64) * step <= end && step > 0.0
+                || start + (count as f64) * step >= end && step < 0.0
+            {
+                return Err(anyhow!("sequence exceeds {SEQ_MAX} values"));
+            }
+            break;
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5887,6 +11563,13 @@ mod tests {
     impl Drop for Cleanup {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    struct CleanupDir(PathBuf);
+    impl Drop for CleanupDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
         }
     }
 
@@ -7953,5 +13636,3011 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
         // Completed (didn't spin on the cycle) and counted the one real file.
         assert!(out.contains("Rust") || out.contains("rs"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn chown_parses_and_runs_or_errors_honestly() {
+        let path = tmp_path("chown.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "x").unwrap();
+        let p = path.to_str().unwrap();
+
+        #[cfg(windows)]
+        {
+            let err = dispatch("chown", &json!({ "path": p, "owner": "0" }).to_string())
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("unsupported on Windows"));
+        }
+
+        #[cfg(unix)]
+        {
+            // Chowning to our own uid is a permitted no-op even for non-root.
+            let uid = unsafe { libc::getuid() };
+            let out = dispatch(
+                "chown",
+                &json!({ "path": p, "owner": uid.to_string() }).to_string(),
+            )
+            .await
+            .unwrap();
+            assert!(out.contains(&format!("chown {uid}")));
+
+            // A bogus user name must be rejected during resolution.
+            let err = dispatch(
+                "chown",
+                &json!({ "path": p, "owner": "no-such-user-xyz-98765" }).to_string(),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+            assert!(err.contains("no such user"));
+
+            // Missing path surfaces a stat error before touching ownership.
+            let missing = tmp_path("chown-missing.txt");
+            let err = dispatch(
+                "chown",
+                &json!({ "path": missing.to_str().unwrap(), "owner": uid.to_string() }).to_string(),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+            assert!(err.contains("stat"));
+        }
+    }
+
+    #[tokio::test]
+    async fn pwd_returns_current_dir() {
+        let out = dispatch("pwd", &json!({}).to_string()).await.unwrap();
+        let expected = std::env::current_dir().unwrap();
+        assert_eq!(out, expected.to_string_lossy());
+        assert!(PathBuf::from(&out).is_absolute());
+    }
+
+    #[tokio::test]
+    async fn file_type_detects_png_magic() {
+        let path = tmp_path("ft.png");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, b"\x89PNG\r\n\x1a\nrest").unwrap();
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        let out = dispatch("file_type", &args).await.unwrap();
+        assert!(out.ends_with("PNG image"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn file_type_detects_elf_magic() {
+        let path = tmp_path("ft.elf");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, b"\x7fELF\x02\x01\x01\x00").unwrap();
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        let out = dispatch("file_type", &args).await.unwrap();
+        assert!(out.ends_with("ELF binary"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn file_type_classifies_text_and_binary() {
+        let tp = tmp_path("ft.txt");
+        let _ct = Cleanup(tp.clone());
+        std::fs::write(&tp, "hello world\nsecond line\n").unwrap();
+        let ta = json!({ "path": tp.to_str().unwrap() }).to_string();
+        assert!(dispatch("file_type", &ta).await.unwrap().ends_with("text"));
+
+        let bp = tmp_path("ft.bin");
+        let _cb = Cleanup(bp.clone());
+        std::fs::write(&bp, [0u8, 1, 2, 3, 0, 255]).unwrap();
+        let ba = json!({ "path": bp.to_str().unwrap() }).to_string();
+        assert!(dispatch("file_type", &ba)
+            .await
+            .unwrap()
+            .ends_with("binary data"));
+    }
+
+    #[tokio::test]
+    async fn file_type_reports_empty_and_missing() {
+        let ep = tmp_path("ft.empty");
+        let _ce = Cleanup(ep.clone());
+        std::fs::write(&ep, b"").unwrap();
+        let ea = json!({ "path": ep.to_str().unwrap() }).to_string();
+        assert!(dispatch("file_type", &ea).await.unwrap().ends_with("empty"));
+
+        let mp = tmp_path("ft.missing");
+        let ma = json!({ "path": mp.to_str().unwrap() }).to_string();
+        assert!(dispatch("file_type", &ma).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn path_join_joins_relative_segments() {
+        let args = json!({ "parts": ["a", "b", "c"] }).to_string();
+        let out = dispatch("path_join", &args).await.unwrap();
+        let expected = PathBuf::from("a").join("b").join("c");
+        assert_eq!(out, expected.to_str().unwrap());
+    }
+
+    #[tokio::test]
+    async fn path_join_absolute_segment_resets() {
+        let args = json!({ "parts": ["a", "/etc", "hosts"] }).to_string();
+        let out = dispatch("path_join", &args).await.unwrap();
+        // An absolute segment resets the accumulated path (PathBuf::push
+        // semantics), so "a" is dropped.
+        let expected = PathBuf::from("/etc").join("hosts");
+        assert_eq!(out, expected.to_str().unwrap());
+    }
+
+    #[tokio::test]
+    async fn path_join_single_segment() {
+        let args = json!({ "parts": ["solo"] }).to_string();
+        let out = dispatch("path_join", &args).await.unwrap();
+        assert_eq!(out, "solo");
+    }
+
+    #[tokio::test]
+    async fn path_join_errors_on_empty() {
+        let args = json!({ "parts": [] }).to_string();
+        assert!(dispatch("path_join", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn path_normalize_collapses_and_resolves() {
+        let cases = [
+            ("a/b/../c", "a/c"),
+            ("./a/./b", "a/b"),
+            ("a/b/c/../../d", "a/d"),
+            ("a//b", "a/b"),
+            ("", "."),
+            (".", "."),
+            ("../a", "../a"),
+            ("a/../..", ".."),
+        ];
+        for (input, want) in cases {
+            let out = dispatch("path_normalize", &json!({ "path": input }).to_string())
+                .await
+                .unwrap();
+            assert_eq!(out, want, "input {input}");
+        }
+        // Absolute: `..` cannot escape root, symlinks are NOT resolved.
+        let abs = dispatch(
+            "path_normalize",
+            &json!({ "path": "/a/b/../../../c" }).to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(abs, "/c");
+        let root = dispatch("path_normalize", &json!({ "path": "/" }).to_string())
+            .await
+            .unwrap();
+        assert_eq!(root, "/");
+        // Missing `path` arg is an error.
+        assert!(dispatch("path_normalize", &json!({}).to_string())
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn relpath_sibling_directories() {
+        let args = json!({ "path": "/a/x/y", "base": "/a/b/c" }).to_string();
+        let out = dispatch("relpath", &args).await.unwrap();
+        let want: String = ["..", "..", "x", "y"]
+            .iter()
+            .collect::<PathBuf>()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(out, want);
+    }
+
+    #[tokio::test]
+    async fn relpath_descend_into_subdir() {
+        let args = json!({ "path": "/a/b/c/d", "base": "/a/b" }).to_string();
+        let out = dispatch("relpath", &args).await.unwrap();
+        let want: String = ["c", "d"]
+            .iter()
+            .collect::<PathBuf>()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(out, want);
+    }
+
+    #[tokio::test]
+    async fn relpath_equal_paths_yields_dot() {
+        let args = json!({ "path": "/a/b/c", "base": "/a/b/c" }).to_string();
+        assert_eq!(dispatch("relpath", &args).await.unwrap(), ".");
+    }
+
+    #[tokio::test]
+    async fn relpath_relative_inputs() {
+        let args = json!({ "path": "src/lib.rs", "base": "src/bin" }).to_string();
+        let out = dispatch("relpath", &args).await.unwrap();
+        let want: String = ["..", "lib.rs"]
+            .iter()
+            .collect::<PathBuf>()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(out, want);
+    }
+
+    #[tokio::test]
+    async fn relpath_rejects_mixed_absoluteness() {
+        let args = json!({ "path": "/a/b", "base": "a/b" }).to_string();
+        assert!(dispatch("relpath", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn relpath_rejects_unreversible_parentdir_in_base() {
+        let args = json!({ "path": "a/b", "base": "../x" }).to_string();
+        assert!(dispatch("relpath", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn split_file_by_bytes_writes_numbered_chunks() {
+        let path = tmp_path("split-bytes.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "abcdefg").unwrap();
+        let args = json!({ "path": path.to_str().unwrap(), "bytes": 3 }).to_string();
+        let out = dispatch("split_file", &args).await.unwrap();
+        let paths: Vec<&str> = out.lines().collect();
+        let _c0 = Cleanup(PathBuf::from(paths[0]));
+        let _c1 = Cleanup(PathBuf::from(paths[1]));
+        let _c2 = Cleanup(PathBuf::from(paths[2]));
+        assert_eq!(paths.len(), 3);
+        assert!(paths[0].ends_with(".00"));
+        assert!(paths[1].ends_with(".01"));
+        assert!(paths[2].ends_with(".02"));
+        assert_eq!(std::fs::read_to_string(paths[0]).unwrap(), "abc");
+        assert_eq!(std::fs::read_to_string(paths[1]).unwrap(), "def");
+        assert_eq!(std::fs::read_to_string(paths[2]).unwrap(), "g");
+    }
+
+    #[tokio::test]
+    async fn split_file_by_lines_roundtrips() {
+        let path = tmp_path("split-lines.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "l1\nl2\nl3\nl4\nl5").unwrap();
+        let args = json!({ "path": path.to_str().unwrap(), "lines": 2 }).to_string();
+        let out = dispatch("split_file", &args).await.unwrap();
+        let paths: Vec<&str> = out.lines().collect();
+        let _c0 = Cleanup(PathBuf::from(paths[0]));
+        let _c1 = Cleanup(PathBuf::from(paths[1]));
+        let _c2 = Cleanup(PathBuf::from(paths[2]));
+        assert_eq!(paths.len(), 3);
+        assert_eq!(std::fs::read_to_string(paths[0]).unwrap(), "l1\nl2\n");
+        assert_eq!(std::fs::read_to_string(paths[1]).unwrap(), "l3\nl4\n");
+        assert_eq!(std::fs::read_to_string(paths[2]).unwrap(), "l5");
+        // Concatenation reconstructs the original.
+        let joined: String = paths
+            .iter()
+            .map(|p| std::fs::read_to_string(p).unwrap())
+            .collect();
+        assert_eq!(joined, "l1\nl2\nl3\nl4\nl5");
+    }
+
+    #[tokio::test]
+    async fn split_file_custom_prefix() {
+        let path = tmp_path("split-prefix.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "xyz").unwrap();
+        let prefix = tmp_path("split-out");
+        let args = json!({
+            "path": path.to_str().unwrap(),
+            "bytes": 10,
+            "prefix": prefix.to_str().unwrap()
+        })
+        .to_string();
+        let out = dispatch("split_file", &args).await.unwrap();
+        let paths: Vec<&str> = out.lines().collect();
+        let _c0 = Cleanup(PathBuf::from(paths[0]));
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].ends_with(".00"));
+        assert!(paths[0].starts_with(prefix.to_str().unwrap()));
+        assert_eq!(std::fs::read_to_string(paths[0]).unwrap(), "xyz");
+    }
+
+    #[tokio::test]
+    async fn split_file_requires_exactly_one_mode() {
+        let path = tmp_path("split-neither.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "data").unwrap();
+        // Neither.
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        assert!(dispatch("split_file", &args).await.is_err());
+        // Both.
+        let args = json!({ "path": path.to_str().unwrap(), "bytes": 2, "lines": 2 }).to_string();
+        assert!(dispatch("split_file", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn split_file_errors_on_empty_file() {
+        let path = tmp_path("split-empty.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "").unwrap();
+        let args = json!({ "path": path.to_str().unwrap(), "bytes": 4 }).to_string();
+        assert!(dispatch("split_file", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn split_file_pads_width_for_many_chunks() {
+        let path = tmp_path("split-wide.txt");
+        let _c = Cleanup(path.clone());
+        // 12 bytes, 1 byte per chunk => indices 00..11, width 2.
+        std::fs::write(&path, "0123456789ab").unwrap();
+        let args = json!({ "path": path.to_str().unwrap(), "bytes": 1 }).to_string();
+        let out = dispatch("split_file", &args).await.unwrap();
+        let paths: Vec<&str> = out.lines().collect();
+        for p in &paths {
+            let _ = std::fs::remove_file(p);
+        }
+        assert_eq!(paths.len(), 12);
+        assert!(paths[0].ends_with(".00"));
+        assert!(paths[11].ends_with(".11"));
+    }
+
+    #[tokio::test]
+    async fn join_files_concatenates_in_order() {
+        let a = tmp_path("join-a.txt");
+        let b = tmp_path("join-b.txt");
+        let out = tmp_path("join-out.txt");
+        let _ca = Cleanup(a.clone());
+        let _cb = Cleanup(b.clone());
+        let _co = Cleanup(out.clone());
+        std::fs::write(&a, b"hello ").unwrap();
+        std::fs::write(&b, b"world").unwrap();
+        let args = json!({
+            "inputs": [a.to_str().unwrap(), b.to_str().unwrap()],
+            "output": out.to_str().unwrap()
+        })
+        .to_string();
+        let result = dispatch("join_files", &args).await.unwrap();
+        assert!(result.contains("joined 2 file(s)"));
+        assert_eq!(std::fs::read(&out).unwrap(), b"hello world");
+    }
+
+    #[tokio::test]
+    async fn join_files_rejects_empty_inputs() {
+        let out = tmp_path("join-empty.txt");
+        let args = json!({ "inputs": [], "output": out.to_str().unwrap() }).to_string();
+        assert!(dispatch("join_files", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn join_files_errors_on_missing_input() {
+        let missing = tmp_path("join-missing.txt");
+        let out = tmp_path("join-missing-out.txt");
+        let _co = Cleanup(out.clone());
+        let args = json!({
+            "inputs": [missing.to_str().unwrap()],
+            "output": out.to_str().unwrap()
+        })
+        .to_string();
+        assert!(dispatch("join_files", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn is_dir_empty_reports_empty_dir() {
+        let path = tmp_path("empty-dir");
+        std::fs::create_dir(&path).unwrap();
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        let result = dispatch("is_dir_empty", &args).await.unwrap();
+        std::fs::remove_dir_all(&path).unwrap();
+        assert_eq!(result, "empty");
+    }
+
+    #[tokio::test]
+    async fn is_dir_empty_reports_non_empty_dir() {
+        let path = tmp_path("full-dir");
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("child.txt"), "x").unwrap();
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        let result = dispatch("is_dir_empty", &args).await.unwrap();
+        std::fs::remove_dir_all(&path).unwrap();
+        assert_eq!(result, "not empty");
+    }
+
+    #[tokio::test]
+    async fn is_dir_empty_errors_on_file() {
+        let path = tmp_path("is-dir-empty-file.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "data").unwrap();
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        assert!(dispatch("is_dir_empty", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn is_dir_empty_errors_on_missing() {
+        let path = tmp_path("is-dir-empty-missing");
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        assert!(dispatch("is_dir_empty", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn exists_reports_true_for_a_file() {
+        let path = tmp_path("exists-file.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "x").unwrap();
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        let out = dispatch("exists", &args).await.unwrap();
+        assert!(out.contains("exists: true"));
+        assert!(out.contains("kind:   file"));
+    }
+
+    #[tokio::test]
+    async fn exists_reports_true_for_a_dir() {
+        let path = tmp_path("exists-dir");
+        std::fs::create_dir(&path).unwrap();
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        let out = dispatch("exists", &args).await.unwrap();
+        let _ = std::fs::remove_dir(&path);
+        assert!(out.contains("exists: true"));
+        assert!(out.contains("kind:   dir"));
+    }
+
+    #[tokio::test]
+    async fn exists_reports_false_without_erroring() {
+        let path = tmp_path("exists-absent");
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        assert_eq!(dispatch("exists", &args).await.unwrap(), "exists: false");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn exists_classifies_symlink_without_following() {
+        let target = tmp_path("exists-symlink-target");
+        let link = tmp_path("exists-symlink-link");
+        let _ct = Cleanup(target.clone());
+        let _cl = Cleanup(link.clone());
+        std::fs::write(&target, "x").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let args = json!({ "path": link.to_str().unwrap() }).to_string();
+        let out = dispatch("exists", &args).await.unwrap();
+        assert!(out.contains("exists: true"));
+        assert!(out.contains("kind:   symlink"));
+    }
+
+    #[tokio::test]
+    async fn fallocate_creates_and_sizes_new_file() {
+        let path = tmp_path("fallocate-new.bin");
+        let _c = Cleanup(path.clone());
+        let args = json!({ "path": path.to_str().unwrap(), "size": 1024 }).to_string();
+        let out = dispatch("fallocate", &args).await.unwrap();
+        assert!(out.contains("1024 bytes"));
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 1024);
+    }
+
+    #[tokio::test]
+    async fn fallocate_grows_existing_file_preserving_content() {
+        let path = tmp_path("fallocate-grow.bin");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, b"abc").unwrap();
+        let args = json!({ "path": path.to_str().unwrap(), "size": 8 }).to_string();
+        dispatch("fallocate", &args).await.unwrap();
+        let data = std::fs::read(&path).unwrap();
+        assert_eq!(data.len(), 8);
+        assert_eq!(&data[..3], b"abc");
+        assert_eq!(&data[3..], &[0u8; 5]);
+    }
+
+    #[tokio::test]
+    async fn fallocate_shrinks_existing_file() {
+        let path = tmp_path("fallocate-shrink.bin");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, b"hello world").unwrap();
+        let args = json!({ "path": path.to_str().unwrap(), "size": 5 }).to_string();
+        dispatch("fallocate", &args).await.unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"hello");
+    }
+
+    #[tokio::test]
+    async fn fallocate_rejects_missing_size() {
+        let path = tmp_path("fallocate-badargs.bin");
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        assert!(dispatch("fallocate", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn uniq_collapses_adjacent_duplicates() {
+        let path = tmp_path("uniq-basic.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "a\na\nb\na\n").unwrap();
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        // adjacent-only: trailing "a" is NOT merged with the leading run
+        assert_eq!(dispatch("uniq", &args).await.unwrap(), "a\nb\na");
+    }
+
+    #[tokio::test]
+    async fn uniq_count_prefixes_occurrences() {
+        let path = tmp_path("uniq-count.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "x\nx\nx\ny\n").unwrap();
+        let args = json!({ "path": path.to_str().unwrap(), "count": true }).to_string();
+        assert_eq!(
+            dispatch("uniq", &args).await.unwrap(),
+            "      3 x\n      1 y"
+        );
+    }
+
+    #[tokio::test]
+    async fn uniq_repeated_and_unique_only_filter() {
+        let path = tmp_path("uniq-filter.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "a\na\nb\nc\nc\n").unwrap();
+        let dup = json!({ "path": path.to_str().unwrap(), "repeated": true }).to_string();
+        assert_eq!(dispatch("uniq", &dup).await.unwrap(), "a\nc");
+        let uniq = json!({ "path": path.to_str().unwrap(), "unique_only": true }).to_string();
+        assert_eq!(dispatch("uniq", &uniq).await.unwrap(), "b");
+    }
+
+    #[tokio::test]
+    async fn uniq_ignore_case_keeps_first_verbatim() {
+        let path = tmp_path("uniq-case.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "Foo\nfoo\nBar\n").unwrap();
+        let args = json!({ "path": path.to_str().unwrap(), "ignore_case": true, "count": true })
+            .to_string();
+        assert_eq!(
+            dispatch("uniq", &args).await.unwrap(),
+            "      2 Foo\n      1 Bar"
+        );
+    }
+
+    #[tokio::test]
+    async fn uniq_rejects_conflicting_filters() {
+        let path = tmp_path("uniq-conflict.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "a\n").unwrap();
+        let args = json!({ "path": path.to_str().unwrap(), "repeated": true, "unique_only": true })
+            .to_string();
+        assert!(dispatch("uniq", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn paste_merges_columns_with_default_tab() {
+        let a = tmp_path("paste-a.txt");
+        let b = tmp_path("paste-b.txt");
+        let _ca = Cleanup(a.clone());
+        let _cb = Cleanup(b.clone());
+        std::fs::write(&a, "1\n2\n3").unwrap();
+        std::fs::write(&b, "x\ny\nz").unwrap();
+        let args = json!({
+            "paths": [a.to_str().unwrap(), b.to_str().unwrap()]
+        })
+        .to_string();
+        let out = dispatch("paste", &args).await.unwrap();
+        assert_eq!(out, "1\tx\n2\ty\n3\tz");
+    }
+
+    #[tokio::test]
+    async fn paste_pads_uneven_files_and_honors_delimiter() {
+        let a = tmp_path("paste-uneven-a.txt");
+        let b = tmp_path("paste-uneven-b.txt");
+        let _ca = Cleanup(a.clone());
+        let _cb = Cleanup(b.clone());
+        std::fs::write(&a, "1\n2\n3").unwrap();
+        std::fs::write(&b, "x").unwrap();
+        let args = json!({
+            "paths": [a.to_str().unwrap(), b.to_str().unwrap()],
+            "delimiter": ","
+        })
+        .to_string();
+        let out = dispatch("paste", &args).await.unwrap();
+        assert_eq!(out, "1,x\n2,\n3,");
+    }
+
+    #[tokio::test]
+    async fn paste_rejects_empty_paths() {
+        let args = json!({ "paths": [] }).to_string();
+        assert!(dispatch("paste", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn paste_errors_on_missing_file() {
+        let missing = tmp_path("paste-missing.txt");
+        let args = json!({ "paths": [missing.to_str().unwrap()] }).to_string();
+        assert!(dispatch("paste", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn fold_hard_wraps_at_width() {
+        let path = tmp_path("fold-hard.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "abcdefghij").unwrap();
+        let args = json!({ "path": path.to_str().unwrap(), "width": 4 }).to_string();
+        let out = dispatch("fold", &args).await.unwrap();
+        assert_eq!(out, "abcd\nefgh\nij");
+    }
+
+    #[tokio::test]
+    async fn fold_default_width_leaves_short_lines() {
+        let path = tmp_path("fold-short.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "line one\nline two\n").unwrap();
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        let out = dispatch("fold", &args).await.unwrap();
+        assert_eq!(out, "line one\nline two\n");
+    }
+
+    #[tokio::test]
+    async fn fold_spaces_breaks_at_whitespace() {
+        let path = tmp_path("fold-spaces.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "the quick brown fox").unwrap();
+        let args =
+            json!({ "path": path.to_str().unwrap(), "width": 10, "spaces": true }).to_string();
+        let out = dispatch("fold", &args).await.unwrap();
+        // "the quick " is 10 chars incl trailing space; then "brown fox".
+        assert_eq!(out, "the quick \nbrown fox");
+        for seg in out.split('\n') {
+            assert!(seg.chars().count() <= 10);
+        }
+    }
+
+    #[tokio::test]
+    async fn fold_spaces_hard_breaks_long_word() {
+        let path = tmp_path("fold-longword.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "supercalifragilistic").unwrap();
+        let args =
+            json!({ "path": path.to_str().unwrap(), "width": 5, "spaces": true }).to_string();
+        let out = dispatch("fold", &args).await.unwrap();
+        for seg in out.split('\n') {
+            assert!(seg.chars().count() <= 5);
+        }
+        assert_eq!(out.replace('\n', ""), "supercalifragilistic");
+    }
+
+    #[tokio::test]
+    async fn fold_rejects_zero_width() {
+        let path = tmp_path("fold-zero.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "x").unwrap();
+        let args = json!({ "path": path.to_str().unwrap(), "width": 0 }).to_string();
+        assert!(dispatch("fold", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn fold_errors_on_missing_file() {
+        let path = tmp_path("fold-missing.txt");
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        assert!(dispatch("fold", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn tac_reverses_line_order() {
+        let path = tmp_path("tac.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "one\ntwo\nthree").unwrap();
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        assert_eq!(dispatch("tac", &args).await.unwrap(), "three\ntwo\none");
+    }
+
+    #[tokio::test]
+    async fn tac_errors_on_missing_file() {
+        let path = tmp_path("tac-missing.txt");
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        assert!(dispatch("tac", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn indent_default_spaces_skips_blank() {
+        let path = tmp_path("indent.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "a\n\nb\n").unwrap();
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        let out = dispatch("indent", &args).await.unwrap();
+        assert_eq!(out, "    a\n\n    b\n");
+    }
+
+    #[tokio::test]
+    async fn indent_custom_prefix_and_no_skip_blank() {
+        let path = tmp_path("indent-prefix.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "a\n\nb").unwrap();
+        let args = json!({
+            "path": path.to_str().unwrap(),
+            "prefix": "> ",
+            "skip_blank": false
+        })
+        .to_string();
+        let out = dispatch("indent", &args).await.unwrap();
+        assert_eq!(out, "> a\n> \n> b");
+    }
+
+    #[tokio::test]
+    async fn indent_tabs_width() {
+        let path = tmp_path("indent-tabs.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "x\n").unwrap();
+        let args = json!({
+            "path": path.to_str().unwrap(),
+            "width": 2,
+            "tabs": true
+        })
+        .to_string();
+        let out = dispatch("indent", &args).await.unwrap();
+        assert_eq!(out, "\t\tx\n");
+    }
+
+    #[tokio::test]
+    async fn indent_errors_on_missing_file() {
+        let path = tmp_path("indent-missing.txt");
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        assert!(dispatch("indent", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn join_inner_join_default_whitespace() {
+        let a = tmp_path("join-a.txt");
+        let b = tmp_path("join-b.txt");
+        let _ca = Cleanup(a.clone());
+        let _cb = Cleanup(b.clone());
+        std::fs::write(&a, "1 alice\n2 bob\n3 carol\n").unwrap();
+        std::fs::write(&b, "2 dev\n1 admin\n4 ghost\n").unwrap();
+        let args = json!({
+            "path_a": a.to_str().unwrap(),
+            "path_b": b.to_str().unwrap()
+        })
+        .to_string();
+        let out = dispatch("join", &args).await.unwrap();
+        // key 1 and key 2 match; order follows file A.
+        assert_eq!(out, "1 alice admin\n2 bob dev");
+    }
+
+    #[tokio::test]
+    async fn join_custom_field_and_delimiter() {
+        let a = tmp_path("join-a2.csv");
+        let b = tmp_path("join-b2.csv");
+        let _ca = Cleanup(a.clone());
+        let _cb = Cleanup(b.clone());
+        std::fs::write(&a, "alice,1\nbob,2\n").unwrap();
+        std::fs::write(&b, "1,admin\n2,dev\n").unwrap();
+        let args = json!({
+            "path_a": a.to_str().unwrap(),
+            "path_b": b.to_str().unwrap(),
+            "field_a": 2,
+            "field_b": 1,
+            "delimiter": ","
+        })
+        .to_string();
+        let out = dispatch("join", &args).await.unwrap();
+        assert_eq!(out, "1,alice,admin\n2,bob,dev");
+    }
+
+    #[tokio::test]
+    async fn join_no_matches_reports() {
+        let a = tmp_path("join-a3.txt");
+        let b = tmp_path("join-b3.txt");
+        let _ca = Cleanup(a.clone());
+        let _cb = Cleanup(b.clone());
+        std::fs::write(&a, "1 x\n").unwrap();
+        std::fs::write(&b, "2 y\n").unwrap();
+        let args = json!({
+            "path_a": a.to_str().unwrap(),
+            "path_b": b.to_str().unwrap()
+        })
+        .to_string();
+        assert_eq!(dispatch("join", &args).await.unwrap(), "(no matching keys)");
+    }
+
+    #[tokio::test]
+    async fn join_rejects_multichar_delimiter() {
+        let a = tmp_path("join-a4.txt");
+        let b = tmp_path("join-b4.txt");
+        let _ca = Cleanup(a.clone());
+        let _cb = Cleanup(b.clone());
+        std::fs::write(&a, "1 x\n").unwrap();
+        std::fs::write(&b, "1 y\n").unwrap();
+        let args = json!({
+            "path_a": a.to_str().unwrap(),
+            "path_b": b.to_str().unwrap(),
+            "delimiter": "::"
+        })
+        .to_string();
+        assert!(dispatch("join", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn join_errors_on_missing_file() {
+        let b = tmp_path("join-b5.txt");
+        let _cb = Cleanup(b.clone());
+        std::fs::write(&b, "1 y\n").unwrap();
+        let args = json!({
+            "path_a": "/no/such/join/file/a.txt",
+            "path_b": b.to_str().unwrap()
+        })
+        .to_string();
+        assert!(dispatch("join", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn squeeze_blank_collapses_runs_and_errors() {
+        // Runs of >=2 blank lines collapse to one; single blanks untouched.
+        let path = tmp_path("squeeze.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "a\n\n\n\nb\n\nc\n").unwrap();
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        assert_eq!(
+            dispatch("squeeze_blank", &args).await.unwrap(),
+            "a\n\nb\n\nc\n"
+        );
+
+        // No blank runs: content is returned unchanged, trailing newline kept.
+        let path2 = tmp_path("squeeze2.txt");
+        let _c2 = Cleanup(path2.clone());
+        std::fs::write(&path2, "one\ntwo\nthree\n").unwrap();
+        let args2 = json!({ "path": path2.to_str().unwrap() }).to_string();
+        assert_eq!(
+            dispatch("squeeze_blank", &args2).await.unwrap(),
+            "one\ntwo\nthree\n"
+        );
+
+        // CRLF blank runs collapse; whitespace-only lines are NOT blank.
+        let path3 = tmp_path("squeeze3.txt");
+        let _c3 = Cleanup(path3.clone());
+        std::fs::write(&path3, "x\r\n\r\n\r\ny\n \n \nz").unwrap();
+        let args3 = json!({ "path": path3.to_str().unwrap() }).to_string();
+        assert_eq!(
+            dispatch("squeeze_blank", &args3).await.unwrap(),
+            "x\r\n\r\ny\n \n \nz"
+        );
+
+        // Missing file errors.
+        let missing = tmp_path("squeeze-missing.txt");
+        let args_err = json!({ "path": missing.to_str().unwrap() }).to_string();
+        assert!(dispatch("squeeze_blank", &args_err).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn reflow_wraps_paragraphs_and_defaults_to_80() {
+        // Greedy wrap at an explicit small width.
+        let a = json!({ "text": "one two three four five", "width": 9 }).to_string();
+        assert_eq!(
+            dispatch("reflow", &a).await.unwrap(),
+            "one two\nthree\nfour five"
+        );
+        // Blank line separates paragraphs; each wrapped independently.
+        let b = json!({ "text": "aa bb cc\n\ndd ee ff", "width": 5 }).to_string();
+        assert_eq!(
+            dispatch("reflow", &b).await.unwrap(),
+            "aa bb\ncc\n\ndd ee\nff"
+        );
+        // A word longer than width sits alone, unbroken.
+        let c = json!({ "text": "hi supercalifragilistic ok", "width": 6 }).to_string();
+        assert_eq!(
+            dispatch("reflow", &c).await.unwrap(),
+            "hi\nsupercalifragilistic\nok"
+        );
+        // Default width of 80 leaves a short line untouched.
+        let d = json!({ "text": "short line stays" }).to_string();
+        assert_eq!(dispatch("reflow", &d).await.unwrap(), "short line stays");
+        // width 0 is rejected.
+        let e = json!({ "text": "x", "width": 0 }).to_string();
+        assert!(dispatch("reflow", &e).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn trim_both_sides_per_line() {
+        let args = json!({ "data": "  a  \n\t b\t\n  c  " }).to_string();
+        assert_eq!(dispatch("trim", &args).await.unwrap(), "a\nb\nc");
+    }
+
+    #[tokio::test]
+    async fn trim_leading_only() {
+        let args = json!({ "data": "  x  ", "mode": "leading" }).to_string();
+        assert_eq!(dispatch("trim", &args).await.unwrap(), "x  ");
+    }
+
+    #[tokio::test]
+    async fn trim_trailing_only() {
+        let args = json!({ "data": "  x  ", "mode": "trailing" }).to_string();
+        assert_eq!(dispatch("trim", &args).await.unwrap(), "  x");
+    }
+
+    #[tokio::test]
+    async fn trim_preserves_trailing_newline() {
+        let args = json!({ "data": "  a  \n" }).to_string();
+        assert_eq!(dispatch("trim", &args).await.unwrap(), "a\n");
+    }
+
+    #[tokio::test]
+    async fn trim_normalize_eol_converts_crlf() {
+        let args = json!({ "data": "  a  \r\n  b  ", "normalize_eol": true }).to_string();
+        assert_eq!(dispatch("trim", &args).await.unwrap(), "a\nb");
+    }
+
+    #[tokio::test]
+    async fn trim_keeps_crlf_without_normalize() {
+        let args = json!({ "data": "  a  \r\n" }).to_string();
+        assert_eq!(dispatch("trim", &args).await.unwrap(), "a\r\n");
+    }
+
+    #[tokio::test]
+    async fn trim_rejects_invalid_mode() {
+        let args = json!({ "data": "x", "mode": "middle" }).to_string();
+        assert!(dispatch("trim", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn crc32c_matches_canonical_check_value() {
+        let out = dispatch("crc32c", &json!({ "data": "123456789" }).to_string())
+            .await
+            .unwrap();
+        assert!(out.starts_with("0xe3069283"), "{out}");
+        let both = dispatch("crc32c", &json!({ "data": "x", "path": "x" }).to_string()).await;
+        assert!(both.is_err());
+    }
+
+    #[tokio::test]
+    async fn adler32_matches_canonical_check_value() {
+        // Adler-32("123456789") == 0x091E01DE == 152961502
+        let out = dispatch("adler32", &json!({ "data": "123456789" }).to_string())
+            .await
+            .unwrap();
+        assert_eq!(out, "0x091e01de 152961502", "{out}");
+        // empty input == 0x00000001
+        let empty = dispatch("adler32", &json!({ "data": "" }).to_string())
+            .await
+            .unwrap();
+        assert_eq!(empty, "0x00000001 1", "{empty}");
+        // "Wikipedia" == 0x11E60398
+        let wiki = dispatch("adler32", &json!({ "data": "Wikipedia" }).to_string())
+            .await
+            .unwrap();
+        assert!(wiki.starts_with("0x11e60398"), "{wiki}");
+        // exactly-one enforcement
+        let both = dispatch("adler32", &json!({ "data": "x", "path": "x" }).to_string()).await;
+        assert!(both.is_err());
+    }
+
+    #[tokio::test]
+    async fn crc16_variant_check_values() {
+        // Canonical check values for the ASCII string "123456789".
+        let ccitt = dispatch("crc16", &json!({ "data": "123456789" }).to_string())
+            .await
+            .unwrap();
+        assert!(ccitt.starts_with("0x29b1"), "{ccitt}");
+
+        let xmodem = dispatch(
+            "crc16",
+            &json!({ "data": "123456789", "variant": "xmodem" }).to_string(),
+        )
+        .await
+        .unwrap();
+        assert!(xmodem.starts_with("0x31c3"), "{xmodem}");
+
+        let modbus = dispatch(
+            "crc16",
+            &json!({ "data": "123456789", "variant": "modbus" }).to_string(),
+        )
+        .await
+        .unwrap();
+        assert!(modbus.starts_with("0x4b37"), "{modbus}");
+
+        let ibm = dispatch(
+            "crc16",
+            &json!({ "data": "123456789", "variant": "ibm" }).to_string(),
+        )
+        .await
+        .unwrap();
+        assert!(ibm.starts_with("0xbb3d"), "{ibm}");
+
+        // trailing decimal is present and matches the hex
+        assert_eq!(ccitt, "0x29b1 10673");
+    }
+
+    #[tokio::test]
+    async fn crc16_arg_errors() {
+        let both = dispatch("crc16", &json!({ "data": "x", "path": "x" }).to_string()).await;
+        assert!(both.is_err());
+        let bad = dispatch(
+            "crc16",
+            &json!({ "data": "x", "variant": "nope" }).to_string(),
+        )
+        .await;
+        assert!(bad.is_err());
+    }
+
+    #[tokio::test]
+    async fn base64url_round_trips_and_uses_urlsafe_alphabet() {
+        // 0xfb 0xff encodes to "-_" in the URL-safe alphabet ("+/" standard).
+        let enc = json!({ "data": "\u{00fb}\u{00ff}" }).to_string();
+        // Note: the above is UTF-8; use raw bytes via a known vector instead.
+        let _ = enc;
+        // "hello" -> "aGVsbG8" (padding stripped by default).
+        let e = json!({ "data": "hello" }).to_string();
+        assert_eq!(dispatch("base64url", &e).await.unwrap(), "aGVsbG8");
+        // pad: true keeps the '=' padding.
+        let ep = json!({ "data": "hello", "pad": true }).to_string();
+        assert_eq!(dispatch("base64url", &ep).await.unwrap(), "aGVsbG8=");
+        // Decode tolerates missing padding.
+        let d = json!({ "data": "aGVsbG8", "decode": true }).to_string();
+        assert_eq!(dispatch("base64url", &d).await.unwrap(), "hello");
+        // Decode also accepts padded input.
+        let dp = json!({ "data": "aGVsbG8=", "decode": true }).to_string();
+        assert_eq!(dispatch("base64url", &dp).await.unwrap(), "hello");
+        // A payload whose standard base64 contains '+'/'/' must use the
+        // url-safe '-'/'_' instead, and still round-trip back to the input.
+        let src = String::from_utf8_lossy(&[0xff, 0xe0]).into_owned();
+        let enc2 = dispatch("base64url", &json!({ "data": src }).to_string())
+            .await
+            .unwrap();
+        assert!(!enc2.contains('+') && !enc2.contains('/'), "{enc2}");
+        let dec2 = dispatch(
+            "base64url",
+            &json!({ "data": enc2, "decode": true }).to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(dec2, src);
+        // Invalid input errors out ('*' is in no base64 alphabet).
+        let bad = json!({ "data": "not*base64", "decode": true }).to_string();
+        assert!(dispatch("base64url", &bad).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn base85_ascii85_round_trips_and_matches_known_vectors() {
+        // Classic Wikipedia vectors.
+        let enc = json!({ "data": "Man " }).to_string();
+        assert_eq!(dispatch("base85", &enc).await.unwrap(), "9jqo^");
+        let enc2 = json!({ "data": "sure." }).to_string();
+        assert_eq!(dispatch("base85", &enc2).await.unwrap(), "F*2M7/c");
+        // Round-trip a partial group.
+        let dec = json!({ "data": "9jqo^", "decode": true }).to_string();
+        assert_eq!(dispatch("base85", &dec).await.unwrap(), "Man ");
+        // `z` shorthand for an all-zero group, plus Adobe <~ ~> delimiters.
+        let adobe = json!({ "data": "<~F*2M7/c~>", "decode": true }).to_string();
+        assert_eq!(dispatch("base85", &adobe).await.unwrap(), "sure.");
+        // Invalid character and dangling-single-char errors.
+        let bad = json!({ "data": "9jq~", "decode": true }).to_string();
+        assert!(dispatch("base85", &bad).await.is_err());
+        let dangling = json!({ "data": "9jqo^!", "decode": true }).to_string();
+        assert!(dispatch("base85", &dangling).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn base85_z85_round_trips_and_enforces_length() {
+        // Round-trip valid UTF-8 (8 bytes = two 4-byte groups) through z85.
+        let enc = dispatch(
+            "base85",
+            &json!({ "data": "12345678", "variant": "z85" }).to_string(),
+        )
+        .await
+        .unwrap();
+        let dec = dispatch(
+            "base85",
+            &json!({ "data": enc, "decode": true, "variant": "z85" }).to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(dec, "12345678");
+        // Encode input not a multiple of 4 bytes -> error.
+        assert!(dispatch(
+            "base85",
+            &json!({ "data": "abc", "variant": "z85" }).to_string()
+        )
+        .await
+        .is_err());
+        // Decode input not a multiple of 5 chars -> error.
+        assert!(dispatch(
+            "base85",
+            &json!({ "data": "Hell", "decode": true, "variant": "z85" }).to_string()
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn rot13_transforms_letters_and_is_self_inverse() {
+        let args = json!({ "data": "Hello, World! 123" }).to_string();
+        let encoded = dispatch("rot13", &args).await.unwrap();
+        assert_eq!(encoded, "Uryyb, Jbeyq! 123");
+
+        // ROT13 is self-inverse: applying it again restores the original.
+        let round = json!({ "data": encoded }).to_string();
+        assert_eq!(
+            dispatch("rot13", &round).await.unwrap(),
+            "Hello, World! 123"
+        );
+    }
+
+    #[tokio::test]
+    async fn rot13_wraps_within_case() {
+        let args = json!({ "data": "abcXYZ" }).to_string();
+        assert_eq!(dispatch("rot13", &args).await.unwrap(), "nopKLM");
+    }
+
+    #[tokio::test]
+    async fn json_validate_accepts_valid_object() {
+        let args = json!({ "data": "{\"a\": 1, \"b\": [true, null]}" }).to_string();
+        let out = dispatch("json_validate", &args).await.unwrap();
+        assert_eq!(out, "valid: top-level object");
+    }
+
+    #[tokio::test]
+    async fn json_validate_reports_top_level_kind() {
+        let args = json!({ "data": "[1, 2, 3]" }).to_string();
+        let out = dispatch("json_validate", &args).await.unwrap();
+        assert_eq!(out, "valid: top-level array");
+    }
+
+    #[tokio::test]
+    async fn json_validate_reports_error_position() {
+        let args = json!({ "data": "{\n  \"a\": ,\n}" }).to_string();
+        let out = dispatch("json_validate", &args).await.unwrap();
+        assert!(out.starts_with("invalid:"), "got: {out}");
+        assert!(out.contains("line 2"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn json_validate_reads_from_file() {
+        let path = tmp_path("json-validate.json");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "{\"ok\": true}").unwrap();
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        let out = dispatch("json_validate", &args).await.unwrap();
+        assert_eq!(out, "valid: top-level object");
+    }
+
+    #[tokio::test]
+    async fn json_validate_requires_exactly_one_input() {
+        let both = json!({ "path": "x", "data": "1" }).to_string();
+        assert!(dispatch("json_validate", &both).await.is_err());
+        let neither = json!({}).to_string();
+        assert!(dispatch("json_validate", &neither).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn json_format_pretty_and_minify() {
+        let pretty = json!({ "data": "{\"b\":2,\"a\":[1,2]}" }).to_string();
+        let out = dispatch("json_format", &pretty).await.unwrap();
+        assert!(out.contains("\n"));
+        assert!(out.contains("  \"b\": 2"));
+
+        let mini = json!({ "data": "{ \"a\" : 1 }", "minify": true }).to_string();
+        assert_eq!(dispatch("json_format", &mini).await.unwrap(), "{\"a\":1}");
+    }
+
+    #[tokio::test]
+    async fn json_format_from_file() {
+        let path = tmp_path("fmt.json");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, r#"{"x":[1,2]}"#).unwrap();
+        let args = json!({ "path": path.to_str().unwrap(), "minify": true }).to_string();
+        assert_eq!(
+            dispatch("json_format", &args).await.unwrap(),
+            "{\"x\":[1,2]}"
+        );
+    }
+
+    #[tokio::test]
+    async fn json_format_errors_on_invalid_and_ambiguous_input() {
+        let bad = json!({ "data": "{not json" }).to_string();
+        assert!(dispatch("json_format", &bad).await.is_err());
+        let both = json!({ "path": "x", "data": "{}" }).to_string();
+        assert!(dispatch("json_format", &both).await.is_err());
+        let neither = json!({ "minify": true }).to_string();
+        assert!(dispatch("json_format", &neither).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn ndjson_query_filters_projects_and_reports_errors() {
+        let path = tmp_path("query.jsonl");
+        let _c = Cleanup(path.clone());
+        // Trailing newline proves blank-line skipping.
+        std::fs::write(
+            &path,
+            "{\"id\":1,\"status\":\"ok\"}\n{\"id\":2,\"status\":\"err\"}\n{\"id\":3,\"status\":\"ok\"}\n",
+        )
+        .unwrap();
+        let p = path.to_str().unwrap();
+
+        // equals on a string value, projecting a field.
+        let args =
+            json!({ "path": p, "filter_pointer": "/status", "equals": "ok", "pointer": "/id" })
+                .to_string();
+        assert_eq!(dispatch("ndjson_query", &args).await.unwrap(), "1\n3");
+
+        // No equals: keep every record whose filter_pointer resolves; emit whole.
+        let args = json!({ "path": p, "filter_pointer": "/status" }).to_string();
+        assert_eq!(
+            dispatch("ndjson_query", &args).await.unwrap(),
+            "{\"id\":1,\"status\":\"ok\"}\n{\"id\":2,\"status\":\"err\"}\n{\"id\":3,\"status\":\"ok\"}"
+        );
+
+        // filter_pointer that resolves nowhere drops every record -> empty.
+        let args = json!({ "path": p, "filter_pointer": "/missing" }).to_string();
+        assert_eq!(dispatch("ndjson_query", &args).await.unwrap(), "");
+
+        // equals matches a numeric value via its compact JSON form.
+        let args =
+            json!({ "path": p, "filter_pointer": "/id", "equals": "2", "pointer": "/status" })
+                .to_string();
+        assert_eq!(dispatch("ndjson_query", &args).await.unwrap(), "\"err\"");
+
+        // A kept record missing the projection pointer surfaces the line number.
+        let args =
+            json!({ "path": p, "filter_pointer": "/status", "equals": "err", "pointer": "/nope" })
+                .to_string();
+        let err = dispatch("ndjson_query", &args)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("line 2"), "got: {err}");
+
+        // Malformed line surfaces the line number.
+        let bad = tmp_path("query-bad.jsonl");
+        let _cb = Cleanup(bad.clone());
+        std::fs::write(&bad, "{\"a\":1}\nnot json\n").unwrap();
+        let args = json!({ "path": bad.to_str().unwrap(), "filter_pointer": "/a" }).to_string();
+        let err = dispatch("ndjson_query", &args)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("line 2"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn properties_to_json_parses_separators_escapes_and_continuations() {
+        let path = tmp_path("app.properties");
+        let _c = Cleanup(path.clone());
+        std::fs::write(
+            &path,
+            "# a comment\n! also a comment\n\
+             key1 = value1\n\
+             key2:value2\n\
+             key3 value3\n\
+             url = http\\://example.com\n\
+             multi = one \\\n   two\n\
+             tab = a\\tb\n\
+             uni = \\u0041\\u0042\n\
+             novalue\n\
+             dup = first\n\
+             dup = second\n\
+             a\\=b = literal\n",
+        )
+        .unwrap();
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        let out = dispatch("properties_to_json", &args).await.unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["key1"], "value1");
+        assert_eq!(v["key2"], "value2");
+        // whitespace separator
+        assert_eq!(v["key3"], "value3");
+        // escaped `:` inside the value is a literal colon, not a separator
+        assert_eq!(v["url"], "http://example.com");
+        // continuation folds and strips the leading whitespace of line 2
+        assert_eq!(v["multi"], "one two");
+        assert_eq!(v["tab"], "a\tb");
+        assert_eq!(v["uni"], "AB");
+        // key with no separator -> empty value
+        assert_eq!(v["novalue"], "");
+        // last duplicate wins
+        assert_eq!(v["dup"], "second");
+        // escaped `=` in the key becomes part of the key
+        assert_eq!(v["a=b"], "literal");
+    }
+
+    #[tokio::test]
+    async fn properties_to_json_data_arg_and_input_errors() {
+        // inline data path
+        let args = json!({ "data": "x:1\ny=2" }).to_string();
+        let out = dispatch("properties_to_json", &args).await.unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["x"], "1");
+        assert_eq!(v["y"], "2");
+
+        // neither path nor data -> error
+        assert!(dispatch("properties_to_json", &json!({}).to_string())
+            .await
+            .is_err());
+        // both -> error
+        let both = json!({ "path": "p", "data": "d" }).to_string();
+        assert!(dispatch("properties_to_json", &both).await.is_err());
+        // missing file -> error
+        let missing = tmp_path("no-such.properties");
+        let margs = json!({ "path": missing.to_str().unwrap() }).to_string();
+        assert!(dispatch("properties_to_json", &margs).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn html_to_text_data_strips_and_decodes() {
+        let out = dispatch(
+            "html_to_text",
+            &json!({ "data": "<p>Hello&nbsp;<b>World</b> &amp; &lt;you&gt;</p>" }).to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out, "Hello World & <you>");
+    }
+
+    #[tokio::test]
+    async fn html_to_text_drops_script_and_style() {
+        let out = dispatch(
+            "html_to_text",
+            &json!({ "data": "<style>p{color:red}</style><div>keep</div><script>var x=1;</script>me" }).to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out, "keep me");
+    }
+
+    #[tokio::test]
+    async fn html_to_text_numeric_entities() {
+        let out = dispatch(
+            "html_to_text",
+            &json!({ "data": "A&#66;&#x43;" }).to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out, "ABC");
+    }
+
+    #[tokio::test]
+    async fn html_to_text_reads_file() {
+        let p = tmp_path("h2t.html");
+        std::fs::write(&p, "<h1>Title</h1><p>body   text</p>").unwrap();
+        let _c = Cleanup(p.clone());
+        let out = dispatch(
+            "html_to_text",
+            &json!({ "path": p.to_str().unwrap() }).to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out, "Title body text");
+        let _ = _c;
+    }
+
+    #[tokio::test]
+    async fn html_to_text_requires_exactly_one_input() {
+        let err = dispatch("html_to_text", &json!({}).to_string())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("exactly one"));
+    }
+
+    #[tokio::test]
+    async fn json_keys_lists_all_pointer_paths() {
+        let data = json!({ "a": { "b": 1 }, "c": [10, 20] }).to_string();
+        let args = json!({ "data": data }).to_string();
+        let out = dispatch("json_keys", &args).await.unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        assert!(lines.contains(&"(root)"));
+        assert!(lines.contains(&"/a"));
+        assert!(lines.contains(&"/a/b"));
+        assert!(lines.contains(&"/c"));
+        assert!(lines.contains(&"/c/0"));
+        assert!(lines.contains(&"/c/1"));
+        // sorted output
+        let mut sorted = lines.clone();
+        sorted.sort();
+        assert_eq!(lines, sorted);
+    }
+
+    #[tokio::test]
+    async fn json_keys_leaves_only_skips_containers() {
+        let data = json!({ "a": { "b": 1 }, "c": [10, 20] }).to_string();
+        let args = json!({ "data": data, "leaves_only": true }).to_string();
+        let out = dispatch("json_keys", &args).await.unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines, vec!["/a/b", "/c/0", "/c/1"]);
+    }
+
+    #[tokio::test]
+    async fn json_keys_escapes_special_chars() {
+        let data = json!({ "a/b": 1, "m~n": 2 }).to_string();
+        let args = json!({ "data": data, "leaves_only": true }).to_string();
+        let out = dispatch("json_keys", &args).await.unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        assert!(lines.contains(&"/a~1b"));
+        assert!(lines.contains(&"/m~0n"));
+    }
+
+    #[tokio::test]
+    async fn json_keys_root_scalar_and_empty() {
+        let out = dispatch("json_keys", &json!({ "data": "42" }).to_string())
+            .await
+            .unwrap();
+        assert_eq!(out, "(root)");
+        let out = dispatch("json_keys", &json!({ "data": "{}" }).to_string())
+            .await
+            .unwrap();
+        assert_eq!(out, "(root)");
+    }
+
+    #[tokio::test]
+    async fn json_keys_reads_from_file() {
+        let path = tmp_path("json_keys.json");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, r#"{"x": true}"#).unwrap();
+        let args = json!({ "path": path.to_str().unwrap(), "leaves_only": true }).to_string();
+        let out = dispatch("json_keys", &args).await.unwrap();
+        assert_eq!(out, "/x");
+    }
+
+    #[tokio::test]
+    async fn json_keys_requires_exactly_one_input() {
+        assert!(dispatch("json_keys", &json!({}).to_string()).await.is_err());
+        assert!(dispatch(
+            "json_keys",
+            &json!({ "path": "x", "data": "{}" }).to_string()
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn json_keys_errors_on_bad_json() {
+        let args = json!({ "data": "{not json" }).to_string();
+        assert!(dispatch("json_keys", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn json_flatten_flattens_nested_object() {
+        let args = json!({ "data": r#"{"a":{"b":1,"c":[10,20]}}"# }).to_string();
+        let out = dispatch("json_flatten", &args).await.unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["a.b"], json!(1));
+        assert_eq!(v["a.c.0"], json!(10));
+        assert_eq!(v["a.c.1"], json!(20));
+    }
+
+    #[tokio::test]
+    async fn json_flatten_round_trips_via_unflatten() {
+        let original = r#"{"a":{"b":1,"c":[10,20]},"d":"x"}"#;
+        let flat = dispatch("json_flatten", &json!({ "data": original }).to_string())
+            .await
+            .unwrap();
+        let back = dispatch(
+            "json_flatten",
+            &json!({ "data": flat, "unflatten": true }).to_string(),
+        )
+        .await
+        .unwrap();
+        let got: Value = serde_json::from_str(&back).unwrap();
+        let want: Value = serde_json::from_str(original).unwrap();
+        assert_eq!(got, want);
+    }
+
+    #[tokio::test]
+    async fn json_flatten_custom_separator() {
+        let args = json!({ "data": r#"{"a":{"b":2}}"#, "separator": "/" }).to_string();
+        let out = dispatch("json_flatten", &args).await.unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["a/b"], json!(2));
+    }
+
+    #[tokio::test]
+    async fn json_flatten_reads_from_path() {
+        let path = tmp_path("flatten.json");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, r#"{"x":{"y":true}}"#).unwrap();
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        let out = dispatch("json_flatten", &args).await.unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["x.y"], json!(true));
+    }
+
+    #[tokio::test]
+    async fn json_flatten_requires_exactly_one_input() {
+        let both = json!({ "path": "/tmp/x", "data": "{}" }).to_string();
+        assert!(dispatch("json_flatten", &both).await.is_err());
+        let neither = json!({}).to_string();
+        assert!(dispatch("json_flatten", &neither).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn json_flatten_rejects_empty_separator() {
+        let args = json!({ "data": "{}", "separator": "" }).to_string();
+        assert!(dispatch("json_flatten", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn json_flatten_unflatten_requires_object() {
+        let args = json!({ "data": "[1,2,3]", "unflatten": true }).to_string();
+        assert!(dispatch("json_flatten", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn unicode_escape_round_trips_and_handles_surrogates() {
+        // Default \uXXXX style: ASCII passes through, BMP char escaped.
+        let enc = json!({ "data": "café" }).to_string();
+        assert_eq!(
+            dispatch("unicode_escape", &enc).await.unwrap(),
+            "caf\\u00e9"
+        );
+        // Astral codepoint -> surrogate pair (emoji U+1F600).
+        let enc2 = json!({ "data": "a😀" }).to_string();
+        assert_eq!(
+            dispatch("unicode_escape", &enc2).await.unwrap(),
+            "a\\ud83d\\ude00"
+        );
+        // Braced style emits the raw codepoint.
+        let enc3 = json!({ "data": "😀", "style": "braced" }).to_string();
+        assert_eq!(
+            dispatch("unicode_escape", &enc3).await.unwrap(),
+            "\\u{1f600}"
+        );
+        // Decode reverses \uXXXX + surrogate pairs.
+        let dec = json!({ "data": "caf\\u00e9 a\\ud83d\\ude00", "decode": true }).to_string();
+        assert_eq!(dispatch("unicode_escape", &dec).await.unwrap(), "café a😀");
+        // Decode also accepts \u{...}.
+        let dec2 = json!({ "data": "\\u{1f600}!", "decode": true }).to_string();
+        assert_eq!(dispatch("unicode_escape", &dec2).await.unwrap(), "😀!");
+        // Full round-trip.
+        let original = "héllo 世界 😀 plain";
+        let e = dispatch("unicode_escape", &json!({ "data": original }).to_string())
+            .await
+            .unwrap();
+        let d = dispatch(
+            "unicode_escape",
+            &json!({ "data": e, "decode": true }).to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(d, original);
+        // Error paths: unpaired high surrogate and unknown style.
+        assert!(dispatch(
+            "unicode_escape",
+            &json!({ "data": "\\ud83d", "decode": true }).to_string()
+        )
+        .await
+        .is_err());
+        assert!(dispatch(
+            "unicode_escape",
+            &json!({ "data": "x", "style": "bogus" }).to_string()
+        )
+        .await
+        .is_err());
+    }
+
+    #[test]
+    fn port_scan_ports_rejects_both_forms() {
+        let err = super::port_scan_ports(Some(vec![80]), Some(1), Some(10)).unwrap_err();
+        assert!(err.to_string().contains("not both"), "{err}");
+    }
+
+    #[test]
+    fn port_scan_ports_needs_some_input() {
+        let err = super::port_scan_ports(None, None, None).unwrap_err();
+        assert!(err.to_string().contains("provide"), "{err}");
+    }
+
+    #[test]
+    fn port_scan_ports_range_dedup_and_cap() {
+        let list = super::port_scan_ports(None, Some(20), Some(22)).unwrap();
+        assert_eq!(list, vec![20, 21, 22]);
+
+        let dup = super::port_scan_ports(Some(vec![80, 80, 22]), None, None).unwrap();
+        assert_eq!(dup, vec![22, 80]);
+
+        let too_wide = super::port_scan_ports(None, Some(1), Some(2000)).unwrap_err();
+        assert!(too_wide.to_string().contains("cap of 1024"), "{too_wide}");
+
+        let backwards = super::port_scan_ports(None, Some(90), Some(80)).unwrap_err();
+        assert!(backwards.to_string().contains("must be <="), "{backwards}");
+
+        let oob = super::port_scan_ports(Some(vec![0]), None, None).unwrap_err();
+        assert!(oob.to_string().contains("out of range"), "{oob}");
+    }
+
+    #[tokio::test]
+    async fn port_scan_finds_open_loopback_port() {
+        // Bind an ephemeral loopback port; scanning a small range that includes
+        // it should report it open and (almost certainly) an adjacent port closed.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let args = json!({ "host": "127.0.0.1", "ports": [port], "timeout_ms": 2000 }).to_string();
+        let out = dispatch("port_scan", &args).await.unwrap();
+        assert!(
+            out.contains(&port.to_string()),
+            "expected open port, got: {out}"
+        );
+        assert!(out.contains("1 open"), "expected summary, got: {out}");
+
+        drop(listener);
+        let out = dispatch("port_scan", &args).await.unwrap();
+        assert!(
+            out.contains("no open ports"),
+            "expected none after drop, got: {out}"
+        );
+    }
+
+    #[test]
+    fn public_ip_parse_accepts_v4_and_v6() {
+        assert_eq!(public_ip_parse("203.0.113.7").unwrap(), "203.0.113.7");
+        assert_eq!(public_ip_parse("  8.8.8.8\n").unwrap(), "8.8.8.8");
+        assert_eq!(
+            public_ip_parse("2001:db8::1").unwrap(),
+            "2001:db8::1"
+                .parse::<std::net::IpAddr>()
+                .unwrap()
+                .to_string()
+        );
+    }
+
+    #[test]
+    fn public_ip_parse_rejects_junk() {
+        assert!(public_ip_parse("").is_err());
+        assert!(public_ip_parse("not an ip").is_err());
+        assert!(public_ip_parse("<html>error</html>").is_err());
+        assert!(public_ip_parse("999.999.999.999").is_err());
+    }
+
+    #[test]
+    fn local_ip_normalize_target_forms() {
+        assert_eq!(local_ip_normalize_target("8.8.8.8:80"), "8.8.8.8:80");
+        assert_eq!(local_ip_normalize_target("8.8.8.8"), "8.8.8.8:80");
+        assert_eq!(local_ip_normalize_target("example.com"), "example.com:80");
+        assert_eq!(
+            local_ip_normalize_target("example.com:443"),
+            "example.com:443"
+        );
+        assert_eq!(local_ip_normalize_target("::1"), "[::1]:80");
+        assert_eq!(local_ip_normalize_target("[::1]:80"), "[::1]:80");
+        assert_eq!(
+            local_ip_normalize_target("[2001:db8::1]"),
+            "[2001:db8::1]:80"
+        );
+        assert_eq!(local_ip_normalize_target("  1.1.1.1  "), "1.1.1.1:80");
+    }
+
+    #[tokio::test]
+    async fn local_ip_returns_a_parseable_address() {
+        // Uses a UDP connect trick against a documentation IP range; no packets
+        // are sent, so this stays offline. On a host with no routable
+        // interface this may error — accept either a valid IP or a clean error.
+        let args = json!({ "target": "192.0.2.1:80" }).to_string();
+        match dispatch("local_ip", &args).await {
+            Ok(ip) => {
+                assert!(
+                    ip.parse::<std::net::IpAddr>().is_ok(),
+                    "expected a valid IP, got {ip:?}"
+                );
+            }
+            Err(e) => {
+                assert!(e.to_string().contains("could not determine local IP"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn local_ip_rejects_bad_target() {
+        let args = json!({ "target": "not a host at all !!!" }).to_string();
+        assert!(dispatch("local_ip", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn ip_geolocate_rejects_non_ip_before_network() {
+        // A bogus non-IP string is rejected at the validation seam, before any
+        // socket is opened — safe to run offline in CI.
+        let args = json!({ "ip": "not-an-ip/../evil" }).to_string();
+        let err = dispatch("ip_geolocate", &args)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not a valid IP address"), "got: {err}");
+    }
+
+    #[test]
+    fn ip_geolocate_validate_accepts_v4_and_v6() {
+        assert!(super::ip_geolocate_validate("8.8.8.8").is_ok());
+        assert!(super::ip_geolocate_validate("2606:4700:4700::1111").is_ok());
+        assert!(super::ip_geolocate_validate("999.1.1.1").is_err());
+        assert!(super::ip_geolocate_validate("example.com").is_err());
+    }
+
+    #[tokio::test]
+    async fn follow_redirects_offline_seam() {
+        // Invalid (non-http) URL is rejected before any network access.
+        let args = json!({ "url": "not a url" });
+        let err = dispatch("follow_redirects", &args.to_string())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("invalid url"), "got: {err}");
+
+        // Redirect classification seam: only the 3xx-with-body codes follow.
+        assert!(super::follow_redirects_is_redirect(301));
+        assert!(super::follow_redirects_is_redirect(302));
+        assert!(super::follow_redirects_is_redirect(303));
+        assert!(super::follow_redirects_is_redirect(307));
+        assert!(super::follow_redirects_is_redirect(308));
+        assert!(!super::follow_redirects_is_redirect(200));
+        assert!(!super::follow_redirects_is_redirect(304));
+        assert!(!super::follow_redirects_is_redirect(404));
+    }
+
+    #[tokio::test]
+    async fn http_form_post_files_require_multipart() {
+        // Attaching files without multipart is rejected pre-network — offline safe.
+        let args = json!({
+            "url": "http://example.invalid",
+            "fields": { "a": "1" },
+            "files": { "upload": "/tmp/whatever" }
+        });
+        let err = dispatch("http_form_post", &args.to_string())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("multipart"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn http_form_post_missing_upload_file_errors_offline() {
+        // A missing upload path fails at file-read time, before any network
+        // access, so this runs fully offline.
+        let args = json!({
+            "url": "http://example.invalid",
+            "fields": {},
+            "multipart": true,
+            "files": { "f": "/nonexistent/teleia/http_form_post/nope.bin" }
+        });
+        let err = dispatch("http_form_post", &args.to_string())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("reading upload file"), "got: {err}");
+    }
+
+    #[test]
+    fn http_form_post_urlencode_pure() {
+        let mut m = std::collections::BTreeMap::new();
+        m.insert("name".to_string(), "a b".to_string());
+        m.insert("q".to_string(), "x&y=z".to_string());
+        // BTreeMap iterates sorted, so ordering is deterministic.
+        let s = super::http_form_post_urlencode(&m);
+        assert_eq!(s, "name=a%20b&q=x%26y%3Dz");
+    }
+
+    #[test]
+    fn http_form_post_multipart_body_shape() {
+        let text = vec![("field".to_string(), "value".to_string())];
+        let files = vec![("f".to_string(), "up.txt".to_string(), b"DATA".to_vec())];
+        let body = super::http_form_post_multipart_body("BOUND", &text, &files);
+        let s = String::from_utf8(body).unwrap();
+        assert!(s.starts_with("--BOUND\r\n"), "got: {s}");
+        assert!(s.contains("Content-Disposition: form-data; name=\"field\"\r\n\r\nvalue\r\n"));
+        assert!(s.contains("name=\"f\"; filename=\"up.txt\""));
+        assert!(s.contains("\r\n\r\nDATA\r\n"));
+        assert!(s.ends_with("--BOUND--\r\n"), "got: {s}");
+    }
+
+    #[test]
+    fn mac_lookup_normalize_handles_all_formats() {
+        assert_eq!(mac_lookup_normalize("00:11:22:33:44:55").unwrap(), "001122");
+        assert_eq!(mac_lookup_normalize("00-11-22-33-44-55").unwrap(), "001122");
+        assert_eq!(mac_lookup_normalize("0011.2233.4455").unwrap(), "001122");
+        assert_eq!(mac_lookup_normalize("aabbcc").unwrap(), "AABBCC");
+    }
+
+    #[test]
+    fn mac_lookup_normalize_rejects_short_and_bad() {
+        assert!(mac_lookup_normalize("00:11").is_err());
+        assert!(mac_lookup_normalize("00:11:2g:33:44:55").is_err());
+    }
+
+    #[tokio::test]
+    async fn mac_lookup_errors_on_invalid_mac() {
+        let args = json!({ "mac": "xyz" }).to_string();
+        assert!(dispatch("mac_lookup", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn pid_returns_current_process_id() {
+        let out = dispatch("pid", &json!({}).to_string()).await.unwrap();
+        let parsed: u32 = out.trim().parse().expect("pid must be a decimal integer");
+        assert_eq!(parsed, std::process::id());
+        assert!(parsed > 0);
+    }
+
+    #[tokio::test]
+    async fn env_run_passes_env_to_child() {
+        // Cross-platform: `env` on unix, but we avoid depending on it by
+        // running the current test's platform-agnostic path only where
+        // possible. Use a program guaranteed present per-OS.
+        #[cfg(unix)]
+        {
+            let args = json!({
+                "command": "sh",
+                "args": ["-c", "printf %s \"$TELEIA_ENV_RUN\""],
+                "env": { "TELEIA_ENV_RUN": "hello" }
+            })
+            .to_string();
+            let out = dispatch("env_run", &args).await.unwrap();
+            assert_eq!(out, "hello");
+        }
+        #[cfg(windows)]
+        {
+            let args = json!({
+                "command": "cmd",
+                "args": ["/C", "echo %TELEIA_ENV_RUN%"],
+                "env": { "TELEIA_ENV_RUN": "hello" }
+            })
+            .to_string();
+            let out = dispatch("env_run", &args).await.unwrap();
+            assert!(out.contains("hello"));
+        }
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn env_run_clear_env_hides_parent_vars() {
+        std::env::set_var("TELEIA_ENV_RUN_PARENT", "leaked");
+        let args = json!({
+            "command": "sh",
+            "args": ["-c", "printf %s \"${TELEIA_ENV_RUN_PARENT:-empty}\""],
+            "clear_env": true,
+            "env": { "PATH": std::env::var("PATH").unwrap_or_default() }
+        })
+        .to_string();
+        let out = dispatch("env_run", &args).await.unwrap();
+        std::env::remove_var("TELEIA_ENV_RUN_PARENT");
+        assert_eq!(out, "empty");
+    }
+
+    #[tokio::test]
+    async fn env_run_rejects_empty_command() {
+        let args = json!({ "command": "" }).to_string();
+        assert!(dispatch("env_run", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn env_run_errors_on_missing_program() {
+        let args = json!({ "command": "teleia-no-such-binary-xyz" }).to_string();
+        assert!(dispatch("env_run", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn env_run_reports_nonzero_exit() {
+        let args = json!({
+            "command": "sh",
+            "args": ["-c", "exit 3"]
+        })
+        .to_string();
+        let out = dispatch("env_run", &args).await.unwrap();
+        assert!(out.contains("[exit 3]"));
+    }
+
+    #[tokio::test]
+    async fn git_branch_mutating_actions_require_name_and_reject_flags() {
+        // create/switch/delete all need `name`.
+        for action in ["create", "switch", "delete"] {
+            let missing = json!({ "action": action }).to_string();
+            assert!(dispatch("git_branch", &missing).await.is_err());
+            // a name that looks like a flag is rejected.
+            let flag = json!({ "action": action, "name": "--force" }).to_string();
+            assert!(dispatch("git_branch", &flag).await.is_err());
+        }
+        // unknown action fails to parse.
+        let bad = json!({ "action": "rename", "name": "x" }).to_string();
+        assert!(dispatch("git_branch", &bad).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn git_stash_rejects_bad_action_and_index() {
+        // Unknown action fails to deserialize.
+        assert!(
+            dispatch("git_stash", &json!({ "action": "apply" }).to_string())
+                .await
+                .is_err()
+        );
+        // Missing action is required.
+        assert!(dispatch("git_stash", &json!({}).to_string()).await.is_err());
+        // Negative index is not a u32.
+        assert!(dispatch(
+            "git_stash",
+            &json!({ "action": "drop", "index": -1 }).to_string()
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn git_remote_parses_verbose_output() {
+        // Pure parse helper: dedupes fetch/push pairs into name\turl (kind) lines,
+        // tolerates both tab- and space-separated fields, preserves order.
+        let raw = "origin\thttps://example.com/x.git (fetch)\n\
+                   origin\thttps://example.com/x.git (push)\n\
+                   upstream git@host:y.git (fetch)\n";
+        let lines = git_remote_parse(raw);
+        assert_eq!(
+            lines,
+            vec![
+                "origin\thttps://example.com/x.git (fetch)".to_string(),
+                "origin\thttps://example.com/x.git (push)".to_string(),
+                "upstream\tgit@host:y.git (fetch)".to_string(),
+            ]
+        );
+        // Empty input yields nothing.
+        assert!(git_remote_parse("\n  \n").is_empty());
+    }
+
+    #[tokio::test]
+    async fn git_remote_accepts_optional_verbose() {
+        // Arg parsing: verbose is optional and defaults to false; a bad type errors.
+        assert!(serde_json::from_value::<GitRemoteArgs>(json!({})).is_ok());
+        assert!(serde_json::from_value::<GitRemoteArgs>(json!({ "verbose": true })).is_ok());
+        assert!(serde_json::from_value::<GitRemoteArgs>(json!({ "verbose": "yes" })).is_err());
+    }
+
+    #[tokio::test]
+    async fn git_checkout_file_validates_args() {
+        // Empty paths is rejected.
+        let empty = json!({ "subcommand": "ignored", "paths": [] });
+        assert!(dispatch("git_checkout_file", &empty.to_string())
+            .await
+            .is_err());
+        let missing = json!({});
+        assert!(dispatch("git_checkout_file", &missing.to_string())
+            .await
+            .is_err());
+        // A ref that looks like a flag is rejected before shelling out.
+        let flag_ref = json!({ "paths": ["x"], "ref": "--help" }).to_string();
+        assert!(dispatch("git_checkout_file", &flag_ref).await.is_err());
+    }
+
+    #[test]
+    fn run_script_npm_has_detects_scripts() {
+        let pkg = r#"{ "name": "x", "scripts": { "build": "tsc", "test": "jest" } }"#;
+        assert!(super::run_script_npm_has(pkg, "build"));
+        assert!(super::run_script_npm_has(pkg, "test"));
+        assert!(!super::run_script_npm_has(pkg, "lint"));
+    }
+
+    #[test]
+    fn run_script_npm_has_handles_no_scripts_and_bad_json() {
+        assert!(!super::run_script_npm_has(r#"{ "name": "x" }"#, "build"));
+        assert!(!super::run_script_npm_has("not json", "build"));
+    }
+
+    #[test]
+    fn run_script_make_has_detects_targets() {
+        let mk = "build:\n\tgcc main.c\n\ntest: build\n\t./a.out\n# comment: not a target\n";
+        assert!(super::run_script_make_has(mk, "build"));
+        assert!(super::run_script_make_has(mk, "test"));
+        assert!(!super::run_script_make_has(mk, "install"));
+    }
+
+    #[test]
+    fn run_script_make_has_ignores_recipe_lines() {
+        // A tab-indented recipe line that contains a colon must not match.
+        let mk = "all:\n\techo one:two\n";
+        assert!(super::run_script_make_has(mk, "all"));
+        assert!(!super::run_script_make_has(mk, "echo one"));
+    }
+
+    #[tokio::test]
+    async fn run_script_errors_without_manifest() {
+        // Run from a directory guaranteed to have no package.json/Makefile.
+        let dir = tmp_path("run-script-empty");
+        std::fs::create_dir_all(&dir).unwrap();
+        struct DirCleanup(PathBuf);
+        impl Drop for DirCleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _c = DirCleanup(dir.clone());
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let result = dispatch("run_script", &json!({ "name": "build" }).to_string()).await;
+        std::env::set_current_dir(&prev).unwrap();
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn list_scripts_aggregates_entrypoints() {
+        let dir = tmp_path("list_scripts_dir");
+        std::fs::create_dir_all(dir.join("src").join("bin")).unwrap();
+        std::fs::write(
+            dir.join("package.json"),
+            r#"{"scripts":{"build":"tsc","test":"jest"}}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join("Makefile"), "all:\n\techo hi\nclean:\n\trm -f x\n").unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"p\"\n\n[[bin]]\nname = \"mybin\"\npath = \"src/main.rs\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("src").join("bin").join("extra.rs"), "fn main(){}").unwrap();
+
+        let args = json!({ "path": dir.to_str().unwrap() }).to_string();
+        let out = dispatch("list_scripts", &args).await.unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert!(out.contains("package.json scripts:"));
+        assert!(out.contains("build: tsc"));
+        assert!(out.contains("Makefile targets:"));
+        assert!(out.contains("all"));
+        assert!(out.contains("clean"));
+        assert!(out.contains("Cargo binaries:"));
+        assert!(out.contains("mybin"));
+        assert!(out.contains("extra"));
+    }
+
+    #[tokio::test]
+    async fn list_scripts_empty_dir_reports_none() {
+        let dir = tmp_path("list_scripts_empty");
+        std::fs::create_dir_all(&dir).unwrap();
+        let args = json!({ "path": dir.to_str().unwrap() }).to_string();
+        let out = dispatch("list_scripts", &args).await.unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(out.contains("no runnable entrypoints"));
+    }
+
+    #[tokio::test]
+    async fn list_scripts_errors_on_missing_dir() {
+        let dir = tmp_path("list_scripts_missing");
+        let args = json!({ "path": dir.to_str().unwrap() }).to_string();
+        assert!(dispatch("list_scripts", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn coverage_errors_on_unknown_extension() {
+        let args = json!({ "path": "foo.cobol" }).to_string();
+        assert!(dispatch("coverage", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn bench_tool_errors_on_unknown_extension() {
+        let args = json!({ "path": "foo.cobol" }).to_string();
+        assert!(dispatch("bench", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn bench_tool_errors_without_extension() {
+        let args = json!({ "path": "Makefile" }).to_string();
+        assert!(dispatch("bench", &args).await.is_err());
+    }
+
+    #[test]
+    fn bench_argv_builds_expected_argv() {
+        assert_eq!(
+            bench_argv(Some("rs"), None).unwrap(),
+            vec!["cargo", "bench"]
+        );
+        assert_eq!(
+            bench_argv(Some("rs"), Some("my_bench")).unwrap(),
+            vec!["cargo", "bench", "my_bench"]
+        );
+        assert_eq!(
+            bench_argv(Some("go"), None).unwrap(),
+            vec!["go", "test", "-bench=.", "./..."]
+        );
+        assert_eq!(
+            bench_argv(Some("go"), Some("BenchX")).unwrap(),
+            vec!["go", "test", "-bench=BenchX", "./..."]
+        );
+        assert_eq!(
+            bench_argv(Some("py"), Some("speed")).unwrap(),
+            vec!["pytest", "--benchmark-only", "-k", "speed"]
+        );
+        assert_eq!(
+            bench_argv(Some("tsx"), Some("render")).unwrap(),
+            vec!["npm", "run", "bench", "--", "render"]
+        );
+        assert!(bench_argv(Some("cobol"), None).is_none());
+        assert!(bench_argv(None, None).is_none());
+    }
+
+    #[tokio::test]
+    async fn build_tool_errors_on_unknown_extension() {
+        let args = json!({ "path": "foo.cobol" }).to_string();
+        assert!(dispatch("build", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn build_tool_errors_without_extension() {
+        let args = json!({ "path": "Makefile" }).to_string();
+        assert!(dispatch("build", &args).await.is_err());
+    }
+
+    #[test]
+    fn cargo_expand_argv_shapes() {
+        assert_eq!(cargo_expand_argv(None, false), vec!["expand".to_string()]);
+        assert_eq!(
+            cargo_expand_argv(Some("foo::bar"), false),
+            vec!["expand".to_string(), "foo::bar".to_string()]
+        );
+        assert_eq!(
+            cargo_expand_argv(None, true),
+            vec!["expand".to_string(), "--tests".to_string()]
+        );
+        assert_eq!(
+            cargo_expand_argv(Some("m::i"), true),
+            vec![
+                "expand".to_string(),
+                "--tests".to_string(),
+                "m::i".to_string()
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn clippy_fix_errors_on_unknown_extension() {
+        let args = json!({ "path": "/tmp/whatever.zzz" }).to_string();
+        assert!(dispatch("clippy_fix", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn clippy_fix_parses_allow_dirty_flag() {
+        // Pure arg-parse check: an unknown extension still errors, but this
+        // confirms the optional `allow_dirty` field deserializes without a path.
+        let args = json!({ "path": "x.css", "allow_dirty": false }).to_string();
+        assert!(dispatch("clippy_fix", &args).await.is_err());
+    }
+
+    #[test]
+    fn run_bin_argv_cargo_default() {
+        let dir = tmp_path("runbin-cargo");
+        std::fs::create_dir_all(&dir).unwrap();
+        let _c = CleanupDir(dir.clone());
+        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        let (runner, argv) = run_bin_argv(&dir, None, &["a".into(), "b".into()]).unwrap();
+        assert_eq!(runner, "cargo");
+        assert_eq!(argv, vec!["run", "--", "a", "b"]);
+    }
+
+    #[test]
+    fn run_bin_argv_cargo_named_bin_ok() {
+        let dir = tmp_path("runbin-cargo-named");
+        std::fs::create_dir_all(dir.join("src").join("bin")).unwrap();
+        let _c = CleanupDir(dir.clone());
+        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        std::fs::write(dir.join("src").join("bin").join("helper.rs"), "fn main(){}").unwrap();
+        let (runner, argv) = run_bin_argv(&dir, Some("helper"), &[]).unwrap();
+        assert_eq!(runner, "cargo");
+        assert_eq!(argv, vec!["run", "--bin", "helper", "--"]);
+    }
+
+    #[test]
+    fn run_bin_argv_cargo_named_bin_rejected() {
+        let dir = tmp_path("runbin-cargo-bad");
+        std::fs::create_dir_all(&dir).unwrap();
+        let _c = CleanupDir(dir.clone());
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"x\"\n\n[[bin]]\nname = \"real\"\npath = \"src/main.rs\"\n",
+        )
+        .unwrap();
+        let err = run_bin_argv(&dir, Some("nope"), &[])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("real"), "{err}");
+    }
+
+    #[test]
+    fn run_bin_argv_go() {
+        let dir = tmp_path("runbin-go");
+        std::fs::create_dir_all(&dir).unwrap();
+        let _c = CleanupDir(dir.clone());
+        std::fs::write(dir.join("go.mod"), "module x\n").unwrap();
+        let (runner, argv) = run_bin_argv(&dir, None, &["--flag".into()]).unwrap();
+        assert_eq!(runner, "go");
+        assert_eq!(argv, vec!["run", ".", "--flag"]);
+    }
+
+    #[test]
+    fn run_bin_argv_node_main() {
+        let dir = tmp_path("runbin-node");
+        std::fs::create_dir_all(&dir).unwrap();
+        let _c = CleanupDir(dir.clone());
+        std::fs::write(dir.join("package.json"), "{\"main\": \"index.js\"}").unwrap();
+        let (runner, argv) = run_bin_argv(&dir, None, &["x".into()]).unwrap();
+        assert_eq!(runner, "node");
+        assert_eq!(argv, vec!["index.js", "x"]);
+    }
+
+    #[test]
+    fn run_bin_argv_node_no_main_errors() {
+        let dir = tmp_path("runbin-node-nomain");
+        std::fs::create_dir_all(&dir).unwrap();
+        let _c = CleanupDir(dir.clone());
+        std::fs::write(dir.join("package.json"), "{\"name\": \"x\"}").unwrap();
+        assert!(run_bin_argv(&dir, None, &[]).is_err());
+    }
+
+    #[test]
+    fn run_bin_argv_no_entrypoint_errors() {
+        let dir = tmp_path("runbin-empty");
+        std::fs::create_dir_all(&dir).unwrap();
+        let _c = CleanupDir(dir.clone());
+        assert!(run_bin_argv(&dir, None, &[]).is_err());
+    }
+
+    #[tokio::test]
+    async fn run_bin_dispatch_errors_without_entrypoint() {
+        let dir = tmp_path("runbin-dispatch-empty");
+        std::fs::create_dir_all(&dir).unwrap();
+        let _c = CleanupDir(dir.clone());
+        let args = json!({ "dir": dir.to_str().unwrap() }).to_string();
+        assert!(dispatch("run_bin", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn changelog_gen_rejects_flag_like_refs() {
+        assert!(
+            dispatch("changelog_gen", &json!({ "to": "--help" }).to_string())
+                .await
+                .is_err()
+        );
+        assert!(dispatch(
+            "changelog_gen",
+            &json!({ "from": "-x", "to": "HEAD" }).to_string()
+        )
+        .await
+        .is_err());
+    }
+
+    #[test]
+    fn changelog_gen_group_buckets_conventional_commits() {
+        let log = "feat: add login (a1b2c3d)\n\
+                   fix(parser): handle empty input (e4f5g6h)\n\
+                   feat!: breaking new api (99aa88b)\n\
+                   docs: update readme (deadbee)\n\
+                   random unstructured message (0000000)";
+        let md = changelog_gen_group(log);
+        assert!(md.starts_with("# Changelog\n"));
+        assert!(md.contains("## Features\n\n- add login (a1b2c3d)\n- breaking new api (99aa88b)\n"));
+        assert!(md.contains("## Bug Fixes\n\n- handle empty input (e4f5g6h)\n"));
+        assert!(md.contains("## Documentation\n\n- update readme (deadbee)\n"));
+        assert!(md.contains("## Other\n\n- random unstructured message (0000000)\n"));
+        // Features section precedes Bug Fixes in output order.
+        assert!(md.find("## Features").unwrap() < md.find("## Bug Fixes").unwrap());
+    }
+
+    #[test]
+    fn changelog_gen_group_handles_empty_log() {
+        assert_eq!(
+            changelog_gen_group("(no output)"),
+            "# Changelog\n\n(no commits)\n"
+        );
+        assert_eq!(changelog_gen_group(""), "# Changelog\n\n(no commits)\n");
+    }
+
+    #[tokio::test]
+    async fn git_grep_requires_nonempty_pattern() {
+        let empty = json!({ "pattern": "" }).to_string();
+        assert!(dispatch("git_grep", &empty).await.is_err());
+        let missing = json!({}).to_string();
+        assert!(dispatch("git_grep", &missing).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn git_grep_rejects_flaglike_ref_and_paths() {
+        let bad_ref = json!({ "pattern": "x", "ref": "--all" }).to_string();
+        assert!(dispatch("git_grep", &bad_ref).await.is_err());
+        let bad_path = json!({ "pattern": "x", "paths": ["-n"] }).to_string();
+        assert!(dispatch("git_grep", &bad_path).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn git_log_file_requires_path_and_rejects_dash() {
+        let missing = json!({}).to_string();
+        assert!(dispatch("git_log_file", &missing).await.is_err());
+        let dash = json!({ "path": "--all" }).to_string();
+        assert!(dispatch("git_log_file", &dash).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn cargo_add_requires_crate() {
+        // Missing the required `crate` field must fail at arg-parse time,
+        // before any `cargo` invocation or network access.
+        assert!(dispatch("cargo_add", &json!({ "dev": true }).to_string())
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn cargo_search_rejects_empty_query() {
+        let args = json!({ "query": "   " }).to_string();
+        assert!(dispatch("cargo_search", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn cargo_search_requires_query() {
+        let args = json!({ "limit": 5 }).to_string();
+        assert!(dispatch("cargo_search", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn make_target_requires_target_and_validates_dir() {
+        // Missing required `target` argument -> parse error.
+        assert!(dispatch("make_target", &json!({}).to_string())
+            .await
+            .is_err());
+
+        // Nonexistent `dir` fails before ever spawning make (offline path).
+        let missing = tmp_path("make-no-such-dir");
+        let args = json!({ "target": "build", "dir": missing.to_str().unwrap() }).to_string();
+        assert!(dispatch("make_target", &args).await.is_err());
+
+        // A path that exists but is a file, not a directory, is rejected.
+        let file = tmp_path("make-not-a-dir.txt");
+        let _c = Cleanup(file.clone());
+        std::fs::write(&file, "x").unwrap();
+        let args = json!({ "target": "build", "dir": file.to_str().unwrap() }).to_string();
+        assert!(dispatch("make_target", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn git_apply_requires_patch_field() {
+        // Missing the required `patch` field must fail at arg parse,
+        // before any git subprocess is spawned. Runs offline.
+        let args = json!({ "check": true }).to_string();
+        assert!(dispatch("git_apply", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn git_apply_rejects_wrong_type() {
+        // `patch` must be a string; a number is a deserialize error.
+        let args = json!({ "patch": 42 }).to_string();
+        assert!(dispatch("git_apply", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn git_reset_rejects_paths_with_soft_or_hard() {
+        let _soft = json!({ "subcommand": "ignored", "mode": "soft", "paths": ["a.txt"] });
+        // note: git_reset ignores unknown fields; build args directly.
+        let soft = json!({ "mode": "soft", "paths": ["a.txt"] }).to_string();
+        let _ = soft;
+        let soft = json!({ "mode": "soft", "paths": ["a.txt"] }).to_string();
+        assert!(dispatch("git_reset", &soft).await.is_err());
+        let hard = json!({ "mode": "hard", "paths": ["a.txt"] }).to_string();
+        assert!(dispatch("git_reset", &hard).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn git_reset_rejects_flaglike_ref_and_path() {
+        let flag_ref = json!({ "ref": "--hard" }).to_string();
+        assert!(dispatch("git_reset", &flag_ref).await.is_err());
+        let flag_path = json!({ "paths": ["-rf"] }).to_string();
+        assert!(dispatch("git_reset", &flag_path).await.is_err());
+    }
+
+    #[test]
+    fn npm_install_argv_install_all() {
+        assert_eq!(npm_install_argv("npm", &[], false), vec!["install"]);
+        assert_eq!(npm_install_argv("pnpm", &[], true), vec!["install"]);
+    }
+
+    #[test]
+    fn npm_install_argv_add_packages_dev() {
+        let pkgs = vec!["left-pad".to_string()];
+        assert_eq!(
+            npm_install_argv("npm", &pkgs, true),
+            vec!["install", "--save-dev", "left-pad"]
+        );
+        assert_eq!(
+            npm_install_argv("yarn", &pkgs, true),
+            vec!["add", "--dev", "left-pad"]
+        );
+        assert_eq!(
+            npm_install_argv("pnpm", &pkgs, false),
+            vec!["add", "left-pad"]
+        );
+    }
+
+    #[test]
+    fn npm_install_manager_explicit_and_unknown() {
+        let dir = std::env::temp_dir();
+        assert_eq!(npm_install_manager(&dir, Some("yarn")).unwrap(), "yarn");
+        assert!(npm_install_manager(&dir, Some("bun")).is_err());
+    }
+
+    #[test]
+    fn npm_install_manager_detects_from_lockfile() {
+        let base = tmp_path("npm-install-detect");
+        std::fs::create_dir_all(&base).unwrap();
+        // No lockfile → npm.
+        assert_eq!(npm_install_manager(&base, Some("auto")).unwrap(), "npm");
+        std::fs::write(base.join("pnpm-lock.yaml"), "").unwrap();
+        assert_eq!(npm_install_manager(&base, None).unwrap(), "pnpm");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn npm_install_errors_on_missing_dir() {
+        let missing = tmp_path("npm-install-nope");
+        let args = json!({ "dir": missing.to_str().unwrap() }).to_string();
+        assert!(dispatch("npm_install", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn audit_errors_on_missing_dir() {
+        let missing = tmp_path("audit-nope-dir");
+        let args = json!({ "dir": missing.to_str().unwrap() }).to_string();
+        assert!(dispatch("audit", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn audit_auto_detect_fails_without_manifest() {
+        let dir = tmp_path("audit-empty-dir");
+        let _c = Cleanup(dir.clone());
+        std::fs::create_dir_all(&dir).unwrap();
+        // Empty dir with no manifest: auto detection must error rather than
+        // guessing an ecosystem.
+        let args = json!({ "dir": dir.to_str().unwrap(), "kind": "auto" }).to_string();
+        let err = dispatch("audit", &args).await.unwrap_err().to_string();
+        assert!(err.contains("could not detect ecosystem"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn audit_rejects_unknown_kind() {
+        let args = json!({ "kind": "gradle" }).to_string();
+        assert!(dispatch("audit", &args).await.is_err());
+    }
+
+    #[test]
+    fn audit_detect_picks_ecosystem_from_manifest() {
+        let dir = tmp_path("audit-detect-dir");
+        let _c = Cleanup(dir.clone());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Cargo.toml"), "[package]\n").unwrap();
+        assert!(audit_detect(&dir).is_ok());
+        std::fs::remove_file(dir.join("Cargo.toml")).unwrap();
+        std::fs::write(dir.join("package.json"), "{}").unwrap();
+        assert!(matches!(audit_detect(&dir), Ok(AuditKind::Npm)));
+    }
+
+    #[test]
+    fn git_status_json_parses_branch_ahead_behind() {
+        let mut buf: Vec<u8> = Vec::new();
+        buf.extend_from_slice(b"## main...origin/main [ahead 2, behind 1]");
+        buf.push(0);
+        buf.extend_from_slice(b"A  new.txt");
+        buf.push(0);
+        buf.extend_from_slice(b"R  renamed.txt");
+        buf.push(0);
+        buf.extend_from_slice(b"a.txt");
+        buf.push(0);
+        buf.extend_from_slice(b"?? u.txt");
+        buf.push(0);
+        let v = git_status_json_parse(&buf);
+        assert_eq!(v["branch"], "main");
+        assert_eq!(v["ahead"], 2);
+        assert_eq!(v["behind"], 1);
+        let e = v["entries"].as_array().unwrap();
+        assert_eq!(e.len(), 3);
+        assert_eq!(e[0]["x"], "A");
+        assert_eq!(e[0]["y"], " ");
+        assert_eq!(e[0]["path"], "new.txt");
+        assert_eq!(e[0]["orig_path"], Value::Null);
+        assert_eq!(e[1]["x"], "R");
+        assert_eq!(e[1]["path"], "renamed.txt");
+        assert_eq!(e[1]["orig_path"], "a.txt");
+        assert_eq!(e[2]["x"], "?");
+        assert_eq!(e[2]["orig_path"], Value::Null);
+    }
+
+    #[test]
+    fn git_status_json_parses_unborn_and_detached() {
+        let unborn = git_status_json_parse(b"## No commits yet on main\0");
+        assert_eq!(unborn["branch"], "main");
+        assert_eq!(unborn["ahead"], 0);
+        assert_eq!(unborn["behind"], 0);
+        assert_eq!(unborn["entries"].as_array().unwrap().len(), 0);
+
+        let detached = git_status_json_parse(b"## HEAD (no branch)\0");
+        assert_eq!(detached["branch"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn git_status_json_rejects_bad_args() {
+        let err = dispatch("git_status_json", &json!({ "dir": 5 }).to_string()).await;
+        assert!(err.is_err());
+    }
+
+    #[tokio::test]
+    async fn jwt_verify_hmac_accepts_and_rejects_hs256() {
+        // Classic jwt.io HS256 example, secret "your-256-bit-secret".
+        let token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+
+        let ok = dispatch(
+            "jwt_verify_hmac",
+            &json!({ "token": token, "secret": "your-256-bit-secret" }).to_string(),
+        )
+        .await
+        .unwrap();
+        let v: Value = serde_json::from_str(&ok).unwrap();
+        assert_eq!(v["valid"], json!(true));
+        assert_eq!(v["algo"], json!("HS256"));
+        assert_eq!(v["payload"]["name"], json!("John Doe"));
+
+        // Wrong secret -> invalid, but header/payload still decoded.
+        let bad = dispatch(
+            "jwt_verify_hmac",
+            &json!({ "token": token, "secret": "wrong-secret" }).to_string(),
+        )
+        .await
+        .unwrap();
+        let v2: Value = serde_json::from_str(&bad).unwrap();
+        assert_eq!(v2["valid"], json!(false));
+        assert_eq!(v2["payload"]["sub"], json!("1234567890"));
+
+        // algo mismatch with header alg -> invalid even with the right secret.
+        let mismatch = dispatch(
+            "jwt_verify_hmac",
+            &json!({ "token": token, "secret": "your-256-bit-secret", "algo": "HS512" })
+                .to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&mismatch).unwrap()["valid"],
+            json!(false)
+        );
+    }
+
+    #[tokio::test]
+    async fn jwt_verify_hmac_rejects_malformed_and_bad_algo() {
+        assert!(dispatch(
+            "jwt_verify_hmac",
+            &json!({ "token": "a.b", "secret": "x" }).to_string(),
+        )
+        .await
+        .is_err());
+
+        assert!(dispatch(
+            "jwt_verify_hmac",
+            &json!({ "token": "a.b.c", "secret": "x", "algo": "HS999" }).to_string(),
+        )
+        .await
+        .is_err());
+    }
+
+    #[test]
+    fn jwt_verify_hmac_sign_matches_known_hs384_hs512() {
+        let key = b"key";
+        let msg = b"The quick brown fox jumps over the lazy dog";
+        let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+        assert_eq!(
+            hex(&jwt_verify_hmac_sign("HS512", key, msg)),
+            "b42af09057bac1e2d41708e48a902e09b5ff7f12ab428a4fe86653c73dd248fb82f948a549f7b791a5b41915ee4d1ec3935357e4e2317250d0372afa2ebeeb3a"
+        );
+        assert_eq!(
+            hex(&jwt_verify_hmac_sign("HS384", key, msg)),
+            "d7f4727e2c0b39ae0f1e40cc96f60242d5b7801841cea6fc592c5d3e1ae50700582a96cf35e1e554995fe4e03381c237"
+        );
+    }
+
+    #[tokio::test]
+    async fn jwt_sign_hmac_matches_known_vectors() {
+        // Vectors computed independently with Python's hmac/hashlib against
+        // serde_json's compact, sorted-key serialization of the header/payload.
+        let hs256 = dispatch(
+            "jwt_sign_hmac",
+            &json!({ "payload": { "sub": "1234567890" }, "secret": "secret" }).to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            hs256,
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.Rq8IxqeX7eA6GgYxlcHdPFVRNFFZc5rEI3MQTZZbK3I"
+        );
+
+        let hs384 = dispatch(
+            "jwt_sign_hmac",
+            &json!({ "payload": { "sub": "1234567890" }, "secret": "secret", "algo": "HS384" })
+                .to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            hs384,
+            "eyJhbGciOiJIUzM4NCIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.cFmm_wV3BX7uUahBnoKQfeojYSMnfSh4-kUoipDqUIpBOIORaodCAQ7Iwwkh6IwJ"
+        );
+
+        let hs512 = dispatch(
+            "jwt_sign_hmac",
+            &json!({ "payload": { "sub": "1234567890" }, "secret": "secret", "algo": "HS512" })
+                .to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            hs512,
+            "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.iGXilZ1IVm-8paqgFeserjxZTbBfbP2IhIuWBAul5Le_SaJrWKzMfqrBGtsSRS6oKXZGQhETkslUMzON8WqTGg"
+        );
+    }
+
+    #[tokio::test]
+    async fn jwt_sign_hmac_forces_alg_and_round_trips_via_decode() {
+        // A caller-supplied header with the wrong alg is overwritten to match.
+        let token = dispatch(
+            "jwt_sign_hmac",
+            &json!({
+                "payload": { "sub": "1234567890" },
+                "secret": "secret",
+                "algo": "HS512",
+                "header": { "alg": "none", "kid": "k1" }
+            })
+            .to_string(),
+        )
+        .await
+        .unwrap();
+        let decoded = dispatch("jwt_decode", &json!({ "token": token }).to_string())
+            .await
+            .unwrap();
+        assert!(decoded.contains("\"alg\": \"HS512\""));
+        assert!(decoded.contains("\"kid\": \"k1\""));
+
+        // secret_hex must produce the same token as the raw-byte secret.
+        let raw = dispatch(
+            "jwt_sign_hmac",
+            &json!({ "payload": { "x": 1 }, "secret": "key" }).to_string(),
+        )
+        .await
+        .unwrap();
+        let hexed = dispatch(
+            "jwt_sign_hmac",
+            &json!({ "payload": { "x": 1 }, "secret": "6b6579", "secret_hex": true }).to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(raw, hexed);
+    }
+
+    #[tokio::test]
+    async fn jwt_sign_hmac_rejects_bad_algo() {
+        let err = dispatch(
+            "jwt_sign_hmac",
+            &json!({ "payload": {}, "secret": "s", "algo": "RS256" }).to_string(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("unknown algo"));
+    }
+
+    #[tokio::test]
+    async fn hmac_verify_matches_and_mismatches() {
+        let data = "The quick brown fox jumps over the lazy dog";
+        let out = dispatch(
+            "hmac_verify",
+            &json!({
+                "data": data,
+                "key": "key",
+                "expected": "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8",
+            })
+            .to_string(),
+        )
+        .await
+        .unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["match"], json!(true));
+        assert_eq!(
+            v["computed"],
+            json!("f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8")
+        );
+
+        let out = dispatch(
+            "hmac_verify",
+            &json!({
+                "data": data,
+                "key": "key",
+                "expected": "0000000000000000000000000000000000000000000000000000000000000000",
+            })
+            .to_string(),
+        )
+        .await
+        .unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["match"], json!(false));
+    }
+
+    #[tokio::test]
+    async fn hmac_verify_sha384_and_sha512_vectors() {
+        let data = "The quick brown fox jumps over the lazy dog";
+        let out = dispatch(
+            "hmac_verify",
+            &json!({
+                "data": data,
+                "key": "key",
+                "algo": "sha384",
+                "expected": "d7f4727e2c0b39ae0f1e40cc96f60242d5b7801841cea6fc592c5d3e1ae50700582a96cf35e1e554995fe4e03381c237",
+            })
+            .to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&out).unwrap()["match"],
+            json!(true)
+        );
+
+        let out = dispatch(
+            "hmac_verify",
+            &json!({
+                "data": data,
+                "key": "key",
+                "algo": "sha512",
+                "expected": "b42af09057bac1e2d41708e48a902e09b5ff7f12ab428a4fe86653c73dd248fb82f948a549f7b791a5b41915ee4d1ec3935357e4e2317250d0372afa2ebeeb3a",
+            })
+            .to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&out).unwrap()["match"],
+            json!(true)
+        );
+    }
+
+    #[tokio::test]
+    async fn hmac_verify_key_hex_and_bad_args() {
+        // key_hex path: "6b6579" == "key".
+        let out = dispatch(
+            "hmac_verify",
+            &json!({
+                "data": "The quick brown fox jumps over the lazy dog",
+                "key": "6b6579",
+                "key_hex": true,
+                "expected": "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8",
+            })
+            .to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&out).unwrap()["match"],
+            json!(true)
+        );
+
+        // Wrong-length expected is rejected.
+        assert!(dispatch(
+            "hmac_verify",
+            &json!({ "data": "x", "key": "k", "expected": "abcd" }).to_string(),
+        )
+        .await
+        .is_err());
+
+        // Unknown algo is rejected.
+        assert!(dispatch(
+            "hmac_verify",
+            &json!({ "data": "x", "key": "k", "algo": "md5", "expected": "abcd" }).to_string(),
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn totp_matches_rfc6238_sha1_vectors() {
+        // RFC 6238 test key "12345678901234567890" as base32, 8 digits.
+        let secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+        let a = json!({ "secret": secret, "digits": 8, "timestamp": 59 });
+        assert_eq!(dispatch("totp", &a.to_string()).await.unwrap(), "94287082");
+        let b = json!({ "secret": secret, "digits": 8, "timestamp": 1111111109u64 });
+        assert_eq!(dispatch("totp", &b.to_string()).await.unwrap(), "07081804");
+    }
+
+    #[tokio::test]
+    async fn totp_matches_rfc6238_sha256_vector() {
+        // RFC 6238 SHA-256 uses the 32-byte key "12345678901234567890123456789012".
+        let secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZA";
+        let a = json!({ "secret": secret, "digits": 8, "algo": "sha256", "timestamp": 59 });
+        assert_eq!(dispatch("totp", &a.to_string()).await.unwrap(), "46119246");
+    }
+
+    #[tokio::test]
+    async fn totp_defaults_to_six_digits() {
+        let secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+        let out = dispatch(
+            "totp",
+            &json!({ "secret": secret, "timestamp": 59 }).to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.len(), 6);
+        assert_eq!(out, "287082");
+    }
+
+    #[tokio::test]
+    async fn totp_rejects_bad_args() {
+        // Invalid base32 secret.
+        assert!(
+            dispatch("totp", &json!({ "secret": "not!base32" }).to_string())
+                .await
+                .is_err()
+        );
+        // digits out of range.
+        assert!(dispatch(
+            "totp",
+            &json!({ "secret": "GEZDGNBVGY3TQOJQ", "digits": 0 }).to_string()
+        )
+        .await
+        .is_err());
+        // period of zero.
+        assert!(dispatch(
+            "totp",
+            &json!({ "secret": "GEZDGNBVGY3TQOJQ", "period": 0 }).to_string()
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn secret_scan_finds_aws_and_github_and_pem() {
+        let path = tmp_path("secret-scan-basic.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(
+            &path,
+            "id = AKIAIOSFODNN7EXAMPLE\ntok=ghp_0123456789abcdefABCDEF0123456789abcd\n-----BEGIN RSA PRIVATE KEY-----\n",
+        )
+        .unwrap();
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        let out = dispatch("secret_scan", &args).await.unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        let rules: Vec<&str> = v["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["rule"].as_str().unwrap())
+            .collect();
+        assert!(rules.contains(&"aws_access_key_id"));
+        assert!(rules.contains(&"github_token"));
+        assert!(rules.contains(&"private_key"));
+        // Redaction: full secret must not appear in output.
+        assert!(!out.contains("AKIAIOSFODNN7EXAMPLE"));
+    }
+
+    #[tokio::test]
+    async fn secret_scan_clean_file_has_no_findings() {
+        let path = tmp_path("secret-scan-clean.txt");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "hello world\nlet x = 1;\nname = bob\n").unwrap();
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        let out = dispatch("secret_scan", &args).await.unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["findings"].as_array().unwrap().len(), 0);
+        assert_eq!(v["scanned_files"], 1);
+    }
+
+    #[tokio::test]
+    async fn secret_scan_errors_on_missing_path() {
+        let path = tmp_path("secret-scan-nope");
+        let args = json!({ "path": path.to_str().unwrap() }).to_string();
+        assert!(dispatch("secret_scan", &args).await.is_err());
+    }
+
+    #[test]
+    fn secret_scan_entropy_orders_random_above_repetitive() {
+        let low = secret_scan_shannon_entropy("aaaaaaaaaaaaaaaa");
+        let high = secret_scan_shannon_entropy("aB3xZ9qL7mK2pR5t");
+        assert!(low < 1.0);
+        assert!(high > low);
+    }
+
+    #[test]
+    fn secret_scan_redact_keeps_prefix_only() {
+        assert_eq!(secret_scan_redact("abcdefgh"), "abcd****");
+        assert_eq!(secret_scan_redact("abc"), "***");
+    }
+
+    #[tokio::test]
+    async fn sleep_actually_delays() {
+        let start = std::time::Instant::now();
+        let out = dispatch("sleep", &json!({ "ms": 20 }).to_string())
+            .await
+            .unwrap();
+        assert!(start.elapsed() >= Duration::from_millis(20));
+        assert_eq!(out, "slept 0.02s");
+    }
+
+    #[tokio::test]
+    async fn sleep_clamps_and_normalizes() {
+        // Over the max collapses to 300.
+        assert_eq!(sleep_clamp_secs(Some(1000.0), None), 300.0);
+        // Negative / NaN seconds treated as 0.
+        assert_eq!(sleep_clamp_secs(Some(-5.0), None), 0.0);
+        assert_eq!(sleep_clamp_secs(Some(f64::NAN), None), 0.0);
+        // seconds + ms add together.
+        assert_eq!(sleep_clamp_secs(Some(1.0), Some(500)), 1.5);
+        // No args = no delay.
+        assert_eq!(sleep_clamp_secs(None, None), 0.0);
+    }
+
+    #[tokio::test]
+    async fn sleep_rejects_bad_args() {
+        assert!(dispatch("sleep", &json!({ "seconds": "nope" }).to_string())
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn cat_concatenates_files_in_order() {
+        let a = tmp_path("cat-a.txt");
+        let b = tmp_path("cat-b.txt");
+        let _ca = Cleanup(a.clone());
+        let _cb = Cleanup(b.clone());
+        std::fs::write(&a, "alpha").unwrap();
+        std::fs::write(&b, "beta").unwrap();
+        let args = json!({
+            "paths": [a.to_str().unwrap(), b.to_str().unwrap()]
+        })
+        .to_string();
+        assert_eq!(dispatch("cat", &args).await.unwrap(), "alphabeta");
+    }
+
+    #[tokio::test]
+    async fn cat_inserts_separator_between_files() {
+        let a = tmp_path("cat-sep-a.txt");
+        let b = tmp_path("cat-sep-b.txt");
+        let _ca = Cleanup(a.clone());
+        let _cb = Cleanup(b.clone());
+        std::fs::write(&a, "one").unwrap();
+        std::fs::write(&b, "two").unwrap();
+        let args = json!({
+            "paths": [a.to_str().unwrap(), b.to_str().unwrap()],
+            "separator": "\n---\n"
+        })
+        .to_string();
+        assert_eq!(dispatch("cat", &args).await.unwrap(), "one\n---\ntwo");
+    }
+
+    #[tokio::test]
+    async fn cat_numbers_lines() {
+        let a = tmp_path("cat-num.txt");
+        let _ca = Cleanup(a.clone());
+        std::fs::write(&a, "first\nsecond").unwrap();
+        let args = json!({
+            "paths": [a.to_str().unwrap()],
+            "number": true
+        })
+        .to_string();
+        assert_eq!(
+            dispatch("cat", &args).await.unwrap(),
+            "     1\tfirst\n     2\tsecond\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn cat_errors_on_missing_file() {
+        let missing = tmp_path("cat-missing.txt");
+        let args = json!({ "paths": [missing.to_str().unwrap()] }).to_string();
+        assert!(dispatch("cat", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn cat_empty_paths_returns_empty() {
+        let args = json!({ "paths": [] }).to_string();
+        assert_eq!(dispatch("cat", &args).await.unwrap(), "");
+    }
+
+    #[tokio::test]
+    async fn seq_generates_sequences_and_error_paths() {
+        // Integral output strips decimals and is inclusive of end.
+        let cases = [
+            (json!({ "start": 1, "end": 5 }), "1\n2\n3\n4\n5"),
+            (
+                json!({ "start": 0, "end": 10, "step": 2, "separator": "," }),
+                "0,2,4,6,8,10",
+            ),
+            (json!({ "start": 5, "end": 1, "step": -1 }), "5\n4\n3\n2\n1"),
+            (json!({ "start": 3, "end": 3 }), "3"),
+            // Non-integral bounds/step render as floats.
+            (
+                json!({ "start": 0.0, "end": 1.0, "step": 0.5, "separator": " " }),
+                "0 0.5 1",
+            ),
+            // End not exactly landed on: stops before overshooting.
+            (json!({ "start": 1, "end": 6, "step": 2 }), "1\n3\n5"),
+        ];
+        for (args, want) in cases {
+            let s = args.to_string();
+            assert_eq!(dispatch("seq", &s).await.unwrap(), want, "args {s}");
+        }
+        // Error paths: zero step, wrong-direction step, non-finite guard is
+        // unreachable via JSON so only zero/direction are exercised here.
+        for bad in [
+            json!({ "start": 1, "end": 5, "step": 0 }),
+            json!({ "start": 1, "end": 5, "step": -1 }),
+            json!({ "start": 5, "end": 1, "step": 1 }),
+        ] {
+            let s = bad.to_string();
+            assert!(dispatch("seq", &s).await.is_err(), "expected err: {s}");
+        }
+        // Oversized ascending sequence is rejected rather than truncated.
+        let big = json!({ "start": 0, "end": 1_000_000, "step": 1 }).to_string();
+        assert!(dispatch("seq", &big).await.is_err(), "expected cap err");
     }
 }
