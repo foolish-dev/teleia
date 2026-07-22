@@ -37,3 +37,15 @@ this workspace is:
 A change isn't done until all four pass. For new behavior, add a test
 that pins it before claiming the work is finished; for a bug fix, add a
 test that reproduces the bug first.
+
+## 5. Auto-prompting loop
+Once §4's criteria are set, drive the task to done on your own — plan,
+act, verify, then prompt yourself with the next step. Don't wait for a
+nudge between steps.
+- After each change, run the §4 loop, read the result, and continue from
+  what it says — a failing check is the next prompt, not a stopping point.
+- Don't pause to narrate progress or ask "shall I continue?" — continue.
+- Still stop for what §1 and §3 reserve: real ambiguity, a decision only
+  the user can make, or an irreversible or outward-facing action.
+- If the loop stops converging — the same check keeps failing — stop and
+  say what's blocking. Don't spin.
