@@ -1812,6 +1812,82 @@ ToolDef::new(
                 "indent": { "type": "integer", "description": "Spaces of indentation per nesting level (default 2)" }
             } }),
         ),
+        ToolDef::new(
+            "gzip",
+            "Gzip-compress a file to `out` (default `path.gz`), or decompress with `decode: true`. `level` 0-9 (default 6). Streams, so large files don't buffer in memory.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" },
+                "out": { "type": "string", "description": "Output path (default: path.gz encoding, or path with .gz stripped when decoding)" },
+                "level": { "type": "integer", "description": "Compression level 0-9 (default 6)" },
+                "decode": { "type": "boolean", "description": "Decompress instead of compress (default false)" }
+            }, "required": ["path"] }),
+        ),
+        ToolDef::new(
+            "deflate",
+            "Raw DEFLATE compress a file (no gzip/zlib wrapper) to `out` (default `path.deflate`), or inflate with `decode: true`. `level` 0-9 (default 6).",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" },
+                "out": { "type": "string" },
+                "level": { "type": "integer", "description": "0-9 (default 6)" },
+                "decode": { "type": "boolean" }
+            }, "required": ["path"] }),
+        ),
+        ToolDef::new(
+            "brotli",
+            "Brotli-compress a file to `out` (default `path.br`), or decompress with `decode: true`. `quality` 0-11 (default 11).",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" },
+                "out": { "type": "string" },
+                "quality": { "type": "integer", "description": "0-11 (default 11)" },
+                "decode": { "type": "boolean" }
+            }, "required": ["path"] }),
+        ),
+        ToolDef::new(
+            "zstd",
+            "Decompress a zstandard (.zst) file to `out` (default: `path` with .zst stripped). DECODE-ONLY — there's no pure-Rust zstd encoder, so compression errors; use gzip/brotli to compress.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" },
+                "out": { "type": "string" },
+                "decode": { "type": "boolean", "description": "Must be true (default true); false errors" }
+            }, "required": ["path"] }),
+        ),
+        ToolDef::new(
+            "zip",
+            "Create a ZIP archive at `output` from a list of files (`paths`). DEFLATE-compressed unless `stored: true`. Directories are rejected — pass individual files.",
+            json!({ "type": "object", "properties": {
+                "paths": { "type": "array", "items": { "type": "string" } },
+                "output": { "type": "string" },
+                "stored": { "type": "boolean", "description": "Store without compression (default false)" }
+            }, "required": ["paths", "output"] }),
+        ),
+        ToolDef::new(
+            "unzip",
+            "Extract a ZIP archive to `dest` (default cwd), or with `list_only: true` return its entries {name, size, dir} as JSON. Entry paths are sanitized against zip-slip.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" },
+                "dest": { "type": "string", "description": "Extraction directory (default current dir)" },
+                "list_only": { "type": "boolean", "description": "List entries without extracting (default false)" }
+            }, "required": ["path"] }),
+        ),
+        ToolDef::new(
+            "tar_create",
+            "Create a tar archive at `output` from `paths` (files or directories, added recursively). Set `gzip: true` for a .tar.gz.",
+            json!({ "type": "object", "properties": {
+                "paths": { "type": "array", "items": { "type": "string" } },
+                "output": { "type": "string" },
+                "gzip": { "type": "boolean", "description": "Gzip the archive (.tar.gz) (default false)" }
+            }, "required": ["paths", "output"] }),
+        ),
+        ToolDef::new(
+            "tar_extract",
+            "Extract a tar (or .tar.gz) archive to `dest` (default cwd), or list its entries {name, size} with `list_only: true`. Gzip is auto-detected from a .gz/.tgz suffix or `gzip: true`.",
+            json!({ "type": "object", "properties": {
+                "path": { "type": "string" },
+                "dest": { "type": "string" },
+                "list_only": { "type": "boolean" },
+                "gzip": { "type": "boolean", "description": "Force gzip decompression (else auto-detected by extension)" }
+            }, "required": ["path"] }),
+        ),
     ]
 }
 
@@ -2006,6 +2082,14 @@ pub async fn dispatch(name: &str, arguments: &str) -> Result<String> {
         "csv_to_ndjson" => csv_to_ndjson_tool(args).await,
         "xml_to_json" => xml_to_json_tool(args).await,
         "xml_format" => xml_format_tool(args).await,
+        "gzip" => gzip_tool(args).await,
+        "deflate" => deflate_tool(args).await,
+        "brotli" => brotli_tool(args).await,
+        "zstd" => zstd_tool(args).await,
+        "zip" => zip_tool(args).await,
+        "unzip" => unzip_tool(args).await,
+        "tar_create" => tar_create_tool(args).await,
+        "tar_extract" => tar_extract_tool(args).await,
         other => Err(anyhow!("unknown tool: {other}")),
     }
 }
@@ -13249,6 +13333,367 @@ fn xml_format_reindent(text: &str, indent: usize) -> Result<String> {
     String::from_utf8(writer.into_inner()).context("XML output was not valid UTF-8")
 }
 
+// ---- compression / archive tools (all write output files -> mutating) ----
+
+/// Resolve the output path for a single-file (de)compressor. Encode appends
+/// `.ext`; decode strips it (or errors, asking for an explicit `out`).
+fn compress_out_path(out: Option<String>, path: &str, ext: &str, decode: bool) -> Result<PathBuf> {
+    if let Some(o) = out {
+        return Ok(PathBuf::from(o));
+    }
+    if decode {
+        let p = std::path::Path::new(path);
+        if p.extension().and_then(|e| e.to_str()) == Some(ext) {
+            Ok(p.with_extension(""))
+        } else {
+            Err(anyhow!(
+                "cannot infer output path from `{path}` (no .{ext}); pass `out`"
+            ))
+        }
+    } else {
+        Ok(PathBuf::from(format!("{path}.{ext}")))
+    }
+}
+
+fn compress_report(kind: &str, path: &str, out: &std::path::Path) -> Result<String> {
+    let in_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let out_size = std::fs::metadata(out).map(|m| m.len()).unwrap_or(0);
+    Ok(format!(
+        "{kind} {path} ({in_size} bytes) -> {} ({out_size} bytes)",
+        out.display()
+    ))
+}
+
+#[derive(Deserialize)]
+struct GzipArgs {
+    path: String,
+    #[serde(default)]
+    out: Option<String>,
+    #[serde(default)]
+    level: Option<u32>,
+    #[serde(default)]
+    decode: bool,
+}
+
+async fn gzip_tool(args: Value) -> Result<String> {
+    let GzipArgs {
+        path,
+        out,
+        level,
+        decode,
+    } = serde_json::from_value(args)?;
+    let out_path = compress_out_path(out, &path, "gz", decode)?;
+    if decode {
+        let mut dec = flate2::read::GzDecoder::new(
+            std::fs::File::open(&path).with_context(|| format!("open {path}"))?,
+        );
+        let mut w = std::fs::File::create(&out_path)?;
+        std::io::copy(&mut dec, &mut w).context("gunzip")?;
+        compress_report("gunzip", &path, &out_path)
+    } else {
+        let lvl = level.unwrap_or(6).min(9);
+        let mut enc = flate2::write::GzEncoder::new(
+            std::fs::File::create(&out_path)?,
+            flate2::Compression::new(lvl),
+        );
+        std::io::copy(
+            &mut std::fs::File::open(&path).with_context(|| format!("open {path}"))?,
+            &mut enc,
+        )
+        .context("gzip")?;
+        enc.finish()?;
+        compress_report("gzip", &path, &out_path)
+    }
+}
+
+async fn deflate_tool(args: Value) -> Result<String> {
+    let GzipArgs {
+        path,
+        out,
+        level,
+        decode,
+    } = serde_json::from_value(args)?;
+    let out_path = compress_out_path(out, &path, "deflate", decode)?;
+    if decode {
+        let mut dec = flate2::read::DeflateDecoder::new(
+            std::fs::File::open(&path).with_context(|| format!("open {path}"))?,
+        );
+        let mut w = std::fs::File::create(&out_path)?;
+        std::io::copy(&mut dec, &mut w).context("inflate")?;
+        compress_report("inflate", &path, &out_path)
+    } else {
+        let lvl = level.unwrap_or(6).min(9);
+        let mut enc = flate2::write::DeflateEncoder::new(
+            std::fs::File::create(&out_path)?,
+            flate2::Compression::new(lvl),
+        );
+        std::io::copy(
+            &mut std::fs::File::open(&path).with_context(|| format!("open {path}"))?,
+            &mut enc,
+        )
+        .context("deflate")?;
+        enc.finish()?;
+        compress_report("deflate", &path, &out_path)
+    }
+}
+
+#[derive(Deserialize)]
+struct BrotliArgs {
+    path: String,
+    #[serde(default)]
+    out: Option<String>,
+    #[serde(default)]
+    quality: Option<u32>,
+    #[serde(default)]
+    decode: bool,
+}
+
+async fn brotli_tool(args: Value) -> Result<String> {
+    let BrotliArgs {
+        path,
+        out,
+        quality,
+        decode,
+    } = serde_json::from_value(args)?;
+    let out_path = compress_out_path(out, &path, "br", decode)?;
+    let input = std::fs::File::open(&path).with_context(|| format!("open {path}"))?;
+    let mut w = std::fs::File::create(&out_path)?;
+    if decode {
+        let mut dec = brotli::Decompressor::new(input, 4096);
+        std::io::copy(&mut dec, &mut w).context("brotli decode")?;
+        compress_report("unbrotli", &path, &out_path)
+    } else {
+        let q = quality.unwrap_or(11).min(11);
+        let mut comp = brotli::CompressorReader::new(input, 4096, q, 22);
+        std::io::copy(&mut comp, &mut w).context("brotli encode")?;
+        compress_report("brotli", &path, &out_path)
+    }
+}
+
+#[derive(Deserialize)]
+struct ZstdArgs {
+    path: String,
+    #[serde(default)]
+    out: Option<String>,
+    #[serde(default = "default_true")]
+    decode: bool,
+}
+
+async fn zstd_tool(args: Value) -> Result<String> {
+    let ZstdArgs { path, out, decode } = serde_json::from_value(args)?;
+    if !decode {
+        return Err(anyhow!(
+            "zstd is decode-only (no pure-Rust encoder); pass decode:true, or use gzip/brotli to compress"
+        ));
+    }
+    let out_path = compress_out_path(out, &path, "zst", true)?;
+    let mut dec = ruzstd::StreamingDecoder::new(
+        std::fs::File::open(&path).with_context(|| format!("open {path}"))?,
+    )
+    .map_err(|e| anyhow!("not a zstd stream: {e}"))?;
+    let mut w = std::fs::File::create(&out_path)?;
+    std::io::copy(&mut dec, &mut w).context("zstd decode")?;
+    compress_report("unzstd", &path, &out_path)
+}
+
+#[derive(Deserialize)]
+struct ZipArgs {
+    paths: Vec<String>,
+    output: String,
+    #[serde(default)]
+    stored: bool,
+}
+
+async fn zip_tool(args: Value) -> Result<String> {
+    let ZipArgs {
+        paths,
+        output,
+        stored,
+    } = serde_json::from_value(args)?;
+    if paths.is_empty() {
+        return Err(anyhow!("zip: `paths` is empty"));
+    }
+    let mut zw = zip::ZipWriter::new(
+        std::fs::File::create(&output).with_context(|| format!("create {output}"))?,
+    );
+    let method = if stored {
+        zip::CompressionMethod::Stored
+    } else {
+        zip::CompressionMethod::Deflated
+    };
+    let opts = zip::write::SimpleFileOptions::default().compression_method(method);
+    for p in &paths {
+        let meta = std::fs::metadata(p).with_context(|| format!("stat {p}"))?;
+        if meta.is_dir() {
+            return Err(anyhow!("zip: `{p}` is a directory; pass individual files"));
+        }
+        let name = std::path::Path::new(p)
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| p.clone());
+        zw.start_file(name, opts)
+            .with_context(|| format!("zip entry {p}"))?;
+        std::io::copy(
+            &mut std::fs::File::open(p).with_context(|| format!("open {p}"))?,
+            &mut zw,
+        )?;
+    }
+    zw.finish()?;
+    let out_size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
+    Ok(format!(
+        "zipped {} file(s) -> {output} ({out_size} bytes)",
+        paths.len()
+    ))
+}
+
+#[derive(Deserialize)]
+struct UnzipArgs {
+    path: String,
+    #[serde(default)]
+    dest: Option<String>,
+    #[serde(default)]
+    list_only: bool,
+}
+
+async fn unzip_tool(args: Value) -> Result<String> {
+    let UnzipArgs {
+        path,
+        dest,
+        list_only,
+    } = serde_json::from_value(args)?;
+    let mut archive =
+        zip::ZipArchive::new(std::fs::File::open(&path).with_context(|| format!("open {path}"))?)
+            .with_context(|| format!("read zip {path}"))?;
+    if list_only {
+        let mut entries = Vec::new();
+        for i in 0..archive.len() {
+            let e = archive.by_index(i)?;
+            entries.push(json!({ "name": e.name(), "size": e.size(), "dir": e.is_dir() }));
+        }
+        return Ok(serde_json::to_string_pretty(
+            &json!({ "entries": entries }),
+        )?);
+    }
+    let dest = PathBuf::from(dest.unwrap_or_else(|| ".".to_string()));
+    let mut n = 0u64;
+    for i in 0..archive.len() {
+        let mut e = archive.by_index(i)?;
+        // mangled_name strips leading `/` and `..` — guards against zip-slip.
+        let out_path = dest.join(e.mangled_name());
+        if e.is_dir() {
+            std::fs::create_dir_all(&out_path)?;
+        } else {
+            if let Some(parent) = out_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::io::copy(&mut e, &mut std::fs::File::create(&out_path)?)?;
+            n += 1;
+        }
+    }
+    Ok(format!("extracted {n} file(s) to {}", dest.display()))
+}
+
+fn tar_append_all<W: std::io::Write>(b: &mut tar::Builder<W>, paths: &[String]) -> Result<()> {
+    for p in paths {
+        let meta = std::fs::symlink_metadata(p).with_context(|| format!("stat {p}"))?;
+        let name = std::path::Path::new(p)
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| p.clone());
+        if meta.is_dir() {
+            b.append_dir_all(&name, p)
+                .with_context(|| format!("append dir {p}"))?;
+        } else {
+            let mut f = std::fs::File::open(p).with_context(|| format!("open {p}"))?;
+            b.append_file(&name, &mut f)
+                .with_context(|| format!("append file {p}"))?;
+        }
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+struct TarCreateArgs {
+    paths: Vec<String>,
+    output: String,
+    #[serde(default)]
+    gzip: bool,
+}
+
+async fn tar_create_tool(args: Value) -> Result<String> {
+    let TarCreateArgs {
+        paths,
+        output,
+        gzip,
+    } = serde_json::from_value(args)?;
+    if paths.is_empty() {
+        return Err(anyhow!("tar_create: `paths` is empty"));
+    }
+    let file = std::fs::File::create(&output).with_context(|| format!("create {output}"))?;
+    if gzip {
+        let enc = flate2::write::GzEncoder::new(file, flate2::Compression::new(6));
+        let mut b = tar::Builder::new(enc);
+        tar_append_all(&mut b, &paths)?;
+        b.into_inner()?.finish()?;
+    } else {
+        let mut b = tar::Builder::new(file);
+        tar_append_all(&mut b, &paths)?;
+        b.finish()?;
+    }
+    let out_size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
+    Ok(format!(
+        "archived {} path(s) -> {output} ({out_size} bytes)",
+        paths.len()
+    ))
+}
+
+#[derive(Deserialize)]
+struct TarExtractArgs {
+    path: String,
+    #[serde(default)]
+    dest: Option<String>,
+    #[serde(default)]
+    list_only: bool,
+    #[serde(default)]
+    gzip: bool,
+}
+
+async fn tar_extract_tool(args: Value) -> Result<String> {
+    let TarExtractArgs {
+        path,
+        dest,
+        list_only,
+        gzip,
+    } = serde_json::from_value(args)?;
+    let gz = gzip || path.ends_with(".gz") || path.ends_with(".tgz");
+    let file = std::fs::File::open(&path).with_context(|| format!("open {path}"))?;
+    let reader: Box<dyn std::io::Read> = if gz {
+        Box::new(flate2::read::GzDecoder::new(file))
+    } else {
+        Box::new(file)
+    };
+    let mut archive = tar::Archive::new(reader);
+    if list_only {
+        let mut entries = Vec::new();
+        for e in archive.entries()? {
+            let e = e?;
+            entries.push(json!({
+                "name": e.path()?.display().to_string(),
+                "size": e.header().size().unwrap_or(0),
+            }));
+        }
+        return Ok(serde_json::to_string_pretty(
+            &json!({ "entries": entries }),
+        )?);
+    }
+    let dest = PathBuf::from(dest.unwrap_or_else(|| ".".to_string()));
+    std::fs::create_dir_all(&dest)?;
+    archive
+        .unpack(&dest)
+        .with_context(|| format!("unpack to {}", dest.display()))?;
+    Ok(format!("extracted {path} to {}", dest.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -19156,5 +19601,138 @@ tempfile = "3"
             dispatch("csv_select", &s).await.unwrap(),
             "name\nAlice\nBob\n"
         );
+    }
+
+    // --- compression / archive tools ---
+
+    async fn roundtrip_single(tool: &str, ext: &str) {
+        let src = tmp_path(&format!("comp-{tool}.txt"));
+        let _c = Cleanup(src.clone());
+        let payload = "hello compression ".repeat(200);
+        std::fs::write(&src, &payload).unwrap();
+        // compress
+        let enc = dispatch(tool, &json!({ "path": src.to_str().unwrap() }).to_string())
+            .await
+            .unwrap();
+        assert!(enc.contains("bytes"), "{tool}: {enc}");
+        let comp = src.with_extension(format!("txt.{ext}"));
+        let _cc = Cleanup(comp.clone());
+        assert!(comp.exists(), "{tool}: expected {}", comp.display());
+        // decompress to a fresh path and compare
+        let back = tmp_path(&format!("comp-{tool}-back.txt"));
+        let _cb = Cleanup(back.clone());
+        dispatch(
+            tool,
+            &json!({ "path": comp.to_str().unwrap(), "out": back.to_str().unwrap(), "decode": true })
+                .to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&back).unwrap(),
+            payload,
+            "{tool} round-trip"
+        );
+    }
+
+    #[tokio::test]
+    async fn gzip_deflate_brotli_round_trip() {
+        roundtrip_single("gzip", "gz").await;
+        roundtrip_single("deflate", "deflate").await;
+        roundtrip_single("brotli", "br").await;
+    }
+
+    #[tokio::test]
+    async fn zstd_is_decode_only_and_validates() {
+        let src = tmp_path("zstd.bin");
+        let _c = Cleanup(src.clone());
+        std::fs::write(&src, "not a zstd stream").unwrap();
+        // encode is refused
+        assert!(dispatch(
+            "zstd",
+            &json!({ "path": src.to_str().unwrap(), "decode": false }).to_string()
+        )
+        .await
+        .is_err());
+        // decoding a non-zstd file errors, not panics
+        assert!(dispatch(
+            "zstd",
+            &json!({ "path": src.to_str().unwrap() }).to_string()
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn zip_unzip_round_trip_and_list() {
+        let dir = tmp_path("zip-dir");
+        std::fs::create_dir_all(&dir).unwrap();
+        let _c = CleanupDir(dir.clone());
+        std::fs::write(dir.join("a.txt"), "alpha").unwrap();
+        std::fs::write(dir.join("b.txt"), "beta").unwrap();
+        let archive = dir.join("out.zip");
+        dispatch(
+            "zip",
+            &json!({ "paths": [dir.join("a.txt").to_str().unwrap(), dir.join("b.txt").to_str().unwrap()],
+                     "output": archive.to_str().unwrap() })
+            .to_string(),
+        )
+        .await
+        .unwrap();
+        // list_only
+        let listed = dispatch(
+            "unzip",
+            &json!({ "path": archive.to_str().unwrap(), "list_only": true }).to_string(),
+        )
+        .await
+        .unwrap();
+        assert!(
+            listed.contains("a.txt") && listed.contains("b.txt"),
+            "{listed}"
+        );
+        // extract to a subdir and compare
+        let out = dir.join("extracted");
+        dispatch(
+            "unzip",
+            &json!({ "path": archive.to_str().unwrap(), "dest": out.to_str().unwrap() })
+                .to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(out.join("a.txt")).unwrap(), "alpha");
+        assert_eq!(std::fs::read_to_string(out.join("b.txt")).unwrap(), "beta");
+    }
+
+    #[tokio::test]
+    async fn tar_create_extract_round_trip_gzip() {
+        let dir = tmp_path("tar-dir");
+        std::fs::create_dir_all(&dir).unwrap();
+        let _c = CleanupDir(dir.clone());
+        std::fs::write(dir.join("x.txt"), "ecks").unwrap();
+        let archive = dir.join("out.tar.gz");
+        dispatch(
+            "tar_create",
+            &json!({ "paths": [dir.join("x.txt").to_str().unwrap()],
+                     "output": archive.to_str().unwrap(), "gzip": true })
+            .to_string(),
+        )
+        .await
+        .unwrap();
+        let listed = dispatch(
+            "tar_extract",
+            &json!({ "path": archive.to_str().unwrap(), "list_only": true }).to_string(),
+        )
+        .await
+        .unwrap();
+        assert!(listed.contains("x.txt"), "{listed}");
+        let out = dir.join("untar");
+        dispatch(
+            "tar_extract",
+            &json!({ "path": archive.to_str().unwrap(), "dest": out.to_str().unwrap() })
+                .to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(out.join("x.txt")).unwrap(), "ecks");
     }
 }
