@@ -3181,6 +3181,26 @@ fn leetcode_badge(th: &Theme, frame: usize) -> Vec<(char, Color)> {
         .collect()
 }
 
+/// Per-character colours for the animated `entropy` badge. Where the
+/// leetcode badge flows an *ordered* rainbow, entropy *scatters*: each
+/// glyph jumps around a cool decay palette by a hash of (index, frame),
+/// so the colours jitter chaotically — visual disorder. Advances every
+/// other frame so it churns rather than strobes (the loop redraws ~20fps).
+fn entropy_badge(th: &Theme, frame: usize) -> Vec<(char, Color)> {
+    let palette = [th.purple, th.blue, th.cyan, th.green, th.dim];
+    "⟳ entropy"
+        .chars()
+        .enumerate()
+        .map(|(i, ch)| {
+            let seed = (i as u64)
+                .wrapping_mul(0x9E37_79B1)
+                .wrapping_add((frame as u64 / 2).wrapping_mul(0x85EB_CA77));
+            let idx = ((seed ^ (seed >> 13)) as usize) % palette.len();
+            (ch, palette[idx])
+        })
+        .collect()
+}
+
 fn draw(f: &mut ratatui::Frame, state: &mut State) {
     let th = theme();
     // Paint the entire frame with the active theme bg + fg first. Any
@@ -3777,19 +3797,18 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
             ));
         }
     }
-    // Sticky auto-prompting is a persisted mode that changes behaviour
-    // across sessions, so surface it — a loop glyph in the brand purple,
-    // kept distinct from the red AUTO permission chip it's easy to conflate
-    // with.
+    // Sticky auto-prompting (shown as `entropy`) is a persisted mode that
+    // changes behaviour across sessions, so surface it — an animated badge
+    // whose colours scatter chaotically, like the leetcode flourish but
+    // disordered rather than a flowing rainbow.
     if state.autoprompt {
         status_spans.push(Span::styled(" · ", Style::default().fg(th.dim)));
-        status_spans.push(Span::styled(
-            " ⟳ entropy ",
-            Style::default()
-                .fg(th.bg)
-                .bg(th.purple)
-                .add_modifier(Modifier::BOLD),
-        ));
+        for (ch, color) in entropy_badge(&th, state.frame) {
+            status_spans.push(Span::styled(
+                ch.to_string(),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ));
+        }
     }
     status_spans.push(Span::raw("   "));
     // Replace the right-side mode hints while a turn is in flight: the
@@ -6327,6 +6346,20 @@ mod tests {
         // least one character's colour differs.
         let f2 = leetcode_badge(&TOKYO_NIGHT, 2);
         assert!(f0.iter().zip(&f2).any(|(a, b)| a.1 != b.1));
+    }
+
+    #[test]
+    fn entropy_badge_spells_the_word_and_animates() {
+        let f0 = entropy_badge(&TOKYO_NIGHT, 0);
+        let word: String = f0.iter().map(|(c, _)| c).collect();
+        assert_eq!(word, "⟳ entropy");
+        // The scatter shifts across frames — some colour differs a few
+        // frames on.
+        let f6 = entropy_badge(&TOKYO_NIGHT, 6);
+        assert!(
+            f0.iter().zip(&f6).any(|(a, b)| a.1 != b.1),
+            "entropy badge should animate between frames"
+        );
     }
 
     #[test]
