@@ -373,6 +373,11 @@ struct Args {
     /// the previous-but-one is also recoverable via `/load prev`.
     #[arg(long, alias = "continue", short = 'r')]
     resume: bool,
+    /// Download the latest release binary for this platform, verify it
+    /// against the published SHA256SUMS, and replace this executable in
+    /// place — the in-Rust half of install.sh; no shell needed to upgrade.
+    #[arg(long, alias = "upgrade")]
+    self_update: bool,
 }
 
 #[tokio::main]
@@ -383,6 +388,11 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
+    // Self-update short-circuits before any session/store/network-for-chat
+    // setup — it only touches the release download and this binary.
+    if args.self_update {
+        return update::self_update().await;
+    }
     if tui::set_theme(&args.theme).is_none() {
         eprintln!(
             "warning: unknown theme '{}'. Known: {}",

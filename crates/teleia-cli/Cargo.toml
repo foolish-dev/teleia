@@ -25,6 +25,7 @@ toml.workspace = true
 arboard.workspace = true
 rpassword.workspace = true
 reqwest.workspace = true
+self-replace.workspace = true
 teleia-llm.workspace = true
 teleia-agent.workspace = true
 teleia-store.workspace = true
