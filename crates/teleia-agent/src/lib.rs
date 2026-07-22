@@ -44,9 +44,11 @@ http_form_post, mac_lookup, pid, env_run, git_branch, git_stash, git_remote, git
 run_script, list_scripts, coverage, bench, build, cargo_expand, clippy_fix, run_bin, \
 changelog_gen, git_grep, git_log_file, cargo_add, cargo_search, make_target, git_apply, \
 git_reset, npm_install, audit, git_status_json, jwt_verify_hmac, jwt_sign_hmac, hmac_verify, \
-totp, secret_scan, sleep, cat, seq (plus any MCP tools the user has configured). After any code \
-change, run `lint`/`typecheck`/`test` to confirm the edit before claiming done. Default to brief \
-replies. When you finish a turn, stop — do not narrate.";
+totp, secret_scan, sleep, cat, seq, ps, pgrep, process_status, is_running, process_tree, \
+kill_by_name, uptime, loadavg, meminfo, cpuinfo, sysinfo, df, net_interfaces (plus any MCP tools \
+the user has configured). After any code change, run `lint`/`typecheck`/`test` to confirm the \
+edit before claiming done. Default to brief replies. When you finish a turn, stop — do not \
+narrate.";
 
 /// Base prompt + the karpathy-derived guidelines, joined once at startup.
 fn system_prompt() -> String {
@@ -263,6 +265,18 @@ fn is_readonly_tool(name: &str) -> bool {
             | "sleep"
             | "cat"
             | "seq"
+            | "ps"
+            | "pgrep"
+            | "process_status"
+            | "is_running"
+            | "process_tree"
+            | "uptime"
+            | "loadavg"
+            | "meminfo"
+            | "cpuinfo"
+            | "sysinfo"
+            | "df"
+            | "net_interfaces"
     )
 }
 
