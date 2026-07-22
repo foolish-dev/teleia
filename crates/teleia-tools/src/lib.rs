@@ -1768,12 +1768,12 @@ ToolDef::new(
         ),
 ToolDef::new(
     "csv_query",
-    "Filter rows of a CSV file. Keeps only rows where the named (or 0-based indexed) column matches a simple predicate — `equals` for an exact match or `contains` for a substring — and re-emits the matching rows as CSV (with the header row preserved when has_header is true). Read-only.",
+    "Filter rows of a CSV file. Keeps only rows where the named (or 1-based indexed) column matches a simple predicate — `equals` for an exact match or `contains` for a substring — and re-emits the matching rows as CSV (with the header row preserved when has_header is true). A purely-numeric `column` is always treated as a 1-based index (matching csv_select). Read-only.",
     json!({
         "type": "object",
         "properties": {
             "path": { "type": "string", "description": "Path to the CSV file" },
-            "column": { "type": "string", "description": "Column to test: a header name (when has_header is true) or a 0-based column index" },
+            "column": { "type": "string", "description": "Column to test: a header name (when has_header is true) or a 1-based column index" },
             "equals": { "type": "string", "description": "Keep rows whose column value equals this string exactly" },
             "contains": { "type": "string", "description": "Keep rows whose column value contains this substring. Ignored if `equals` is given." },
             "has_header": { "type": "boolean", "description": "Treat the first row as a header (default true). When true, `column` may be a header name." },
@@ -12903,18 +12903,31 @@ fn csv_query_default_has_header() -> bool {
     true
 }
 
-/// Resolve the target column to a 0-based index. When there is a header, the
+/// Resolve the target column to a 0-based record index. When there is a header, the
 /// `column` argument may be a header name; otherwise (or if no name matches) it
 /// must parse as an integer index.
 fn csv_query_column_index(column: &str, headers: Option<&csv::StringRecord>) -> Result<usize> {
-    if let Some(hdr) = headers {
-        if let Some(i) = hdr.iter().position(|h| h == column) {
-            return Ok(i);
+    // Match csv_select's convention: a purely-numeric column is a 1-based
+    // index checked BEFORE the header-name lookup, so `"1"` means the first
+    // column in both tools.
+    let trimmed = column.trim();
+    if let Ok(n) = trimmed.parse::<usize>() {
+        if n == 0 {
+            return Err(anyhow!(
+                "column index `{column}` is out of range: indices are 1-based"
+            ));
         }
+        return Ok(n - 1);
     }
-    column
-        .parse::<usize>()
-        .map_err(|_| anyhow!("column `{column}` is not a header name or a valid 0-based index"))
+    match headers {
+        Some(hdr) => hdr
+            .iter()
+            .position(|h| h == column)
+            .ok_or_else(|| anyhow!("no column named `{column}` in header")),
+        None => Err(anyhow!(
+            "column `{column}` is not a 1-based index; header names require has_header=true"
+        )),
+    }
 }
 
 async fn csv_query_tool(args: Value) -> Result<String> {
@@ -13141,6 +13154,13 @@ fn xml_to_json_parse(text: &str) -> Result<Value> {
     loop {
         match reader.read_event().context("parse XML")? {
             Event::Start(e) => {
+                // Cap nesting so the resulting Value can't overflow the stack
+                // during recursive serde_json serialization / Drop (a stack
+                // overflow is an uncatchable SIGABRT, not a recoverable Err).
+                const MAX_XML_DEPTH: usize = 256;
+                if stack.len() >= MAX_XML_DEPTH {
+                    return Err(anyhow!("XML nesting too deep (max {MAX_XML_DEPTH})"));
+                }
                 let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
                 let mut map = serde_json::Map::new();
                 for attr in e.attributes() {
@@ -18938,9 +18958,10 @@ tempfile = "3"
         let path = tmp_path("csv_query_idx.csv");
         let _c = Cleanup(path.clone());
         std::fs::write(&path, "apple,red\nbanana,yellow\ncherry,red\n").unwrap();
+        // Column "2" is 1-based (matching csv_select) -> the second column.
         let args = json!({
             "path": path.to_str().unwrap(),
-            "column": "1",
+            "column": "2",
             "contains": "red",
             "has_header": false
         })
@@ -19105,5 +19126,35 @@ tempfile = "3"
         )
         .await
         .is_err());
+    }
+
+    // --- regression tests for format-batch review findings ---
+
+    #[tokio::test]
+    async fn xml_to_json_rejects_deeply_nested_without_aborting() {
+        // Depth beyond MAX_XML_DEPTH must return Err (a stack overflow during
+        // recursive serialization would be an uncatchable SIGABRT instead).
+        let deep = "<a>".repeat(2000) + &"</a>".repeat(2000);
+        let args = json!({ "data": deep }).to_string();
+        assert!(dispatch("xml_to_json", &args).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn csv_query_numeric_column_is_1_based_like_csv_select() {
+        let path = tmp_path("csv_query_1based.csv");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "name,city\nAlice,NYC\nBob,LA\n").unwrap();
+        // "1" -> first column in BOTH tools.
+        let q =
+            json!({ "path": path.to_str().unwrap(), "column": "1", "equals": "Alice" }).to_string();
+        let s = json!({ "path": path.to_str().unwrap(), "columns": ["1"] }).to_string();
+        assert_eq!(
+            dispatch("csv_query", &q).await.unwrap(),
+            "name,city\nAlice,NYC\n"
+        );
+        assert_eq!(
+            dispatch("csv_select", &s).await.unwrap(),
+            "name\nAlice\nBob\n"
+        );
     }
 }
