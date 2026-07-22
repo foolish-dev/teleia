@@ -1,52 +1,39 @@
 # Coding guidelines (Rust)
 
-Bias toward caution over speed. For trivial tasks, use judgment.
+Bias toward caution over speed; on trivial tasks, use judgment.
 
 ## 1. Think before coding
-Don't assume. Don't hide confusion. Surface tradeoffs.
-- State assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them — don't pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- Read the existing types and traits before introducing new ones.
+State assumptions; when uncertain or a request is ambiguous, ask rather
+than guess. Prefer the simpler approach and push back when warranted.
+Read the existing types and traits before adding new ones.
 
 ## 2. Simplicity first
-Minimum code that solves the problem. Nothing speculative.
-- No features beyond what was asked.
-- No generic parameters, lifetimes, or trait impls until a second caller exists.
-- Prefer `&str` over `String` until ownership is actually required.
-- No `Arc<Mutex<T>>` until the borrow checker actually disagrees with you.
-- No error handling for impossible scenarios — `?` at boundaries is enough.
+Minimum code that solves the problem — nothing speculative. No features
+beyond what was asked; no generics, lifetimes, `Arc<Mutex<_>>`, or error
+handling for impossible cases until a real caller or the compiler demands
+it. Prefer `&str` over `String` until you need ownership.
 
 ## 3. Surgical changes
-Touch only what you must. Clean up only your own mess.
-- Don't `#[derive(...)]` traits you don't use.
-- Don't change `pub` / private visibility unless asked.
-- Don't reformat, re-order, or rename adjacent items.
-- If your changes orphan an import or a `use` line, remove that. Leave the rest.
-- Match the existing style — `anyhow::Result` vs custom errors, `tokio` vs blocking, etc.
+Touch only what the task requires. Don't reformat, reorder, rename, or
+change the visibility of adjacent items, and don't derive traits you
+don't use. Match the surrounding style; remove only the imports your own
+change orphans.
 
 ## 4. Goal-driven execution
-Define success criteria. Loop until verified. The verification loop for
-this workspace is:
+Define success criteria, then loop until verified:
 
     cargo fmt --all -- --check
     cargo clippy --all-targets -- -D warnings
     cargo build --all-targets --locked
     cargo test --all-targets --locked
 
-A change isn't done until all four pass. For new behavior, add a test
-that pins it before claiming the work is finished; for a bug fix, add a
-test that reproduces the bug first.
+Not done until all four pass. Pin new behavior with a test first; for a
+bug, write the failing test first.
 
 ## 5. Auto-prompting loop
-Once the success criteria are set, drive the task to done on your own —
-plan, act, verify, then take the next step without waiting for a nudge.
-- After each change, run the verification loop above, read the result,
-  and continue from what it says — a failing check is your cue to keep
-  going, not a stopping point.
-- Don't pause to narrate progress or ask "shall I continue?" — continue.
-- Still stop for the cases the earlier principles reserve: real
-  ambiguity, a decision only the user can make, or an irreversible or
-  outward-facing action.
-- If the loop stops converging — the same check keeps failing — stop and
-  say what's blocking. Don't spin.
+Drive the task to done on your own: plan, act, verify, take the next step
+without waiting for a nudge. A failing check is a cue to keep going, not
+a stop; don't narrate progress or ask "shall I continue?" — continue.
+Still stop for what the earlier principles reserve — real ambiguity, a
+user-only decision, an irreversible or outward-facing action — or when
+the same check keeps failing (say what's blocking rather than spin).
