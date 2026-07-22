@@ -50,6 +50,7 @@ const SLASH_COMMANDS: &[&str] = &[
     "build",
     "cd",
     "clear",
+    "context",
     "copy",
     "delete",
     "effort",
@@ -1822,6 +1823,7 @@ fn translate_ex(cmd: &str) -> Result<String, String> {
         "pwd" => "pwd".to_string(),
         "version" => "version".to_string(),
         "tools" => "tools".to_string(),
+        "context" => "context".to_string(),
         "copy" | "yank" | "y" => "copy".to_string(),
         "keys" => "keys".to_string(),
         "key" => format!("key {arg}"),
@@ -2162,6 +2164,7 @@ const EX_COMMANDS: &[&str] = &[
     "cd",
     "clear",
     "colorscheme",
+    "context",
     "copy",
     "delete",
     "edit",
@@ -2808,6 +2811,27 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
             };
             state.push(Entry::Info(body));
         }
+        "context" => {
+            let est = agent.context_estimate();
+            let total = est.system + est.tools + est.history;
+            let t = agent.tokens();
+            state.push(Entry::Info(format!(
+                "context · {} · {} msgs\n  \
+                 system prompt  ~{} tok\n  \
+                 tools ({})  ~{} tok\n  \
+                 history  ~{} tok\n  \
+                 → ~{} tok sent per turn · session ↑{} ↓{}",
+                agent.model(),
+                est.messages,
+                format_count(est.system),
+                agent.tools().len(),
+                format_count(est.tools),
+                format_count(est.history),
+                format_count(total),
+                format_count(t.prompt),
+                format_count(t.completion),
+            )));
+        }
         "mcps" => {
             let mut sub = arg.splitn(2, char::is_whitespace);
             let action = sub.next().unwrap_or("").trim();
@@ -3158,7 +3182,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
         }
         "help" | "?" => {
             state.push(Entry::Info(
-                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /effort [off|low|medium|high|xhigh|max|leetcode] · /key PROVIDER · /keys · /mcps · /lsps · /tools · /plan · /build · /auto · /loop N PROMPT · /prompt [NAME] · /theme [NAME] · /notify [on|off] · /entropy [on|off] · /transparent [on|off] · /copy · /cd PATH · /pwd · /version · /show · /help · /quit"
+                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /effort [off|low|medium|high|xhigh|max|leetcode] · /key PROVIDER · /keys · /mcps · /lsps · /tools · /context · /plan · /build · /auto · /loop N PROMPT · /prompt [NAME] · /theme [NAME] · /notify [on|off] · /entropy [on|off] · /transparent [on|off] · /copy · /cd PATH · /pwd · /version · /show · /help · /quit"
                     .into(),
             ));
         }
