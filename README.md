@@ -13,7 +13,7 @@
   <a href="https://huggingface.co/FoolDev/Thanatos-27B"><img alt="FoolDev/Thanatos-27B on Hugging Face" src="https://img.shields.io/badge/%F0%9F%A4%97-FoolDev%2FThanatos--27B-bb9af7?logo=huggingface&logoColor=1a1b26&labelColor=24283b"></a>
 </p>
 
-**λ τέλεια — a minimal TUI coding agent (rewritten in Rust btw).** One binary, no daemon. Talks to a local Ollama or any of twenty cloud chat-completions endpoints (≈210 named models in the dropdown). Runs one hundred eighty-six built-in tools (read/write/edit/multi_edit/rm + bash + list/glob/grep/find + head/tail/tree/stat/diff/which/fetch/wc/sha256/date + apply_patch/mkdir/mv/cp/touch/symlink/readlink/hardlink/chown/chmod/truncate/fallocate/mktemp/pathinfo/du/realpath + pwd/file_type/exists/is_dir_empty/path_join/path_normalize/relpath/split_file/join_files/cat + slice/sort/cut/comm/column/tr/expand/dedent/strings/count_matches/uniq/paste/fold/tac/indent/join/squeeze_blank/reflow/trim/seq + lint/format/typecheck/test/test_one/build/bench/coverage/run_bin/run_script/clippy_fix/cargo_metadata/cargo_tree/cargo_add/cargo_search/cargo_expand/make_target/npm_install/audit/cloc + git/git_branch/git_stash/git_remote/git_grep/git_log_file/git_apply/git_reset/git_checkout_file/git_status_json/changelog_gen + env/env_run/nproc/os_release/epoch/calc/kill/pid/sleep + ps/pgrep/process_status/is_running/process_tree/kill_by_name/uptime/loadavg/meminfo/cpuinfo/sysinfo/df/net_interfaces + replace/json/jsonl/json_diff/json_merge/json_validate/json_format/json_keys/json_flatten/ndjson_query/dotenv_parse/ini_to_json/ndjson_to_json/properties_to_json/html_to_text + base64/base64url/base32/base85/hex/url_encode/rot13/unicode_escape + md5/sha1/crc32/crc32c/adler32/crc16/hash/hmac_sha256/hmac_verify/hash_verify/jwt_decode/jwt_verify_hmac/jwt_sign_hmac/totp/secret_scan/hexdump + yaml_to_json/json_to_yaml/yaml_get/toml_to_json/json_to_toml/toml_get/deps_list/package_info/csv_to_json/csv_select/csv_query/csv_to_ndjson/xml_to_json/xml_format + web_search/download/http_request/http_form_post/follow_redirects/tcp_check/port_scan/dns_resolve/public_ip/local_ip/ip_geolocate/mac_lookup + todo_write), hosts MCP servers, persists sessions to SQLite, resumes where you left off, and paints an OS-aware welcome banner on launch.
+**λ τέλεια — a minimal TUI coding agent (rewritten in Rust btw).** One binary, no daemon. Talks to a local Ollama or any of twenty cloud chat-completions endpoints (≈210 named models in the dropdown) and hosts MCP + LSP servers. Ships **186 built-in tools** — files, search, text, code/build/test, git, data-format conversion, encoding, hashing/crypto, system & process inspection, and networking — dispatched in a tool-call loop until the model stops asking. Persists sessions to SQLite, resumes where you left off, and paints an OS-aware welcome banner on launch.
 
 <p align="center">
   <img src="assets/screenshot.svg" alt="τέλεια TUI session" width="780">
@@ -79,7 +79,7 @@ Three stances control tool execution — cycle with `Shift+Tab` or set explicitl
 
 | mode      | chip    | behaviour                                                                  | trigger              |
 | --------- | ------- | -------------------------------------------------------------------------- | -------------------- |
-| **PLAN**  | blue    | only read-only tools (`read` / `list` / `glob` / `grep` / `head` / `tail` / `tree` / `stat` / `diff` / `which` / `fetch` / `wc` / `sha256` / `date` / `lint` / `typecheck` / `test` / `env` / `json` / `base64` / `hexdump` / `du` / `realpath` / `web_search` / `find` / `readlink` / `pathinfo` / `slice` / `sort` / `cut` / `comm` / `column` / `tr` / `expand` / `dedent` / `strings` / `count_matches` / `nproc` / `os_release` / `epoch` / `calc` / `tcp_check` / `dns_resolve` / `cargo_metadata` / `cargo_tree` / `cloc` / `json_diff` / `json_merge` / `jsonl` / `dotenv_parse` / `ini_to_json` / `ndjson_to_json` / `md5` / `sha1` / `crc32` / `hash` / `hmac_sha256` / `hex` / `base32` / `url_encode` / `hash_verify` / `jwt_decode` / `pwd` / `file_type` / `path_join` / `path_normalize` / `relpath` / `is_dir_empty` / `exists` / `uniq` / `paste` / `fold` / `tac` / `indent` / `join` / `squeeze_blank` / `reflow` / `trim` / `crc32c` / `adler32` / `crc16` / `base64url` / `base85` / `rot13` / `json_validate` / `json_format` / `ndjson_query` / `properties_to_json` / `html_to_text` / `json_keys` / `json_flatten` / `unicode_escape` / `port_scan` / `public_ip` / `local_ip` / `ip_geolocate` / `follow_redirects` / `mac_lookup` / `pid` / `git_remote` / `list_scripts` / `cargo_expand` / `changelog_gen` / `git_grep` / `git_log_file` / `cargo_search` / `audit` / `git_status_json` / `jwt_verify_hmac` / `jwt_sign_hmac` / `hmac_verify` / `totp` / `secret_scan` / `sleep` / `cat` / `seq` / `ps` / `pgrep` / `process_status` / `is_running` / `process_tree` / `uptime` / `loadavg` / `meminfo` / `cpuinfo` / `sysinfo` / `df` / `net_interfaces` / `yaml_to_json` / `json_to_yaml` / `yaml_get` / `toml_to_json` / `json_to_toml` / `toml_get` / `deps_list` / `package_info` / `csv_to_json` / `csv_select` / `csv_query` / `csv_to_ndjson` / `xml_to_json` / `xml_format`, plus `git`'s read-only subcommands `status`/`diff`/`log`/`show`/`blame`/`diff_stat`) run; mutating tools short-circuit with a synthetic "blocked: plan mode" result | `/plan`, `--plan`    |
+| **PLAN**  | blue    | only read-only tools run — filesystem reads, search, inspection, format conversions, hashing/encoding, and system queries (plus `git`'s `status` / `diff` / `log` / `show` / `blame` / `diff_stat`); every mutating tool short-circuits with a synthetic "blocked: plan mode" result | `/plan`, `--plan`    |
 | **BUILD** | green (default) | every tool call pauses for `y` allow / `n` deny / `a` allow-all (auto)                          | `/build`, default    |
 | **AUTO**  | red     | every tool dispatches immediately, no prompts                              | `/auto`, `--auto`    |
 
@@ -177,192 +177,22 @@ From Normal mode, `:` opens a command line. The dropdown filters `EX_COMMANDS` b
 
 ## Tools
 
-Twenty-eight built-ins, dispatched in a tool-call loop that runs until the model stops requesting tools. MCP servers add more to the same dispatch loop.
+**186 built-ins**, dispatched in a tool-call loop that runs until the model stops requesting tools. MCP servers add more to the same dispatch loop. Every tool has a JSON-schema definition sent to the model; run `/tools` in the TUI for the live inventory (names + one-line help). Read-only tools stay enabled in [PLAN mode](#permission-modes); mutating and network-writing tools are gated.
 
-| tool        | does                                                                              |
-| ----------- | --------------------------------------------------------------------------------- |
-| `read`      | read a file; output is syntax-highlighted via scope-aware syntect mapping         |
-| `write`     | overwrite a file                                                                  |
-| `edit`      | unique-substring replace inside a file; `replace_all: true` substitutes every occurrence |
-| `multi_edit` | apply a sequence of edits to one file atomically — writes only if every step succeeds   |
-| `rm`        | delete a file, or a directory tree with `recursive: true`; refuses `/`            |
-| `apply_patch` | unified diff via `/usr/bin/patch -pN`                                           |
-| `bash`      | shell command (combined stdout/stderr, 30s timeout)                               |
-| `list`      | directory listing, dirs suffixed with `/`                                         |
-| `glob`      | shell-style glob, 200-match cap                                                   |
-| `grep`      | Rust regex over a file or recursive dir walk (skips `target/`/`.git/`/etc)        |
-| `head`      | first N lines of a file (default 40, cap 2000)                                    |
-| `tail`      | last N lines (default 40, cap 2000)                                               |
-| `tree`      | depth-limited dir tree (default 3, max 8), Unicode box-drawing branches            |
-| `stat`      | type / size / mode / mtime                                                        |
-| `diff`      | unified diff between two files via `/usr/bin/diff -u`                             |
-| `which`     | first match on `$PATH` (with exec-bit check)                                      |
-| `fetch`     | HTTP GET → response body (10s timeout, 1 MiB cap)                                 |
-| `mkdir`     | `create_dir_all`, idempotent                                                      |
-| `mv` / `cp` | refuse-to-clobber rename / copy                                                   |
-| `touch`     | create-or-bump mtime (via `futimens` on unix)                                     |
-| `wc`        | line / word / byte counts                                                         |
-| `sha256`    | hex-encoded SHA-256 (hand-rolled, no hash crate)                                  |
-| `date`      | unix + utc + local time                                                           |
-| `lint`      | `cargo clippy` / `ruff` (→ `flake8`) / `eslint` / `go vet` / `shellcheck` by extension |
-| `format`    | `rustfmt` / `ruff format` (→ `black`) / `prettier` / `gofmt` (writes in place)    |
-| `typecheck` | `cargo check` / `mypy` / `tsc --noEmit` / `go build` by extension                 |
-| `test`      | `cargo test` / `pytest` / `go test ./...` / `npm test` by extension               |
-| `git`       | bounded subcommands: `status` / `diff` / `log` / `add` / `commit` / `show` / `blame` / `diff_stat` |
-| `symlink`   | create a symlink (refuse-to-clobber)                                              |
-| `env`       | read one env var by `name`, or list all as sorted `KEY=VALUE`                     |
-| `replace`   | regex find/replace in one file (`$1` capture refs); `all: false` for first-only  |
-| `json`      | extract a value from a JSON file by RFC 6901 pointer (`/a/b/0`)                   |
-| `base64`    | encode/decode a UTF-8 string (`decode: true` to decode)                          |
-| `hexdump`   | hex + ASCII dump of a file's first N bytes (default 256, cap 4096)               |
-| `du`        | recursive byte size of a file or directory tree (symlinks not followed)          |
-| `realpath`  | canonicalize a path (resolves `.` / `..` / symlinks; must exist)                 |
-| `web_search` | DuckDuckGo (keyless, HTML endpoint) → numbered title / url / snippet results     |
-| `find`      | recursive search by name-glob / path-regex / type / size / mtime / depth          |
-| `readlink`  | read a symlink's raw target                                                       |
-| `hardlink`  | create a hard link (refuse-to-clobber)                                            |
-| `chmod`     | set Unix mode bits (`755`); on Windows toggles the read-only attribute            |
-| `truncate`  | set a file's length (grow with zeros / shrink)                                    |
-| `mktemp`    | create a unique temp file (or dir) and return its path                           |
-| `pathinfo`  | split a path into parent / filename / stem / extension                           |
-| `slice`     | extract an inclusive 1-based line range (optional line numbers)                  |
-| `sort`      | sort a file's lines (numeric / reverse / unique)                                 |
-| `cut`       | extract delimited fields / character ranges per line                             |
-| `comm`      | compare two sorted files → common / only-in-A / only-in-B                        |
-| `strings`   | printable ASCII runs from a binary (min length)                                  |
-| `column`    | align whitespace/delimited columns into a table                                  |
-| `tr`        | translate or delete character sets                                               |
-| `expand`    | tabs ↔ spaces (expand / unexpand)                                                |
-| `dedent`    | strip common leading indentation                                                 |
-| `count_matches` | count regex matches in a file (total / per-line)                             |
-| `epoch`     | convert between Unix timestamps and ISO-8601                                     |
-| `calc`      | evaluate an arithmetic expression (+ - * / % ** parens)                          |
-| `nproc`     | logical CPU count                                                                |
-| `os_release` | OS / arch / family summary                                                       |
-| `kill`      | send a signal to a pid (unix); terminate on Windows                             |
-| `tcp_check` | test TCP connectivity to host:port with a timeout                                |
-| `dns_resolve` | resolve a hostname to IP addresses                                              |
-| `download`  | fetch a URL to a file                                                            |
-| `http_request` | HTTP request with method / headers / body → status + headers + body            |
-| `cargo_metadata` | `cargo metadata` as JSON                                                     |
-| `cargo_tree` | `cargo tree` dependency graph                                                    |
-| `test_one`  | run a single test by name (cargo / pytest / go / npm)                           |
-| `cloc`      | count lines of code by language across a tree                                    |
-| `json_diff` | structural diff of two JSON files                                                |
-| `json_merge` | deep-merge two JSON files                                                        |
-| `jsonl`     | extract a JSON Pointer from each line of a JSONL file                            |
-| `dotenv_parse` | parse a `.env` file to JSON                                                    |
-| `ini_to_json` | parse INI to JSON                                                               |
-| `ndjson_to_json` | fold NDJSON into a JSON array                                                |
-| `md5` / `sha1` / `crc32` | hand-rolled checksums of a file or literal string                      |
-| `hash`      | SHA-2 (`sha224` / `sha384` / `sha512`) digest                                    |
-| `hmac_sha256` | HMAC-SHA256 of a message under a key (webhook signatures)                       |
-| `hash_verify` | check a file/string against an expected SHA-256                                 |
-| `hex` / `base32` | encode/decode a string (hex / RFC 4648 base32)                              |
-| `url_encode` | percent-encode/decode a string (RFC 3986)                                        |
-| `jwt_decode` | decode a JWT's header + payload (no signature check)                            |
-| `chown` | Change the owner (and optionally group) of a file or directory (Unix only) |
-| `pwd` | Print the current working directory as an absolute path. |
-| `file_type` | Identify a file's type by inspecting its contents |
-| `path_join` | Join path segments into a single path using the OS separator |
-| `path_normalize` | Lexically normalize a path string: collapse `.` segments and resolve `..` segme... |
-| `relpath` | Compute the relative path from `base` to `path` (pure string/component math, no... |
-| `split_file` | Split a file into numbered chunk files by byte-count or line-count |
-| `join_files` | Concatenate the byte contents of several input files, in order, into a single o... |
-| `is_dir_empty` | Report whether a directory contains no entries |
-| `exists` | Check whether a path exists on disk without erroring when it doesn't |
-| `fallocate` | Preallocate or resize a file to an exact byte size, creating it if it does not ... |
-| `uniq` | Collapse runs of ADJACENT equal lines in a file (like GNU `uniq`), order-preser... |
-| `paste` | Merge lines of multiple files side by side, like Unix `paste` |
-| `fold` | Hard-wrap each line of a file to at most `width` characters (default 80), like ... |
-| `tac` | Print the lines of a file in reverse order (last line first), like the Unix `tac` |
-| `indent` | Prepend an indentation prefix to each line of a text file |
-| `join` | Relational inner join of two text files on a shared key field (like the Unix `j... |
-| `squeeze_blank` | Read a text file and collapse every run of two or more consecutive blank (empty... |
-| `reflow` | Reflow text to a maximum line width using greedy word-wrapping |
-| `trim` | Trim whitespace from each line of text |
-| `crc32c` | CRC-32C (Castagnoli, iSCSI/ext4/SSE4.2 polynomial) of a file (`path`) or litera... |
-| `adler32` | Adler-32 checksum (RFC 1950 / zlib) of a file (`path`) or literal string (`data... |
-| `crc16` | CRC-16 checksum of a file (`path`) or literal string (`data`) — exactly one |
-| `base64url` | URL-safe Base64 encode or decode a UTF-8 string (RFC 4648 §5: `-_` instead of `... |
-| `base85` | Encode or decode base85 text |
-| `rot13` | Apply the ROT13 substitution cipher to text |
-| `json_validate` | Validate that a JSON document is well-formed |
-| `json_format` | Reformat a JSON document: pretty-print (default) or minify |
-| `ndjson_query` | Filter a JSONL/NDJSON file by a per-record predicate, then optionally project a... |
-| `properties_to_json` | Parse a Java `.properties` file into a flat JSON object of string key/value pai... |
-| `html_to_text` | Strip HTML markup to plain text: drops tags, decodes common entities, collapses... |
-| `json_keys` | List every key path in a JSON document as RFC-6901-style JSON Pointers (`/a/b`,... |
-| `json_flatten` | Flatten a nested JSON document into a single-level object whose keys are dotted... |
-| `unicode_escape` | Escape or unescape the non-ASCII characters in a string |
-| `port_scan` | Scan a host for open TCP ports by attempting a timed connect to each (batch for... |
-| `public_ip` | Return this machine's public (WAN) IP address as seen from the internet |
-| `local_ip` | Report this machine's primary local (LAN) IPv4/IPv6 address — the source addres... |
-| `ip_geolocate` | Geolocate an IPv4/IPv6 address via the free ip-api.com service (no API key) |
-| `follow_redirects` | Trace an HTTP redirect chain WITHOUT auto-following: issues requests with redir... |
-| `http_form_post` | POST an HTML form |
-| `mac_lookup` | Look up the hardware vendor / manufacturer for a MAC address by querying the pu... |
-| `pid` | Report the process id (pid) of the teleia tool process itself |
-| `env_run` | Run a program with a controlled environment and capture its output |
-| `git_branch` | Manage git branches in the current repo |
-| `git_stash` | Manage the git stash in the current repo |
-| `git_remote` | List configured git remotes in the current repository |
-| `git_checkout_file` | Restore file(s) in the working tree from git: runs `git checkout [<ref>] -- <pa... |
-| `run_script` | Run a project script/target by name, auto-detecting the runner from a manifest ... |
-| `list_scripts` | List runnable entrypoints in a project directory: package.json scripts, Makefil... |
-| `coverage` | Run the standard test-coverage tool for the path's language and return its report |
-| `bench` | Run the standard benchmark runner for the path's language |
-| `build` | Compile artifacts for the path's language (the artifact-producing counterpart t... |
-| `cargo_expand` | Expand Rust macros in the current crate using the `cargo expand` subcommand (th... |
-| `clippy_fix` | Run the language's auto-fixing linter, mutating files in place |
-| `run_bin` | Build and run the current project's binary/executable, auto-detecting the entry... |
-| `changelog_gen` | Generate a Markdown changelog from git history, grouping Conventional-Commit me... |
-| `git_grep` | Search tracked files for a regex/string with `git grep -n` |
-| `git_log_file` | Show the commit history of a single file via `git log -- <path>`, following ren... |
-| `cargo_add` | Add a dependency to a Rust workspace's Cargo.toml via `cargo add` |
-| `cargo_search` | Search crates.io for Rust crates matching a query, via `cargo search` |
-| `make_target` | Run a Makefile target with `make <target>` in an optional directory, returning ... |
-| `git_apply` | Apply a real git unified diff via `git apply` (reading the patch from stdin) |
-| `git_reset` | Run `git reset` in the current repo to move HEAD and/or unstage changes |
-| `npm_install` | Install Node.js dependencies using the project's package manager |
-| `audit` | Run a dependency-vulnerability advisory scan for the project in `dir` (default ... |
-| `git_status_json` | Report `git status` as machine-readable JSON: {branch, ahead, behind, entries:[... |
-| `jwt_verify_hmac` | Verify a JWT's HMAC signature (HS256/HS384/HS512) against a shared secret and r... |
-| `jwt_sign_hmac` | Sign a JWT with an HMAC-SHA2 secret (HS256/HS384/HS512) |
-| `hmac_verify` | Verify an HMAC tag: recompute HMAC over `data` under `key` (raw UTF-8, or hex b... |
-| `totp` | RFC 6238 TOTP code from a base32 `secret` |
-| `secret_scan` | Scan a file or directory for hard-coded secrets: AWS access keys, GitHub tokens... |
-| `sleep` | Pause for a fixed duration, then return |
-| `cat` | Read and concatenate multiple files in order, returning their combined contents |
-| `seq` | Generate a numeric sequence from start to end (inclusive) stepping by `step`, j... |
-| `ps` | list processes (JSON: pid/name/cpu/memory/parent/status), filter/sort/limit (via `sysinfo`) |
-| `pgrep` | find processes by name (or full cmdline) substring |
-| `process_status` | detailed status of one pid |
-| `is_running` | whether a pid is alive |
-| `process_tree` | indented process tree (whole forest or a subtree) |
-| `kill_by_name` | kill processes by name — `dry_run` (default true) lists first |
-| `uptime` | system uptime (secs + human) |
-| `loadavg` | 1/5/15-min load average (`supported:false` on Windows) |
-| `meminfo` | memory + swap usage in bytes |
-| `cpuinfo` | CPU brand / vendor / frequency / core counts |
-| `sysinfo` | aggregate os/arch/uptime/load/memory/swap/cpu snapshot |
-| `df` | disk space for the filesystem containing a path |
-| `net_interfaces` | network interfaces with MAC + IP networks |
-| `yaml_to_json` | convert YAML (multi-doc → array) to JSON |
-| `json_to_yaml` | convert JSON to YAML |
-| `yaml_get` | extract a value from a YAML file by JSON Pointer |
-| `toml_to_json` | convert TOML to JSON |
-| `json_to_toml` | convert JSON to TOML |
-| `toml_get` | extract a value from a TOML file by JSON Pointer |
-| `deps_list` | list a Cargo.toml's dependencies by section |
-| `package_info` | name/version/deps of a Cargo.toml / package.json / pyproject.toml |
-| `csv_to_json` | CSV → JSON array of row objects |
-| `csv_select` | project columns (by name or index) from a CSV |
-| `csv_query` | filter CSV rows by an equals/contains predicate |
-| `csv_to_ndjson` | CSV → newline-delimited JSON |
-| `xml_to_json` | XML → JSON tree (attrs `@name`, text `#text`, repeats → arrays) |
-| `xml_format` | pretty-print / re-indent XML |
-| `todo_write` | replace the session todo list (`pending` / `in_progress` / `completed`); resets on restart |
+- **Files & directories** — `read` `write` `edit` `multi_edit` `apply_patch` `rm` `cp` `mv` `mkdir` `touch` `symlink` `hardlink` `readlink` `truncate` `fallocate` `mktemp` `split_file` `join_files` `cat` `chmod` `chown` `stat` `du` `file_type` `exists` `is_dir_empty`
+- **Paths** — `realpath` `pathinfo` `path_join` `path_normalize` `relpath` `pwd`
+- **Search & listing** — `list` `glob` `grep` `find` `tree` `diff` `which` `wc` `head` `tail` `slice`
+- **Text processing** — `sort` `cut` `comm` `uniq` `paste` `join` `column` `tr` `expand` `dedent` `fold` `tac` `indent` `squeeze_blank` `reflow` `trim` `strings` `count_matches` `replace` `seq`
+- **Code: lint / build / test** — `lint` `format` `typecheck` `test` `test_one` `build` `bench` `coverage` `run_bin` `run_script` `clippy_fix` `list_scripts` `make_target` `npm_install` `audit` `cloc` `cargo_metadata` `cargo_tree` `cargo_add` `cargo_search` `cargo_expand`
+- **Git** — `git` (`status`/`diff`/`log`/`add`/`commit`/`show`/`blame`/`diff_stat`) `git_branch` `git_stash` `git_remote` `git_grep` `git_log_file` `git_apply` `git_reset` `git_checkout_file` `git_status_json` `changelog_gen`
+- **JSON & data formats** — `json` `jsonl` `json_diff` `json_merge` `json_validate` `json_format` `json_keys` `json_flatten` `ndjson_query` `ndjson_to_json` `dotenv_parse` `ini_to_json` `properties_to_json` `html_to_text` `yaml_to_json` `json_to_yaml` `yaml_get` `toml_to_json` `json_to_toml` `toml_get` `deps_list` `package_info` `csv_to_json` `csv_select` `csv_query` `csv_to_ndjson` `xml_to_json` `xml_format`
+- **Encoding** — `base64` `base64url` `base32` `base85` `hex` `url_encode` `rot13` `unicode_escape` `hexdump`
+- **Hashing & crypto** — `sha256` `md5` `sha1` `crc32` `crc32c` `adler32` `crc16` `hash` `hmac_sha256` `hmac_verify` `hash_verify` `jwt_decode` `jwt_verify_hmac` `jwt_sign_hmac` `totp` `secret_scan`
+- **System & processes** — `bash` `env` `env_run` `date` `epoch` `calc` `nproc` `os_release` `kill` `pid` `sleep` `ps` `pgrep` `process_status` `is_running` `process_tree` `kill_by_name` `uptime` `loadavg` `meminfo` `cpuinfo` `sysinfo` `df` `net_interfaces`
+- **Network & web** — `fetch` `web_search` `download` `http_request` `http_form_post` `follow_redirects` `tcp_check` `port_scan` `dns_resolve` `public_ip` `local_ip` `ip_geolocate` `mac_lookup`
+- **Session** — `todo_write`
+
+A few worth calling out: `read` syntax-highlights via scope-aware syntect; `edit` does a unique-substring replace (fails if `old_string` isn't unique unless `replace_all`); `bash` combines stdout/stderr with a 30 s timeout; `web_search` is keyless (DuckDuckGo); `kill_by_name` defaults to `dry_run: true`; and the hashing/encoding family is hand-rolled (no crypto crates). Tools that shell out (`lint`/`format`/`build`/`git_*`/`cargo_*`/…) auto-detect the toolchain by file extension or manifest.
 
 ## Providers
 
@@ -392,7 +222,7 @@ The model name picks the provider. Use `provider:NAME` to disambiguate names tha
 | `sambanova:NAME`                   | SambaNova    | `SAMBANOVA_API_KEY`     |
 | anything else                      | local Ollama | _none_                  |
 
-The `/model` dropdown pre-populates with ~210 named models across all twenty providers. `Tab` accepts, type to filter; any name is accepted including ones not in the catalog.
+`claude-*` models route through Anthropic's native Messages API (prompt caching, native tool-use, `x-api-key`); every other cloud provider uses the OpenAI-compatible `/chat/completions` path. The `/model` dropdown pre-populates with ~210 named models across all twenty providers. `Tab` accepts, type to filter; any name is accepted including ones not in the catalog.
 
 **Keys.** `--api-key KEY` overrides the env-var fallback. Missing a key at startup or after `/model NAME`? teleia prompts with hidden input (`rpassword` at startup, in-TUI masked prompt mid-session) and saves the entered key under `prefs.api_key:<ENV_VAR>` so the next launch picks it up. `/keys` lists every provider + status; `/key PROVIDER` opens the prompt on demand. Env-var values win when set, so exporting overrides the saved one.
 
@@ -410,6 +240,7 @@ The `/model` dropdown pre-populates with ~210 named models across all twenty pro
 - **Smart auto-scroll** — defaults to following the bottom. Scrolling up disengages bottom-following so streaming deltas don't yank you back down mid-read; reaching the bottom (scroll 0) via any down gesture re-engages. `G` jumps to bottom + re-engages. Scroll math uses `Paragraph::line_count` so it always lands at the last rendered visual row.
 - **Scrollbar** — right-edge thumb in `th.purple` over a `th.dim` track; only renders when there's overflow.
 - **Drag-select** — left-click + drag in the chat area highlights cells; release copies via [`arboard`](https://crates.io/crates/arboard) (Wayland / X11 / macOS / Windows). Works during streaming.
+- **Reasoning stream** — reasoning models stream their chain-of-thought to a dimmed `τέλεια · thinking` block, kept separate from the answer and never written back to the wire.
 - **Themes** — `tokyo-night` (default), `catppuccin`, `dracula`. Code highlighting follows the active theme (scope-aware mapping via syntect).
 - **Blur & transparency** — `/transparent on` (or `TELEIA_TRANSPARENT=1`) swaps the theme background for `Color::Reset`, letting the terminal's alpha and the compositor's blur bleed through. Pair with `alpha=0.85` in foot/alacritty + Hyprland's blur decoration; selection highlight, status chips, and mode badges stay opaque so they remain legible. See [`docs/RICE.md`](docs/RICE.md).
 - **Desktop autotheme** — pair teleia with the external [`grogu`](https://github.com/foolish-dev/grogu) binary to fan the active theme out to Noctalia shell, niri, vim/neovim, and back into teleia's own prefs. `grogu apply` (no args) reads the `theme` row teleia writes to its sqlite store, so `/theme dracula` → `grogu apply` repaints the desktop without typing the theme name twice. Designed to run as a Noctalia post-wallpaper-change hook so wallpaper rotation re-themes the system.
@@ -422,9 +253,9 @@ The `/model` dropdown pre-populates with ~210 named models across all twenty pro
 Everything important survives a restart.
 
 - **Messages** stream to SQLite as they arrive — no "unsaved" state. Store lives at `$XDG_DATA_HOME/teleia/teleia.sqlite` (Linux), `~/Library/Application Support/teleia/teleia.sqlite` (macOS), `%APPDATA%\teleia\teleia.sqlite` (Windows). `$XDG_DATA_HOME` wins on any platform when set.
-- **Auto-bookmarks** — every launch is tagged `last`; `/reset` rotates the outgoing session to `prev`. So `teleia --resume` always picks up where you left off, and the run before that is recoverable with `/load prev`.
+- **Auto-bookmarks** — every launch is tagged `last`; `/reset` rotates the outgoing session to `prev`. So `teleia --resume` always picks up where you left off, and the run before that is recoverable with `/load prev`. Each session also gets a durable `s-YYYY-MM-DD-HHMMSS` alias so none orphan.
 - **Aliases** — `/save NAME` + `/load NAME` for sessions you want to keep by hand.
-- **Sticky preferences** — theme, `/notify` toggle, `/transparent` toggle, permission mode, active model, and per-provider API keys all persist (CLI flags override). Launching `teleia` with no `--model` picks up wherever you last `/model`-ed.
+- **Sticky preferences** — theme, `/notify` toggle, `/transparent` toggle, permission mode, reasoning-effort tier, active model, and per-provider API keys all persist (CLI flags override). Launching `teleia` with no `--model` picks up wherever you last `/model`-ed.
 - **Input history** — last 500 submissions reload into the `Up`/`Down` recall buffer at startup, deduped against the most recent entry.
 
 ## Configuration
@@ -470,7 +301,7 @@ crates/
   teleia-cli       # `teleia` binary + TUI + MCP client + LSP client
   teleia-agent     # turn loop, permission gate, event stream
   teleia-llm       # chat / pull / tags streaming, provider detection
-  teleia-tools     # 22 built-in tools
+  teleia-tools     # the 186 built-in tools + dispatch
   teleia-tools-bin # same dispatch as a stdin/stdout CLI
   teleia-store     # sqlite session + prefs + input-history persistence
 ```
