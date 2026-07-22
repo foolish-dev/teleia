@@ -2369,6 +2369,12 @@ fn base32_decode(s: &str, hex_variant: bool) -> Result<Vec<u8>> {
         .collect();
     let mut out = Vec::new();
     for group in clean.chunks(8) {
+        // Only the last chunk may be short, and a well-formed base32 tail is
+        // 2/4/5/7 chars — 1/3/6 are impossible and would silently drop or
+        // fabricate bytes. Reject them (mirrors base64_decode's len<2 guard).
+        if group.len() < 8 && !matches!(group.len(), 2 | 4 | 5 | 7) {
+            return Err(anyhow!("invalid base32 group length: {}", group.len()));
+        }
         let bits = group.len() * 5;
         let mut n = 0u64;
         for &c in group {
@@ -3265,7 +3271,10 @@ fn find_matches(path: &std::path::Path, meta: &std::fs::Metadata, filters: &Find
     }
 
     if let Some(re) = &filters.regex {
-        if !re.is_match(&path.display().to_string()) {
+        // Match against forward-slash-separated paths on every platform, so a
+        // regex written with `/` (the natural form) works on Windows too.
+        let hay = path.to_string_lossy().replace('\\', "/");
+        if !re.is_match(&hay) {
             return false;
         }
     }
@@ -3405,14 +3414,26 @@ async fn mktemp_tool(args: Value) -> Result<String> {
         let name = format!("{prefix}{token:016x}{suffix}");
         let path = base.join(&name);
         let res = if dir {
-            std::fs::create_dir(&path)
+            let r = std::fs::create_dir(&path);
+            // Match mkdtemp(3): keep the dir private to the owner (0700).
+            #[cfg(unix)]
+            if r.is_ok() {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700));
+            }
+            r
         } else {
-            std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-                // Drop the handle so the file persists, closed, on disk.
-                .map(|_| ())
+            let mut opts = std::fs::OpenOptions::new();
+            opts.write(true).create_new(true);
+            // Match mkstemp(3): create 0600 atomically rather than honoring
+            // umask (usually 0644, world-readable) in a shared temp dir.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            // Drop the handle so the file persists, closed, on disk.
+            opts.open(&path).map(|_| ())
         };
         match res {
             Ok(()) => return Ok(path.display().to_string()),
@@ -3831,6 +3852,9 @@ async fn strings_tool(args: Value) -> Result<String> {
         limit,
     } = serde_json::from_value(args)?;
     let min = min_len.unwrap_or(4).max(1);
+    // Default + hard cap so an unbounded `strings` on a large binary can't
+    // flood the context window (matches grep=200 / find's default-cap idiom).
+    let cap = limit.unwrap_or(2000).min(10_000);
     let data = tokio::fs::read(&path)
         .await
         .with_context(|| format!("read {path}"))?;
@@ -3838,7 +3862,7 @@ async fn strings_tool(args: Value) -> Result<String> {
     let mut out = String::new();
     let mut run = String::new();
     let mut emitted = 0usize;
-    // Returns false once the emit limit is hit so the caller can stop.
+    // Returns false once the emit cap is hit so the caller can stop.
     let flush = |run: &mut String, out: &mut String, emitted: &mut usize| -> bool {
         // `run.len()` == char count here: every pushed char is a single
         // ASCII byte (b <= 0x7e), so byte length and char length coincide.
@@ -3848,21 +3872,27 @@ async fn strings_tool(args: Value) -> Result<String> {
             *emitted += 1;
         }
         run.clear();
-        limit.is_none_or(|l| *emitted < l)
+        *emitted < cap
     };
 
+    let mut truncated = false;
     for &b in &data {
         if (0x20..=0x7e).contains(&b) {
             run.push(b as char);
         } else if !flush(&mut run, &mut out, &mut emitted) {
             run.clear();
+            truncated = true;
             break;
         }
     }
     // Flush a run that reached EOF without a terminating non-printable byte.
-    flush(&mut run, &mut out, &mut emitted);
+    if !truncated {
+        flush(&mut run, &mut out, &mut emitted);
+    }
 
-    if out.is_empty() {
+    if truncated {
+        out.push_str(&format!("[truncated at {cap} runs]\n"));
+    } else if out.is_empty() {
         out.push_str("(no printable runs)\n");
     }
     Ok(out)
@@ -4357,6 +4387,24 @@ fn epoch_iso_to_secs(input: &str) -> Result<i64> {
     }
     if !(1..=31).contains(&d) {
         return Err(anyhow!("day out of range: {d}"));
+    }
+    // Reject impossible days-of-month (e.g. Feb 30) — otherwise the civil-days
+    // formula silently rolls them into the next month. Leap rule uses the real
+    // calendar `year`, not the Jan/Feb-shifted `yy` computed below.
+    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let days_in_month = match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        _ => {
+            if leap {
+                29
+            } else {
+                28
+            }
+        }
+    };
+    if d > days_in_month {
+        return Err(anyhow!("day out of range for month {m}: {d}"));
     }
     if hh >= 24 || mm >= 60 || ss >= 60 {
         return Err(anyhow!("time out of range: {hh:02}:{mm:02}:{ss:02}"));
@@ -5121,13 +5169,11 @@ async fn http_request_tool(args: Value) -> Result<String> {
         req = req.body(b);
     }
 
-    let resp = req
+    let mut resp = req
         .send()
         .await
         .with_context(|| format!("{method_str} {url}"))?;
 
-    // Read status + headers BEFORE consuming the body: resp.bytes() takes
-    // self by value, so anything from `resp` must be captured first.
     let status = resp.status();
     let mut header_block = String::new();
     for (name, value) in resp.headers().iter() {
@@ -5135,20 +5181,28 @@ async fn http_request_tool(args: Value) -> Result<String> {
         header_block.push_str(&format!("{name}: {v}\n"));
     }
 
-    let bytes = resp
-        .bytes()
+    // Stream the body and stop one byte past the cap, so a multi-GB (or
+    // slow-infinite) response can't be fully buffered into memory. The true
+    // size is intentionally never known once we stop early.
+    let mut buf: Vec<u8> = Vec::new();
+    let mut truncated = false;
+    while let Some(chunk) = resp
+        .chunk()
         .await
-        .with_context(|| format!("reading body from {url}"))?;
-    let truncated = bytes.len() > cap;
-    let slice = if truncated { &bytes[..cap] } else { &bytes[..] };
+        .with_context(|| format!("reading body from {url}"))?
+    {
+        buf.extend_from_slice(&chunk);
+        if buf.len() > cap {
+            truncated = true;
+            break;
+        }
+    }
+    let slice = if truncated { &buf[..cap] } else { &buf[..] };
     let body_text = String::from_utf8_lossy(slice);
 
     let mut out = format!("HTTP {}\n{header_block}\n{body_text}", status.as_u16());
     if truncated {
-        out.push_str(&format!(
-            "\n\n[truncated at {cap} bytes; original was {}]",
-            bytes.len()
-        ));
+        out.push_str(&format!("\n\n[truncated at {cap} bytes]"));
     }
     Ok(out)
 }
@@ -5423,7 +5477,7 @@ fn cloc_walk(
         }
         // symlink_metadata so we never traverse a symlinked directory
         // (avoids cycles) and don't misclassify a dangling link.
-        let Ok(md) = entry.metadata() else {
+        let Ok(md) = std::fs::symlink_metadata(entry.path()) else {
             continue;
         };
         let ft = md.file_type();
@@ -5733,8 +5787,15 @@ async fn ini_to_json_tool(args: Value) -> Result<String> {
         }
         if line.starts_with('[') && line.ends_with(']') {
             let name = line[1..line.len() - 1].trim().to_string();
-            root.entry(name.clone())
+            // A bare top-level key can already hold this name as a String;
+            // a section header wins (last-writer), so force it to an object
+            // rather than leaving a String that as_object_mut() would panic on.
+            let e = root
+                .entry(name.clone())
                 .or_insert_with(|| Value::Object(Default::default()));
+            if !e.is_object() {
+                *e = Value::Object(Default::default());
+            }
             section = Some(name);
             continue;
         }
@@ -7798,5 +7859,95 @@ mod tests {
         let bargs = json!({ "path": bpath.to_str().unwrap(), "to": "array" }).to_string();
         let err = dispatch("ndjson_to_json", &bargs).await.unwrap_err();
         assert!(err.to_string().contains("line 2"), "err was: {err}");
+    }
+
+    // --- regression tests for review findings (fix/tools-review-findings) ---
+
+    #[tokio::test]
+    async fn ini_to_json_survives_key_section_name_collision() {
+        // A bare key colliding with a later same-named section used to panic
+        // (unwrap on a String via as_object_mut).
+        let path = tmp_path("collide.ini");
+        let _c = Cleanup(path.clone());
+        std::fs::write(&path, "foo=1\n[foo]\nk=v\n").unwrap();
+        let out = dispatch(
+            "ini_to_json",
+            &json!({ "path": path.to_str().unwrap() }).to_string(),
+        )
+        .await
+        .unwrap();
+        // Section wins (last-writer); no panic.
+        assert!(out.contains("\"k\": \"v\""), "{out}");
+    }
+
+    #[tokio::test]
+    async fn epoch_rejects_impossible_calendar_days() {
+        for bad in ["2001-02-29", "2000-02-30", "2000-04-31"] {
+            let args = json!({ "value": bad, "to": "epoch" }).to_string();
+            assert!(
+                dispatch("epoch", &args).await.is_err(),
+                "{bad} should be rejected"
+            );
+        }
+        // A real leap day still works.
+        assert!(dispatch(
+            "epoch",
+            &json!({ "value": "2000-02-29", "to": "epoch" }).to_string()
+        )
+        .await
+        .is_ok());
+    }
+
+    #[tokio::test]
+    async fn base32_rejects_invalid_tail_length() {
+        // "MYA" is a 3-char tail — impossible for RFC 4648; must error not
+        // silently decode.
+        assert!(dispatch(
+            "base32",
+            &json!({ "data": "MYA", "decode": true }).to_string()
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn strings_caps_output_and_marks_truncation() {
+        let path = tmp_path("strings-cap.bin");
+        let _c = Cleanup(path.clone());
+        // Five printable runs separated by NULs; cap at 2.
+        std::fs::write(&path, b"aaaa\x00bbbb\x00cccc\x00dddd\x00eeee").unwrap();
+        let args = json!({ "path": path.to_str().unwrap(), "limit": 2 }).to_string();
+        let out = dispatch("strings", &args).await.unwrap();
+        assert!(out.contains("[truncated at 2 runs]"), "{out}");
+        assert!(!out.contains("cccc"), "{out}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mktemp_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let out = dispatch("mktemp", &json!({ "prefix": "teleia-perm-" }).to_string())
+            .await
+            .unwrap();
+        let path = out.trim();
+        let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        let _ = std::fs::remove_file(path);
+        assert_eq!(mode, 0o600, "temp file mode was {mode:o}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cloc_does_not_follow_symlinked_dirs() {
+        // A self-referential symlink must not be traversed (no hang / no
+        // external files counted).
+        let dir = tmp_path("cloc-sym");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.rs"), "fn main() {}\n").unwrap();
+        std::os::unix::fs::symlink(&dir, dir.join("loop")).unwrap();
+        let args = json!({ "path": dir.to_str().unwrap() }).to_string();
+        let out = dispatch("cloc", &args).await.unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        // Completed (didn't spin on the cycle) and counted the one real file.
+        assert!(out.contains("Rust") || out.contains("rs"), "{out}");
     }
 }
