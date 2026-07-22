@@ -217,7 +217,7 @@ Twenty-eight built-ins, dispatched in a tool-call loop that runs until the model
 | `hexdump`   | hex + ASCII dump of a file's first N bytes (default 256, cap 4096)               |
 | `du`        | recursive byte size of a file or directory tree (symlinks not followed)          |
 | `realpath`  | canonicalize a path (resolves `.` / `..` / symlinks; must exist)                 |
-| `web_search` | Brave Search API (`BRAVE_API_KEY` env) → numbered title / url / snippet results  |
+| `web_search` | DuckDuckGo (keyless, HTML endpoint) → numbered title / url / snippet results     |
 | `find`      | recursive search by name-glob / path-regex / type / size / mtime / depth          |
 | `readlink`  | read a symlink's raw target                                                       |
 | `hardlink`  | create a hard link (refuse-to-clobber)                                            |

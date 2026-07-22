@@ -365,7 +365,7 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         ToolDef::new(
             "web_search",
-            "Search the web via the Brave Search API. Returns a numbered list of title / url / snippet results. Requires the `BRAVE_API_KEY` environment variable (create one at https://brave.com/search/api).",
+            "Search the web via DuckDuckGo (no API key required). Returns a numbered list of title / url / snippet results.",
             json!({ "type": "object", "properties": {
                 "query": { "type": "string" },
                 "count": { "type": "integer", "description": "How many results to return (default 5, capped at 20)" }
@@ -2361,57 +2361,91 @@ struct WebSearchArgs {
     count: Option<u32>,
 }
 
-#[derive(Deserialize)]
-struct BraveResponse {
-    web: Option<BraveWeb>,
-}
-
-#[derive(Deserialize)]
-struct BraveWeb {
-    #[serde(default)]
-    results: Vec<BraveResult>,
-}
-
-#[derive(Deserialize)]
-struct BraveResult {
+struct DdgResult {
     title: String,
     url: String,
-    #[serde(default)]
-    description: String,
+    snippet: String,
 }
+
+/// A desktop browser UA — DuckDuckGo's HTML endpoint returns an empty page
+/// to requests without a plausible User-Agent.
+const DDG_USER_AGENT: &str =
+    "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0";
 
 async fn web_search_tool(args: Value) -> Result<String> {
     let WebSearchArgs { query, count } = serde_json::from_value(args)?;
-    let key = std::env::var("BRAVE_API_KEY").map_err(|_| {
-        anyhow!(
-            "BRAVE_API_KEY is not set — create a key at https://brave.com/search/api and export it"
-        )
-    })?;
-    let count = count.unwrap_or(5).clamp(1, 20).to_string();
+    let count = count.unwrap_or(5).clamp(1, 20) as usize;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()?;
+    // Keyless: DuckDuckGo's HTML endpoint (no API key). Fragile to markup
+    // changes, but works with zero configuration.
     let resp = client
-        .get("https://api.search.brave.com/res/v1/web/search")
-        .query(&[("q", query.as_str()), ("count", count.as_str())])
-        .header("X-Subscription-Token", &key)
-        .header("Accept", "application/json")
+        .post("https://html.duckduckgo.com/html/")
+        .header("User-Agent", DDG_USER_AGENT)
+        .form(&[("q", query.as_str())])
         .send()
         .await
         .with_context(|| format!("searching for {query:?}"))?;
     let status = resp.status();
     if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Err(anyhow!("brave search returned {status}: {body}"));
+        return Err(anyhow!("duckduckgo returned {status}"));
     }
-    let parsed: BraveResponse = resp.json().await.context("parsing Brave response")?;
-    let results = parsed.web.map(|w| w.results).unwrap_or_default();
-    Ok(format_brave_results(&query, &results))
+    let html = resp.text().await.context("reading DuckDuckGo response")?;
+    Ok(format_ddg_results(&query, &parse_ddg_html(&html, count)))
 }
 
-/// Render Brave results as a numbered `title / url / snippet` list. Split
-/// out from the request so it can be unit-tested without a network call.
-fn format_brave_results(query: &str, results: &[BraveResult]) -> String {
+/// Extract up to `count` results from DuckDuckGo's HTML page. Split out from
+/// the request so it can be unit-tested against a fixture without a network
+/// call. Fragile by nature (HTML scraping), so it degrades to fewer/no
+/// results rather than erroring on markup it doesn't recognize.
+fn parse_ddg_html(html: &str, count: usize) -> Vec<DdgResult> {
+    let link_re =
+        regex::Regex::new(r#"(?s)class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>"#).unwrap();
+    let snip_re = regex::Regex::new(r#"(?s)class="result__snippet"[^>]*>(.*?)</a>"#).unwrap();
+    let snippets: Vec<String> = snip_re
+        .captures_iter(html)
+        .map(|c| {
+            strip_html(&c[1])
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect();
+    let mut out = Vec::new();
+    for (i, cap) in link_re.captures_iter(html).enumerate() {
+        if out.len() >= count {
+            break;
+        }
+        let title = strip_html(&cap[2])
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        out.push(DdgResult {
+            title,
+            url: ddg_decode_href(&cap[1]),
+            snippet: snippets.get(i).cloned().unwrap_or_default(),
+        });
+    }
+    out
+}
+
+/// DuckDuckGo wraps result links as `//duckduckgo.com/l/?uddg=<enc>&rut=…`;
+/// pull out and percent-decode the real target.
+fn ddg_decode_href(href: &str) -> String {
+    if let Some(pos) = href.find("uddg=") {
+        let enc = href[pos + 5..].split('&').next().unwrap_or("");
+        if let Ok(dec) = url_percent_decode(enc) {
+            return dec;
+        }
+    }
+    match href.strip_prefix("//") {
+        Some(rest) => format!("https://{rest}"),
+        None => href.to_string(),
+    }
+}
+
+fn format_ddg_results(query: &str, results: &[DdgResult]) -> String {
     if results.is_empty() {
         return format!("no results for {query:?}");
     }
@@ -2422,13 +2456,13 @@ fn format_brave_results(query: &str, results: &[BraveResult]) -> String {
             i + 1,
             r.title,
             r.url,
-            strip_html(&r.description)
+            r.snippet
         ));
     }
     out.trim_end().to_string()
 }
 
-/// Strip HTML tags (Brave embeds `<strong>` highlight markup in snippets)
+/// Strip HTML tags (search snippets embed `<b>`/`<strong>` highlight markup)
 /// without pulling in an HTML parser.
 fn strip_html(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -12239,28 +12273,39 @@ mod tests {
     }
 
     #[test]
-    fn format_brave_results_numbers_strips_and_handles_empty() {
-        let results = vec![
-            BraveResult {
-                title: "First".into(),
-                url: "https://a.example".into(),
-                description: "the <strong>match</strong> here".into(),
-            },
-            BraveResult {
-                title: "Second".into(),
-                url: "https://b.example".into(),
-                description: "plain".into(),
-            },
-        ];
-        let out = format_brave_results("q", &results);
-        assert!(out.contains("1. First"), "{out}");
-        assert!(out.contains("https://a.example"), "{out}");
+    fn ddg_decode_href_unwraps_redirect_and_scheme() {
+        assert_eq!(
+            ddg_decode_href("//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fa&rut=xyz"),
+            "https://example.com/a"
+        );
+        // A bare protocol-relative link gets an https scheme.
+        assert_eq!(ddg_decode_href("//example.org/x"), "https://example.org/x");
+    }
+
+    #[test]
+    fn parse_ddg_html_extracts_results_and_format_handles_empty() {
+        // Minimal fixture in DuckDuckGo's html-endpoint shape.
+        let html = r#"
+            <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Frust-lang.org%2F&rut=1">The <b>Rust</b> Language</a>
+            <a class="result__snippet" href="x">A <b>systems</b> language.</a>
+            <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdoc.rust-lang.org%2F&rut=2">Docs</a>
+            <a class="result__snippet" href="y">The book.</a>
+        "#;
+        let results = parse_ddg_html(html, 5);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].url, "https://rust-lang.org/");
+        assert_eq!(results[0].title, "The Rust Language");
+        assert_eq!(results[0].snippet, "A systems language.");
+        // count caps the results.
+        assert_eq!(parse_ddg_html(html, 1).len(), 1);
+        // Rendering numbers + handles empty.
+        let out = format_ddg_results("q", &results);
         assert!(
-            out.contains("the match here") && !out.contains("<strong>"),
+            out.contains("1. The Rust Language") && out.contains("2. Docs"),
             "{out}"
         );
-        assert!(out.contains("2. Second"), "{out}");
-        assert_eq!(format_brave_results("nope", &[]), "no results for \"nope\"");
+        assert!(out.contains("https://rust-lang.org/"), "{out}");
+        assert_eq!(format_ddg_results("nope", &[]), "no results for \"nope\"");
     }
 
     #[test]
