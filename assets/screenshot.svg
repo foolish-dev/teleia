@@ -29,7 +29,7 @@
     <circle cx="104" cy="57" r="6" fill="#9ece6a"/>
 
     <!-- λ + full-stop cursor block as brand mark in the title bar -->
-    <g transform="translate(525 47)">
+    <g transform="translate(520 47)">
       <text x="0" y="20"
             font-family="'JetBrainsMonoNF-Regular', 'JetBrains Mono Nerd Font', 'JetBrains Mono', Iosevka, monospace"
             font-size="24" font-weight="700" fill="url(#markGrad)">λ</text>
@@ -40,8 +40,8 @@
                  dur="1.06s" repeatCount="indefinite"/>
       </rect>
     </g>
-    <text x="562" y="62" font-family="'JetBrainsMonoNF-Regular', 'JetBrains Mono Nerd Font', 'JetBrains Mono', Iosevka, monospace"
-          font-size="12" fill="#565f89">τέλεια @ arch · session 01K3R7H · resumed · 3 tools, 1 turn</text>
+    <text x="557" y="62" font-family="'JetBrainsMonoNF-Regular', 'JetBrains Mono Nerd Font', 'JetBrains Mono', Iosevka, monospace"
+          font-size="12" fill="#565f89">τέλεια @ arch · session 01K7X2M · resumed · 5 tools, 2 turns</text>
   </g>
 
   <!-- chat log title with λ -->
@@ -56,60 +56,52 @@
   <g font-family="'JetBrainsMonoNF-Regular', 'JetBrains Mono Nerd Font', 'JetBrains Mono', Iosevka, 'IBM Plex Mono', monospace" font-size="14">
     <!-- user 1 -->
     <text x="68" y="130" fill="#7dcfff" font-weight="700">fool</text>
-    <text x="68" y="152" fill="#c0caf5">find every TODO in the workspace and group them by crate</text>
+    <text x="68" y="152" fill="#c0caf5">convert deploy/values.yaml to json, then bump the image tag to v2.1.0</text>
 
     <!-- assistant 1 -->
     <text x="68" y="190" fill="#bb9af7" font-weight="700">τέλεια</text>
-    <text x="68" y="212" fill="#c0caf5">walking the tree with grep:</text>
+    <text x="68" y="212" fill="#c0caf5">reading the chart values:</text>
 
-    <!-- tool call 1 — grep with scope-aware highlight -->
-    <text x="68" y="244" fill="#e0af68">⚙ grep({"pattern":"TODO|FIXME","path":"crates"})</text>
+    <!-- tool call 1 — yaml_to_json with highlighted output -->
+    <text x="68" y="244" fill="#e0af68">⚙ yaml_to_json({"path":"deploy/values.yaml"})</text>
     <text x="90" y="262" font-size="13">
-      <tspan fill="#7dcfff">crates/teleia-llm/src/lib.rs</tspan>
-      <tspan fill="#565f89">:142:</tspan>
-      <tspan fill="#c0caf5">// TODO: surface refusal reason</tspan>
+      <tspan fill="#565f89">{ </tspan>
+      <tspan fill="#7dcfff">"image"</tspan>
+      <tspan fill="#565f89">: { </tspan>
+      <tspan fill="#7dcfff">"repo"</tspan>
+      <tspan fill="#565f89">: </tspan>
+      <tspan fill="#9ece6a">"ghcr.io/foolish-dev/api"</tspan>
+      <tspan fill="#565f89">,</tspan>
     </text>
-    <text x="90" y="278" font-size="13">
-      <tspan fill="#7dcfff">crates/teleia-cli/src/tui.rs</tspan>
-      <tspan fill="#565f89">:881:</tspan>
-      <tspan fill="#c0caf5">// FIXME: handle CJK width</tspan>
-    </text>
-    <text x="90" y="294" font-size="13">
-      <tspan fill="#7dcfff">crates/teleia-cli/src/mcp.rs</tspan>
-      <tspan fill="#565f89">:178:</tspan>
-      <tspan fill="#c0caf5">// TODO: cancellation</tspan>
+    <text x="108" y="278" font-size="13">
+      <tspan fill="#7dcfff">"tag"</tspan>
+      <tspan fill="#565f89">: </tspan>
+      <tspan fill="#9ece6a">"v2.0.4"</tspan>
+      <tspan fill="#565f89"> }, </tspan>
+      <tspan fill="#7dcfff">"replicas"</tspan>
+      <tspan fill="#565f89">: </tspan>
+      <tspan fill="#ff9e64">3</tspan>
+      <tspan fill="#565f89"> }</tspan>
     </text>
 
-    <!-- tool call 2 — read with syntax highlight (Rust function) -->
-    <text x="68" y="326" fill="#e0af68">⚙ read({"path":"crates/teleia-cli/src/mcp.rs"})</text>
-    <text x="90" y="344" font-size="13">
-      <tspan fill="#bb9af7" font-weight="700">async fn</tspan>
-      <tspan fill="#c0caf5"> </tspan>
-      <tspan fill="#7aa2f7" font-weight="700">call_tool</tspan>
-      <tspan fill="#c0caf5">(&amp;</tspan>
-      <tspan fill="#bb9af7" font-weight="700">mut</tspan>
-      <tspan fill="#c0caf5"> self, name: &amp;</tspan>
-      <tspan fill="#7dcfff">str</tspan>
-      <tspan fill="#c0caf5">, args: &amp;</tspan>
-      <tspan fill="#7dcfff">str</tspan>
-      <tspan fill="#c0caf5">) {</tspan>
+    <!-- tool call 2 — json pointer extract -->
+    <text x="68" y="310" fill="#e0af68">⚙ json({"path":"deploy/values.yaml","pointer":"/image/tag"})</text>
+    <text x="90" y="328" font-size="13">
+      <tspan fill="#9ece6a">"v2.0.4"</tspan>
     </text>
-    <text x="108" y="360" font-size="13" fill="#565f89">…312 lines…</text>
 
     <!-- assistant 2 (streaming) -->
-    <text x="68" y="396" fill="#bb9af7" font-weight="700">τέλεια ▌</text>
-    <text x="68" y="418" fill="#c0caf5">three TODOs total, one per crate:</text>
-    <text x="68" y="436" fill="#c0caf5">  · teleia-llm  · refusal surfacing</text>
-    <text x="68" y="454" fill="#c0caf5">  · teleia-cli  · CJK width + MCP cancellation</text>
+    <text x="68" y="366" fill="#bb9af7" font-weight="700">τέλεια ▌</text>
+    <text x="68" y="388" fill="#c0caf5">found it under image.tag (v2.0.4). editing the one line:</text>
 
     <!-- info line -->
-    <text x="68" y="490" fill="#7aa2f7">· copied 124 chars to clipboard</text>
+    <text x="68" y="424" fill="#7aa2f7">· 186 tools · yaml/json conversion is read-only, the edit needs approval</text>
   </g>
 
   <!-- scrollbar (right edge of chat block) -->
   <g>
     <line x1="1018" y1="84" x2="1018" y2="503" stroke="#565f89" stroke-width="1" opacity="0.5"/>
-    <rect x="1017" y="380" width="3" height="80" fill="#bb9af7" rx="1"/>
+    <rect x="1017" y="360" width="3" height="90" fill="#bb9af7" rx="1"/>
   </g>
 
   <!-- permission prompt -->
@@ -120,7 +112,7 @@
       <tspan fill="#565f89">approve </tspan>
       <tspan fill="#bb9af7" font-weight="700">edit</tspan>
       <tspan fill="#565f89">(</tspan>
-      <tspan fill="#c0caf5">crates/teleia-llm/src/lib.rs, "// TODO:…", "// done:…"</tspan>
+      <tspan fill="#c0caf5">deploy/values.yaml, "tag: v2.0.4", "tag: v2.1.0"</tspan>
       <tspan fill="#565f89">) ?</tspan>
     </text>
     <text x="72" y="562" font-family="'JetBrainsMonoNF-Regular', 'JetBrains Mono Nerd Font', 'JetBrains Mono', Iosevka, monospace" font-size="13">
