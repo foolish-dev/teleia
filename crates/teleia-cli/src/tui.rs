@@ -1031,6 +1031,21 @@ async fn event_loop<B: ratatui::backend::Backend>(
             continue;
         }
 
+        // Ctrl+T: flip the reasoning stream's visibility from any mode,
+        // persisting it like `/thinking`. Display-only — the model keeps
+        // reasoning (see `/effort`).
+        if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('t')) {
+            let new = !show_thinking();
+            set_show_thinking(new);
+            agent.set_pref("show_thinking", if new { "on" } else { "off" });
+            state.push(Entry::Info(if new {
+                "thinking on — showing the model's reasoning".to_string()
+            } else {
+                "thinking off — hiding the model's reasoning".to_string()
+            }));
+            continue;
+        }
+
         // Hidden-input API-key entry takes precedence over normal mode
         // dispatch — typed chars must go to the masked buffer, not the
         // input box, until the user commits with Enter or cancels.
@@ -3883,6 +3898,16 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
             ));
         }
+    }
+    // Reasoning hidden (`/thinking off` or ^t) — surface it so the missing
+    // thinking stream reads as intentional, not a glitch. Shown only when
+    // off; on is the default and needs no chrome.
+    if !show_thinking() {
+        status_spans.push(Span::styled(" · ", Style::default().fg(th.dim)));
+        status_spans.push(Span::styled(
+            "think off",
+            Style::default().fg(th.dim).add_modifier(Modifier::ITALIC),
+        ));
     }
     status_spans.push(Span::raw("   "));
     // Replace the right-side mode hints while a turn is in flight: the
