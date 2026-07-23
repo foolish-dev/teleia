@@ -74,6 +74,7 @@ const SLASH_COMMANDS: &[&str] = &[
     "save",
     "show",
     "theme",
+    "thinking",
     "tools",
     "transparent",
     "update",
@@ -210,6 +211,7 @@ const THEMES: &[(&str, &Theme)] = &[
 
 static CURRENT_THEME: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static TRANSPARENT_BG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static SHOW_THINKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 static CUSTOM_THEME: std::sync::OnceLock<std::sync::RwLock<Theme>> = std::sync::OnceLock::new();
 static USE_CUSTOM_THEME: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -283,6 +285,16 @@ pub fn set_transparent(on: bool) {
 
 pub fn is_transparent() -> bool {
     TRANSPARENT_BG.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Whether the model's reasoning/"thinking" stream is rendered. Toggled by
+/// `/thinking`, persisted as the `show_thinking` pref; defaults on.
+fn show_thinking() -> bool {
+    SHOW_THINKING.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn set_show_thinking(on: bool) {
+    SHOW_THINKING.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Switch the active theme by name. Returns the matched canonical name on
@@ -885,6 +897,9 @@ pub async fn run(
     }
     if let Some(v) = agent.get_pref("autoprompt") {
         state.autoprompt = v == "on";
+    }
+    if let Some(v) = agent.get_pref("show_thinking") {
+        set_show_thinking(v == "on");
     }
     // Transparent background: stored pref wins; otherwise honour
     // `TELEIA_TRANSPARENT=1` so users can opt in via their shell env.
@@ -1819,6 +1834,7 @@ fn translate_ex(cmd: &str) -> Result<String, String> {
         "notify" | "notifications" => format!("notify {arg}"),
         "transparent" | "transparency" | "transp" => format!("transparent {arg}"),
         "entropy" => format!("entropy {arg}"),
+        "thinking" => format!("thinking {arg}"),
         "cd" | "lcd" | "tcd" => format!("cd {arg}"),
         "pwd" => "pwd".to_string(),
         "version" => "version".to_string(),
@@ -1951,6 +1967,15 @@ fn arg_suggestion(cmd: &str, arg: &str, aliases: &[String]) -> Option<Suggestion
                 placeholder: String::new(),
             })
         }
+        "thinking" => {
+            let value = ["on", "off"]
+                .into_iter()
+                .find(|v| v.starts_with(arg) && *v != arg)?;
+            Some(Suggestion {
+                completion: value[arg.len()..].to_string(),
+                placeholder: String::new(),
+            })
+        }
         _ => None,
     }
 }
@@ -1960,7 +1985,7 @@ fn arg_placeholder(cmd: &str) -> Option<&'static str> {
         "save" | "load" | "delete" | "rm" => Some(" NAME"),
         "model" => Some(" [NAME]"),
         "theme" => Some(" [NAME]"),
-        "notify" | "transparent" | "entropy" => Some(" [on|off]"),
+        "notify" | "transparent" | "entropy" | "thinking" => Some(" [on|off]"),
         "prompt" => Some(" [NAME]"),
         "key" => Some(" PROVIDER"),
         "cd" => Some(" PATH"),
@@ -2064,7 +2089,7 @@ fn compute_menu(
                 kind: MenuKind::Theme,
             });
         }
-        if matches!(cmd, "notify" | "transparent" | "entropy") {
+        if matches!(cmd, "notify" | "transparent" | "entropy" | "thinking") {
             let items: Vec<String> = ["on", "off"]
                 .iter()
                 .filter(|n| n.starts_with(arg))
@@ -2192,6 +2217,7 @@ const EX_COMMANDS: &[&str] = &[
     "reset",
     "show",
     "theme",
+    "thinking",
     "tools",
     "transparent",
     "version",
@@ -2202,7 +2228,7 @@ fn ex_arg_placeholder(cmd: &str) -> Option<&'static str> {
     match cmd {
         "write" | "load" | "edit" | "delete" => Some(" NAME"),
         "model" | "theme" | "colorscheme" => Some(" [NAME]"),
-        "notify" | "transparent" | "entropy" => Some(" [on|off]"),
+        "notify" | "transparent" | "entropy" | "thinking" => Some(" [on|off]"),
         "mcps" => Some(" [enable|disable NAME]"),
         "effort" => Some(" [off|low|medium|high|xhigh|max|leetcode]"),
         "loop" => Some(" N PROMPT"),
@@ -3055,6 +3081,30 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                 },
             ));
         }
+        // Show/hide the model's reasoning stream. Display-only: the model
+        // still reasons (that's `/effort`); this just gates rendering, so
+        // toggling back on re-reveals the current session's thinking.
+        "thinking" => {
+            let new = match arg.to_ascii_lowercase().as_str() {
+                "on" | "true" | "yes" | "1" => true,
+                "off" | "false" | "no" | "0" => false,
+                "" => !show_thinking(),
+                _ => {
+                    state.push(Entry::Error(format!(
+                        "usage: /thinking [on|off]  (current: {})",
+                        if show_thinking() { "on" } else { "off" }
+                    )));
+                    return;
+                }
+            };
+            set_show_thinking(new);
+            agent.set_pref("show_thinking", if new { "on" } else { "off" });
+            state.push(Entry::Info(if new {
+                "thinking on — showing the model's reasoning".to_string()
+            } else {
+                "thinking off — hiding the model's reasoning".to_string()
+            }));
+        }
         "cd" => {
             let target = if arg.is_empty() {
                 std::env::var("HOME").unwrap_or_else(|_| "/".to_string())
@@ -3182,7 +3232,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
         }
         "help" | "?" => {
             state.push(Entry::Info(
-                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /effort [off|low|medium|high|xhigh|max|leetcode] · /key PROVIDER · /keys · /mcps · /lsps · /tools · /context · /plan · /build · /auto · /loop N PROMPT · /prompt [NAME] · /theme [NAME] · /notify [on|off] · /entropy [on|off] · /transparent [on|off] · /copy · /cd PATH · /pwd · /version · /show · /help · /quit"
+                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /effort [off|low|medium|high|xhigh|max|leetcode] · /key PROVIDER · /keys · /mcps · /lsps · /tools · /context · /plan · /build · /auto · /loop N PROMPT · /prompt [NAME] · /theme [NAME] · /notify [on|off] · /entropy [on|off] · /thinking [on|off] · /transparent [on|off] · /copy · /cd PATH · /pwd · /version · /show · /help · /quit"
                     .into(),
             ));
         }
@@ -5403,6 +5453,11 @@ fn render_history(history: &[Entry], frame: usize, username: &str) -> Vec<Line<'
 /// the next message) read as one unit.
 fn needs_spacer(prev: &Entry, next: &Entry) -> bool {
     use Entry::*;
+    // A hidden reasoning entry renders no lines, so it must not pull a blank
+    // spacer with it (that would leave a stray gap where the thinking was).
+    if !show_thinking() && matches!((prev, next), (Reasoning { .. }, _) | (_, Reasoning { .. })) {
+        return false;
+    }
     match (prev, next) {
         // Inside an agent turn: assistant prose, then its tools, then
         // possibly more assistant prose. No gap.
@@ -5437,6 +5492,12 @@ fn render_entry(entry: &Entry, frame: usize, username: &str) -> Vec<Line<'static
             }
         }
         Entry::Reasoning { text, complete } => {
+            // `/thinking off` hides the reasoning stream. Returning no lines
+            // (rather than filtering upstream) keeps every caller's line-count
+            // math — scroll offsets, spacer counts — consistent.
+            if !show_thinking() {
+                return Vec::new();
+            }
             let header = if *complete {
                 "τέλεια · thinking"
             } else if (frame / 10).is_multiple_of(2) {
@@ -5990,6 +6051,33 @@ mod tests {
     }
 
     #[test]
+    fn thinking_is_a_listed_command_with_on_off_completion_and_dropdown() {
+        assert!(SLASH_COMMANDS.contains(&"thinking"));
+        assert!(EX_COMMANDS.contains(&"thinking"));
+        assert_eq!(arg_placeholder("thinking"), Some(" [on|off]"));
+        assert_eq!(ex_arg_placeholder("thinking"), Some(" [on|off]"));
+        assert_eq!(translate_ex("thinking off").unwrap(), "thinking off");
+        // ghost-text autocomplete: "/thinking o" → "on", "/thinking of" → "off"
+        assert_eq!(
+            arg_suggestion("thinking", "o", &[]).map(|s| s.completion),
+            Some("n".to_string())
+        );
+        assert_eq!(
+            arg_suggestion("thinking", "of", &[]).map(|s| s.completion),
+            Some("f".to_string())
+        );
+        // dropdown offers both values, filtered by prefix
+        assert_eq!(
+            compute_menu("/thinking ", &[], &[], &[]).map(|m| m.items),
+            Some(vec!["on".to_string(), "off".to_string()])
+        );
+        assert_eq!(
+            compute_menu("/thinking of", &[], &[], &[]).map(|m| m.items),
+            Some(vec!["off".to_string()])
+        );
+    }
+
+    #[test]
     fn ex_translates_no_arg_commands() {
         assert_eq!(translate_ex("ls").unwrap(), "list");
         assert_eq!(translate_ex("list").unwrap(), "list");
@@ -6257,7 +6345,7 @@ mod tests {
 
     #[test]
     fn ex_menu_filters_by_prefix() {
-        let m = compute_ex_menu("th").unwrap();
+        let m = compute_ex_menu("the").unwrap();
         assert_eq!(m.kind, MenuKind::Ex);
         assert_eq!(m.items, vec!["theme"]);
     }
