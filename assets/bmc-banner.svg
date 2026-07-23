@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="64" viewBox="0 0 320 64"
+     role="img" aria-label="Buy me a coffee — support τέλεια">
+  <defs>
+    <!-- Tokyo Night gradient: storm blue to night blue (same base as banner.svg) -->
+    <linearGradient id="bmcBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1a1b26"/>
+      <stop offset="50%" stop-color="#24283b"/>
+      <stop offset="100%" stop-color="#1f2335"/>
+    </linearGradient>
+    <!-- τέλεια signature accent: cyan -> blue -> purple, slowly rotating like banner.svg -->
+    <linearGradient id="bmcAccent" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7dcfff"/>
+      <stop offset="0.5" stop-color="#7aa2f7"/>
+      <stop offset="1" stop-color="#bb9af7"/>
+      <animateTransform attributeName="gradientTransform" type="rotate"
+                        from="0 0.5 0.5" to="360 0.5 0.5" dur="22s" repeatCount="indefinite"/>
+    </linearGradient>
+    <!-- Cool cup gradient in Tokyo Night cyan -> blue -> purple -->
+    <linearGradient id="bmcCup" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#7dcfff"/>
+      <stop offset="55%" stop-color="#7aa2f7"/>
+      <stop offset="100%" stop-color="#bb9af7"/>
+    </linearGradient>
+    <!-- Subtle scanline pattern (cool tint to match teleia) -->
+    <pattern id="bmcScan" width="2" height="2" patternUnits="userSpaceOnUse">
+      <rect width="2" height="1" fill="#1a1b26" opacity="0.0"/>
+      <rect y="1" width="2" height="1" fill="#7aa2f7" opacity="0.04"/>
+    </pattern>
+    <!-- Cyan token-stream scan beam (echoes banner.svg's sweep) -->
+    <linearGradient id="bmcBeam" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#7dcfff" stop-opacity="0"/>
+      <stop offset="50%" stop-color="#7dcfff" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#7dcfff" stop-opacity="0"/>
+    </linearGradient>
+    <!-- Cool cyan ambient glow -->
+    <radialGradient id="bmcGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#7dcfff" stop-opacity="0.45"/>
+      <stop offset="100%" stop-color="#7dcfff" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="bmcRound"><rect x="0" y="0" width="320" height="64" rx="10"/></clipPath>
+  </defs>
+
+  <!-- Background, scanlines, accent bar, ambient glow, scan beam — clipped to the rounded corners -->
+  <g clip-path="url(#bmcRound)">
+    <rect width="320" height="64" fill="url(#bmcBg)"/>
+    <rect width="320" height="64" fill="url(#bmcScan)"/>
+    <rect width="4" height="64" fill="url(#bmcAccent)"/>
+
+    <!-- pulsing cyan glow behind the cup -->
+    <ellipse cx="42" cy="33" rx="30" ry="20" fill="url(#bmcGlow)">
+      <animate attributeName="opacity" values="0.35;0.75;0.35" dur="3.6s" repeatCount="indefinite"/>
+    </ellipse>
+
+    <!-- cyan scan beam sweeping left-to-right along the bottom edge -->
+    <rect x="-120" y="60" width="120" height="1.4" fill="url(#bmcBeam)" opacity="0.85">
+      <animate attributeName="x" values="-120;340" dur="4.5s" repeatCount="indefinite"/>
+    </rect>
+  </g>
+
+  <!-- Coffee cup with rising, dissipating steam -->
+  <g transform="translate(24,14)">
+    <!-- steam wisps: each rises upward while fading in then out -->
+    <g stroke="#7dcfff" stroke-width="1.6" fill="none" stroke-linecap="round">
+      <g opacity="0">
+        <path d="M0 0 q4 -4 0 -8 q-4 -4 0 -8"/>
+        <animateTransform attributeName="transform" type="translate" values="8 6;8 -9" dur="3.0s" begin="0s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="0;0.55;0" keyTimes="0;0.4;1" dur="3.0s" begin="0s" repeatCount="indefinite"/>
+      </g>
+      <g opacity="0">
+        <path d="M0 0 q-4 -4 0 -8 q4 -4 0 -8"/>
+        <animateTransform attributeName="transform" type="translate" values="15 6;15 -10" dur="3.4s" begin="0.7s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="0;0.5;0" keyTimes="0;0.4;1" dur="3.4s" begin="0.7s" repeatCount="indefinite"/>
+      </g>
+      <g opacity="0">
+        <path d="M0 0 q4 -4 0 -8 q-4 -4 0 -8"/>
+        <animateTransform attributeName="transform" type="translate" values="22 6;22 -8" dur="2.8s" begin="1.3s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="0;0.45;0" keyTimes="0;0.4;1" dur="2.8s" begin="1.3s" repeatCount="indefinite"/>
+      </g>
+    </g>
+    <!-- saucer -->
+    <ellipse cx="18" cy="38" rx="20" ry="3" fill="#7aa2f7" opacity="0.3"/>
+    <!-- cup body -->
+    <path d="M4 12 L32 12 L29 30 Q28 35 22 35 L14 35 Q8 35 7 30 Z" fill="url(#bmcCup)"/>
+    <!-- liquid surface -->
+    <ellipse cx="18" cy="12" rx="14" ry="2.6" fill="#1a1b26" opacity="0.5"/>
+    <!-- handle -->
+    <path d="M32 15 q9 1 9 8 q0 7 -8 7.5" fill="none" stroke="url(#bmcCup)"
+          stroke-width="3.4" stroke-linecap="round"/>
+  </g>
+
+  <!-- Wordmark, JetBrains Mono (teleia's face); slow cool shimmer on "coffee" -->
+  <text x="76" y="30"
+        font-family="'JetBrainsMonoNF-Regular', 'JetBrains Mono Nerd Font', 'JetBrains Mono', Iosevka, 'IBM Plex Mono', Menlo, monospace"
+        font-size="16" font-weight="700" letter-spacing="0.5"
+        fill="#c0caf5">Buy me a <tspan fill="#7dcfff">coffee<animate attributeName="fill" values="#7dcfff;#7aa2f7;#bb9af7;#7dcfff" dur="4s" repeatCount="indefinite"/></tspan></text>
+
+  <!-- Subtitle -->
+  <text x="76" y="47"
+        font-family="'JetBrainsMonoNF-Regular', 'JetBrains Mono Nerd Font', 'JetBrains Mono', Iosevka, 'IBM Plex Mono', Menlo, monospace"
+        font-size="9" font-weight="400" letter-spacing="1.2"
+        fill="#9aa5ce">Support τέλεια development</text>
+
+  <!-- Blinking full-stop cursor block (τέλεια's period motif), teleia cyan -->
+  <rect x="300" y="27" width="6" height="10" rx="1" fill="#7dcfff">
+    <animate attributeName="opacity" values="1;0.3;1" dur="2s" repeatCount="indefinite"/>
+  </rect>
+</svg>

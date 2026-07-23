@@ -315,3 +315,9 @@ alacritty / kitty palette + JetBrains Mono Nerd Font included.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+---
+
+<p align="center">
+  <a href="https://buymeacoffee.com/cardoffoolm"><img src="assets/bmc-banner.svg" alt="Buy me a coffee — support τέλεια" width="320"></a>
+</p>
