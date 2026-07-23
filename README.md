@@ -5,12 +5,15 @@
 <p align="center">
   <a href="https://github.com/foolish-dev/teleia/actions/workflows/ci.yml"><img alt="ci" src="https://github.com/foolish-dev/teleia/actions/workflows/ci.yml/badge.svg?branch=dev"></a>
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
-  <a href="https://buymeacoffee.com/cardoffoolm"><img alt="Buy me a coffee" src="https://img.shields.io/badge/buy%20me%20a%20coffee-cardoffoolm-FFDD00?logo=buymeacoffee&logoColor=1a1b26"></a>
 </p>
 
 <p align="center">
   <a href="https://huggingface.co/FoolDev/Janus-35B"><img alt="FoolDev/Janus-35B on Hugging Face" src="https://img.shields.io/badge/%F0%9F%A4%97-FoolDev%2FJanus--35B-7aa2f7?logo=huggingface&logoColor=1a1b26&labelColor=24283b"></a>
   <a href="https://huggingface.co/FoolDev/Thanatos-27B"><img alt="FoolDev/Thanatos-27B on Hugging Face" src="https://img.shields.io/badge/%F0%9F%A4%97-FoolDev%2FThanatos--27B-bb9af7?logo=huggingface&logoColor=1a1b26&labelColor=24283b"></a>
+</p>
+
+<p align="center">
+  <a href="https://buymeacoffee.com/cardoffoolm"><img src="assets/bmc-banner.svg" alt="Buy me a coffee — support τέλεια" width="320"></a>
 </p>
 
 **λ τέλεια — a minimal TUI coding agent (rewritten in Rust btw).** One binary, no daemon. Talks to a local Ollama or any of twenty cloud chat-completions endpoints (≈210 named models in the dropdown) and hosts MCP + LSP servers. Ships a minimal core of **39 built-in tools** — files, search, code lint/test, git, JSON, encoding, and web — dispatched in a tool-call loop until the model stops asking (`bash` and MCP servers cover the rest). Persists sessions to SQLite, resumes where you left off, and paints an OS-aware welcome banner on launch.
@@ -315,9 +318,3 @@ alacritty / kitty palette + JetBrains Mono Nerd Font included.
 ## License
 
 MIT — see [LICENSE](LICENSE).
-
----
-
-<p align="center">
-  <a href="https://buymeacoffee.com/cardoffoolm"><img src="assets/bmc-banner.svg" alt="Buy me a coffee — support τέλεια" width="320"></a>
-</p>
