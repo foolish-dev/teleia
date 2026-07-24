@@ -62,7 +62,7 @@ Upgrade an existing install in place with `teleia --self-update` — it download
 ## Run
 
 ```sh
-# default: local Ollama with hf.co/FoolDev/Thanatos-27B
+# default: local Ollama with hf.co/FoolDev/Thanatos-27B-HERETIC
 teleia
 
 # cloud — uses $ANTHROPIC_API_KEY, or prompts and saves the key
