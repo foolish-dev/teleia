@@ -6395,7 +6395,7 @@ mod tests {
         let models = vec![
             "llama3:latest".to_string(),
             "hf.co/FoolDev/Thanatos-27B-Heretic:Q4_K_M".to_string(),
-            "hf.co/FoolDev/Janus-35B:Q4_K_M".to_string(),
+            "hf.co/FoolDev/Janus-35B-HERETIC:Q4_K_M".to_string(),
         ];
         let m = compute_menu("/model hf.co", &[], &models, &[]).unwrap();
         assert_eq!(m.kind, MenuKind::Model);

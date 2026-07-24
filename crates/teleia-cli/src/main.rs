@@ -25,7 +25,7 @@ const DEFAULT_MODEL: &str = "hf.co/FoolDev/Thanatos-27B-HERETIC:Q4_K_M";
 
 const DEFAULT_OLLAMA_MODELS: &[&str] = &[
     "hf.co/FoolDev/Thanatos-27B-HERETIC:Q4_K_M",
-    "hf.co/FoolDev/Janus-35B:Q4_K_M",
+    "hf.co/FoolDev/Janus-35B-HERETIC:Q4_K_M",
 ];
 
 /// Cloud models surfaced in the `/model` dropdown even though they
