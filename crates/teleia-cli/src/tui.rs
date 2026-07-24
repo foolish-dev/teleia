@@ -4940,7 +4940,7 @@ fn cursor_visual_pos(
     (col, row)
 }
 
-/// Compact "hf.co/FoolDev/Thanatos-27B-Heretic:Q4_K_M" → "Thanatos-27B-Heretic" for status-
+/// Compact "hf.co/FoolDev/Thanatos-27B-HERETIC:Q4_K_M" → "Thanatos-27B-HERETIC" for status-
 /// bar use: strip any leading `provider:` selector, then take the segment
 /// after the last '/', then drop the Ollama quant tag from the first ':'.
 /// Leaves short names like "llama3" alone.
@@ -5874,8 +5874,8 @@ mod tests {
     #[test]
     fn short_model_strips_hub_prefix_and_quant_suffix() {
         assert_eq!(
-            short_model("hf.co/FoolDev/Thanatos-27B-Heretic:Q4_K_M"),
-            "Thanatos-27B-Heretic"
+            short_model("hf.co/FoolDev/Thanatos-27B-HERETIC:Q4_K_M"),
+            "Thanatos-27B-HERETIC"
         );
     }
 
@@ -6394,7 +6394,7 @@ mod tests {
     fn menu_model_filters_by_prefix() {
         let models = vec![
             "llama3:latest".to_string(),
-            "hf.co/FoolDev/Thanatos-27B-Heretic:Q4_K_M".to_string(),
+            "hf.co/FoolDev/Thanatos-27B-HERETIC:Q4_K_M".to_string(),
             "hf.co/FoolDev/Janus-35B-HERETIC:Q4_K_M".to_string(),
         ];
         let m = compute_menu("/model hf.co", &[], &models, &[]).unwrap();
