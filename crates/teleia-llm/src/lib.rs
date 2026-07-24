@@ -394,7 +394,7 @@ pub fn provider_for_model(model: &str) -> Option<&'static Provider> {
 /// Strip a leading `provider:` prefix when present and recognized —
 /// providers don't accept their own name in the `"model"` request field.
 /// `groq:llama-3.3-70b-versatile` → `llama-3.3-70b-versatile`;
-/// `hf.co/FoolDev/Thanatos-27B-Heretic:Q4_K_M` → unchanged (no provider
+/// `hf.co/FoolDev/Thanatos-27B-HERETIC:Q4_K_M` → unchanged (no provider
 /// matches `hf.co/...`).
 pub fn resolve_model_name(model: &str) -> &str {
     if let Some((head, rest)) = model.split_once(':') {
@@ -537,7 +537,7 @@ impl LlmClient {
 
     /// List models Ollama has cached locally. Returns the `name` field of
     /// each entry in `/api/tags` (e.g. `"llama3:latest"`,
-    /// `"hf.co/FoolDev/Thanatos-27B-Heretic:Q4_K_M"`). Best-effort — returns an
+    /// `"hf.co/FoolDev/Thanatos-27B-HERETIC:Q4_K_M"`). Best-effort — returns an
     /// empty Vec if the endpoint isn't reachable or doesn't look like
     /// Ollama.
     pub async fn list_models(&self) -> Vec<String> {
@@ -1285,7 +1285,7 @@ mod tests {
 
     #[test]
     fn detect_endpoint_falls_back_to_ollama() {
-        let (url, key) = detect_endpoint("hf.co/FoolDev/Thanatos-27B-Heretic:Q4_K_M");
+        let (url, key) = detect_endpoint("hf.co/FoolDev/Thanatos-27B-HERETIC:Q4_K_M");
         assert_eq!(url, DEFAULT_BASE_URL);
         assert!(key.is_none());
         let (url, _) = detect_endpoint("llama3:latest");
@@ -1343,8 +1343,8 @@ mod tests {
         );
         // Ollama quant tags must NOT be stripped — `hf.co/...` isn't a provider.
         assert_eq!(
-            resolve_model_name("hf.co/FoolDev/Thanatos-27B-Heretic:Q4_K_M"),
-            "hf.co/FoolDev/Thanatos-27B-Heretic:Q4_K_M"
+            resolve_model_name("hf.co/FoolDev/Thanatos-27B-HERETIC:Q4_K_M"),
+            "hf.co/FoolDev/Thanatos-27B-HERETIC:Q4_K_M"
         );
         assert_eq!(resolve_model_name("llama3:latest"), "llama3:latest");
         assert_eq!(resolve_model_name("claude-opus-4-7"), "claude-opus-4-7");
