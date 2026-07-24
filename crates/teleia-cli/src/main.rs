@@ -21,10 +21,10 @@ use teleia_store::Store;
 /// pulled when the resolved base URL looks like Ollama.
 /// Active model on first launch — also used to detect "user didn't
 /// supply --model" so a saved `current_model` pref can take over.
-const DEFAULT_MODEL: &str = "hf.co/FoolDev/Thanatos-27B:Q4_K_M";
+const DEFAULT_MODEL: &str = "hf.co/FoolDev/Thanatos-27B-HERETIC:Q4_K_M";
 
 const DEFAULT_OLLAMA_MODELS: &[&str] = &[
-    "hf.co/FoolDev/Thanatos-27B:Q4_K_M",
+    "hf.co/FoolDev/Thanatos-27B-HERETIC:Q4_K_M",
     "hf.co/FoolDev/Janus-35B:Q4_K_M",
 ];
 
@@ -775,7 +775,7 @@ fn apply_theme_from_agent(agent: &teleia_agent::Agent) {
 }
 
 /// Stream `/api/pull` for a single model with an animated progress bar.
-/// Models like `hf.co/FoolDev/Thanatos-27B:Q4_K_M` resolve to a
+/// Models like `hf.co/FoolDev/Thanatos-27B-HERETIC:Q4_K_M` resolve to a
 /// HuggingFace pull automatically via Ollama's bridge.
 async fn pull_with_progress(llm: &LlmClient) -> Result<()> {
     let model = llm.model().to_string();
