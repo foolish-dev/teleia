@@ -422,6 +422,22 @@ pub fn looks_like_ollama(base_url: &str) -> bool {
     base_url.contains("11434") || base_url.contains("ollama")
 }
 
+/// True when an error message means "the request no longer fits the
+/// model's context window" — i.e. the *input* overflowed, as opposed to
+/// a truncated response (`finish_reason: "length"`, handled separately).
+/// Providers phrase this differently; the substrings cover the backends
+/// in [`PROVIDERS`]: OpenAI-compatible (`context_length_exceeded`,
+/// "maximum context length") and native Anthropic ("prompt is too long",
+/// `request_too_large`, "exceed context limit").
+pub fn is_context_overflow(text: &str) -> bool {
+    let t = text.to_ascii_lowercase();
+    t.contains("context_length_exceeded")
+        || t.contains("maximum context length")
+        || t.contains("prompt is too long")
+        || t.contains("request_too_large")
+        || t.contains("exceed context limit")
+}
+
 /// Cap on the un-drained streaming buffer. A single SSE event / NDJSON
 /// line larger than this means the backend is streaming without the
 /// expected delimiter — bail rather than grow a `String` toward OOM.
@@ -1204,6 +1220,29 @@ mod tests {
         // Absent on non-final chunks.
         let mid: StreamChoice = serde_json::from_str(r#"{"delta":{"content":"x"}}"#).unwrap();
         assert_eq!(mid.finish_reason, None);
+    }
+
+    #[test]
+    fn context_overflow_matches_provider_phrasings() {
+        // OpenAI-compatible: error code and human message.
+        assert!(is_context_overflow(
+            r#"backend returned 400 Bad Request: {"error":{"message":"This model's maximum context length is 128000 tokens...","code":"context_length_exceeded"}}"#
+        ));
+        // Anthropic: 400 message and 413 code.
+        assert!(is_context_overflow(
+            r#"anthropic returned 400 Bad Request: {"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 213462 tokens > 200000 maximum"}}"#
+        ));
+        assert!(is_context_overflow(
+            r#"anthropic returned 413: {"type":"error","error":{"type":"request_too_large","message":"Request exceeds the maximum allowed size"}}"#
+        ));
+        assert!(is_context_overflow(
+            "input length and `max_tokens` exceed context limit: 199999 + 4096 > 200000"
+        ));
+        // Not overflow: ordinary errors must pass through untouched.
+        assert!(!is_context_overflow("backend returned 429: rate limited"));
+        assert!(!is_context_overflow(
+            r#"anthropic returned 400: {"error":{"message":"messages: roles must alternate"}}"#
+        ));
     }
 
     fn delta(
