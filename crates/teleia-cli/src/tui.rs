@@ -50,6 +50,7 @@ const SLASH_COMMANDS: &[&str] = &[
     "build",
     "cd",
     "clear",
+    "compact",
     "context",
     "copy",
     "delete",
@@ -555,6 +556,10 @@ struct State {
     /// and hands it to `run_loop`, which re-submits the prompt `count`
     /// times. Always `None` once a loop finishes or is stopped.
     pending_loop: Option<LoopSpec>,
+    /// Armed by `/compact` (same sync-handler constraint as
+    /// `pending_loop`). `submit_input` takes it and drives
+    /// `run_compact`, which summarizes the session via the model.
+    pending_compact: bool,
     /// Mirror of `agent.permission_mode()`. Kept in sync so the status
     /// bar + Shift+Tab cycle don't need to touch the agent for reads.
     permission_mode: PermissionMode,
@@ -711,6 +716,7 @@ impl State {
             pending_approval: None,
             pending_key_entry: None,
             pending_loop: None,
+            pending_compact: false,
             permission_mode: PermissionMode::default(),
             reasoning_effort: None,
             mcp_summary: None,
@@ -1462,6 +1468,14 @@ async fn event_loop<B: ratatui::backend::Backend>(
                             &agent.session_id()[..agent.session_id().len().min(12)]
                         );
                     }
+                    // Same deal for `:compact`.
+                    if std::mem::take(&mut state.pending_compact) {
+                        run_compact(terminal, state, agent).await;
+                        state.status = format!(
+                            "session {} · ready",
+                            &agent.session_id()[..agent.session_id().len().min(12)]
+                        );
+                    }
                 }
                 _ => {}
             },
@@ -1617,11 +1631,14 @@ async fn submit_input<B: ratatui::backend::Backend>(
     }
     if let Some(cmd) = trimmed.strip_prefix('/') {
         handle_slash(state, agent, cmd);
-        // `/loop` arms `pending_loop` but can't run turns from the sync
-        // slash handler — drive it here, then fall through to the usual
-        // post-turn bookkeeping.
+        // `/loop` and `/compact` arm their pending flags but can't run
+        // async work from the sync slash handler — drive them here, then
+        // fall through to the usual post-turn bookkeeping (which also
+        // refreshes the status line with /compact's new session id).
         if let Some(spec) = state.pending_loop.take() {
             run_loop(terminal, state, agent, spec).await;
+        } else if std::mem::take(&mut state.pending_compact) {
+            run_compact(terminal, state, agent).await;
         } else {
             return;
         }
@@ -1855,6 +1872,7 @@ fn translate_ex(cmd: &str) -> Result<String, String> {
         "version" => "version".to_string(),
         "tools" => "tools".to_string(),
         "context" => "context".to_string(),
+        "compact" => "compact".to_string(),
         "copy" | "yank" | "y" => "copy".to_string(),
         "keys" => "keys".to_string(),
         "key" => format!("key {arg}"),
@@ -2204,6 +2222,7 @@ const EX_COMMANDS: &[&str] = &[
     "cd",
     "clear",
     "colorscheme",
+    "compact",
     "context",
     "copy",
     "delete",
@@ -2663,6 +2682,80 @@ async fn run_loop<B: ratatui::backend::Backend>(
     }
 }
 
+/// Drive `agent.compact()` — summarize the session with the model and
+/// continue in a fresh session seeded with the summary — while keeping
+/// the TUI alive with the same redraw/interrupt loop as `run_turn`.
+/// Esc / Ctrl-C cancels by dropping the future; the agent only swaps
+/// its history *after* the summary has fully streamed, so a cancelled
+/// compact leaves the session exactly as it was.
+async fn run_compact<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+    state: &mut State,
+    agent: &mut Agent,
+) {
+    let before = agent.context_estimate();
+    state.push(Entry::Info("compacting session…".into()));
+    state.working = true;
+    let result = {
+        let fut = agent.compact();
+        pin_mut!(fut);
+        loop {
+            state.frame = state.frame.wrapping_add(1);
+            if let Err(e) = terminal.draw(|f| draw(f, state)) {
+                break Err(anyhow::anyhow!("draw: {e:#}"));
+            }
+            let mut interrupted = false;
+            // Same event handling as `run_turn`: Esc / Ctrl-C interrupt,
+            // typing and scrolling stay live while the summary streams.
+            while event::poll(Duration::from_millis(0)).unwrap_or(false) {
+                let Ok(evt) = event::read() else { break };
+                match evt {
+                    Event::Key(k) if k.kind == KeyEventKind::Release => {}
+                    Event::Key(k)
+                        if matches!(k.code, KeyCode::Esc)
+                            || (k.modifiers.contains(KeyModifiers::CONTROL)
+                                && matches!(k.code, KeyCode::Char('c'))) =>
+                    {
+                        interrupted = true;
+                    }
+                    Event::Key(k) => handle_input_edit(state, k),
+                    Event::Mouse(m) => {
+                        let _ = handle_mouse(terminal, state, m);
+                    }
+                    Event::Paste(s) => insert_paste(state, &s),
+                    _ => {}
+                }
+            }
+            if interrupted {
+                // Dropping the future cancels the summarize call; the
+                // agent hasn't touched its history yet.
+                state.working = false;
+                state.push(Entry::Info("(interrupted — session unchanged)".into()));
+                return;
+            }
+            tokio::select! {
+                r = &mut fut => break r,
+                _ = tokio::time::sleep(Duration::from_millis(33)) => {}
+            }
+        }
+    };
+    state.working = false;
+    match result {
+        Ok(()) => {
+            let after = agent.context_estimate();
+            state.history.clear();
+            state.tokens = TokenCounts::default();
+            state.push(Entry::Info(format!(
+                "compacted: history ~{} → ~{} tokens · session {} · previous session recoverable via /load prev",
+                before.history,
+                after.history,
+                &agent.session_id()[..agent.session_id().len().min(12)]
+            )));
+        }
+        Err(e) => state.push(Entry::Error(format!("compact: {e:#}"))),
+    }
+}
+
 /// Hidden-input key-entry dispatch. Active only while
 /// `state.pending_key_entry` is `Some`. Enter commits the typed key
 /// onto the agent (and updates the `/keys` mirror); Esc cancels.
@@ -2748,6 +2841,12 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
             }
             Err(e) => state.push(Entry::Error(format!("reset: {e}"))),
         },
+        "compact" => {
+            // Only arms the flag; `submit_input` (and the ex path) take
+            // `pending_compact` and drive `run_compact`, which needs the
+            // terminal for its redraw/interrupt loop.
+            state.pending_compact = true;
+        }
         "save" => {
             if arg.is_empty() {
                 state.push(Entry::Error("usage: /save NAME".into()));
@@ -3247,7 +3346,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
         }
         "help" | "?" => {
             state.push(Entry::Info(
-                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /effort [off|low|medium|high|xhigh|max|leetcode] · /key PROVIDER · /keys · /mcps · /lsps · /tools · /context · /plan · /build · /auto · /loop N PROMPT · /prompt [NAME] · /theme [NAME] · /notify [on|off] · /entropy [on|off] · /thinking [on|off] · /transparent [on|off] · /copy · /cd PATH · /pwd · /version · /show · /help · /quit"
+                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /effort [off|low|medium|high|xhigh|max|leetcode] · /key PROVIDER · /keys · /mcps · /lsps · /tools · /context · /compact · /plan · /build · /auto · /loop N PROMPT · /prompt [NAME] · /theme [NAME] · /notify [on|off] · /entropy [on|off] · /thinking [on|off] · /transparent [on|off] · /copy · /cd PATH · /pwd · /version · /show · /help · /quit"
                     .into(),
             ));
         }
@@ -6065,6 +6164,13 @@ mod tests {
         assert!(!should_auto_continue(true, Stopped, true, 0));
         // Safety cap reached → stop.
         assert!(!should_auto_continue(true, Completed, true, LOOP_MAX));
+    }
+
+    #[test]
+    fn compact_is_a_listed_command_in_both_surfaces() {
+        assert!(SLASH_COMMANDS.contains(&"compact"));
+        assert!(EX_COMMANDS.contains(&"compact"));
+        assert_eq!(translate_ex("compact").unwrap(), "compact");
     }
 
     #[test]

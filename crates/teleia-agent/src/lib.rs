@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{anyhow, bail, Result};
 use async_stream::try_stream;
 use futures_util::{future::BoxFuture, pin_mut, Stream, StreamExt};
 use std::collections::{BTreeMap, BTreeSet};
@@ -52,6 +52,29 @@ do not narrate.";
 /// Base prompt + the fool-derived guidelines, joined once at startup.
 fn system_prompt() -> String {
     format!("{SYSTEM_PROMPT_BASE}\n\n{}", fool::GUIDELINES)
+}
+
+/// Instruction appended to the history for [`Agent::compact`]'s
+/// summarize call. Sent without the tool schemas, so a history that
+/// just overflowed usually still fits.
+const COMPACT_PROMPT: &str = "Summarize this conversation so a fresh session can continue the \
+work seamlessly. Include: the user's goals and constraints, what has been done so far (files \
+touched, commands run, decisions made and why), the current state, and what remains. Be specific \
+about paths and names. Output only the summary.";
+
+/// Rewrap a backend "request exceeds the context window" error with an
+/// actionable message; every other error passes through untouched.
+/// `{e:#}` flattens the anyhow context chain so the provider's error
+/// body (where the phrasing lives) is part of the matched text.
+fn friendly_overflow(e: anyhow::Error) -> anyhow::Error {
+    if teleia_llm::is_context_overflow(&format!("{e:#}")) {
+        anyhow!(
+            "context limit exceeded — the conversation no longer fits the model's context \
+             window; run /compact to continue it in a fresh session, or /reset to start over"
+        )
+    } else {
+        e
+    }
 }
 
 /// Events emitted by `turn()`. The TUI consumes these to render
@@ -588,6 +611,60 @@ impl Agent {
         Ok(())
     }
 
+    /// Summarize the conversation with the model, then continue in a
+    /// fresh session seeded with that summary. The outgoing session is
+    /// bookmarked as `prev` (via [`Self::reset`]), so `/load prev`
+    /// recovers it. The summarize request drops the tool schemas —
+    /// usually enough headroom to fit a history that just overflowed
+    /// the context window. History is only replaced after the summary
+    /// has fully streamed, so cancelling (dropping the future) mid-call
+    /// leaves the session untouched.
+    pub async fn compact(&mut self) -> Result<()> {
+        if self.messages.len() <= 1 {
+            bail!("nothing to compact yet");
+        }
+        // A dangling tool_use (interrupted round) would 400 on strict
+        // backends before the summarize call even runs.
+        self.reconcile_orphaned_tool_calls()?;
+
+        let mut request = self.messages.clone();
+        request.push(Message::User {
+            content: COMPACT_PROMPT.to_string(),
+        });
+        let mut summary = String::new();
+        {
+            let stream = self.llm.stream(&request, None);
+            pin_mut!(stream);
+            while let Some(event) = stream.next().await {
+                let event = event.map_err(|e| {
+                    if teleia_llm::is_context_overflow(&format!("{e:#}")) {
+                        anyhow!(
+                            "even the compaction request exceeds the context window — \
+                             use /reset to start fresh"
+                        )
+                    } else {
+                        e
+                    }
+                })?;
+                match event {
+                    ChatEvent::ContentDelta(text) => summary.push_str(&text),
+                    ChatEvent::ReasoningDelta(_) => {}
+                    ChatEvent::Done { .. } => {}
+                }
+            }
+        }
+        let summary = summary.trim();
+        if summary.is_empty() {
+            bail!("model returned an empty summary — session left untouched");
+        }
+
+        let carried =
+            format!("Context carried over from the previous session (compacted):\n\n{summary}");
+        self.reset()?;
+        self.push(Message::User { content: carried })?;
+        Ok(())
+    }
+
     pub fn load_alias(&mut self, name: &str) -> Result<String> {
         let session_id = self.store.resolve_alias(name)?;
         let messages = self.store.load(&session_id)?;
@@ -682,7 +759,7 @@ impl Agent {
                     let stream = self.llm.stream(&self.messages, Some(&self.tools));
                     pin_mut!(stream);
                     while let Some(event) = stream.next().await {
-                        match event? {
+                        match event.map_err(friendly_overflow)? {
                             ChatEvent::ContentDelta(text) => {
                                 content_buf.push_str(&text);
                                 yield TurnEvent::AssistantDelta(text);
@@ -947,6 +1024,27 @@ mod tests {
         assert_eq!(est2.system, est.system, "system prompt is unchanged");
         assert!(est2.history > 0, "the user message counts as history");
         assert_eq!(est2.messages, 1);
+    }
+
+    #[test]
+    fn friendly_overflow_rewraps_only_context_errors() {
+        // A provider overflow body becomes the actionable /compact hint…
+        let e = friendly_overflow(anyhow!(
+            r#"anthropic returned 400: {{"error":{{"message":"prompt is too long: 213462 tokens > 200000 maximum"}}}}"#
+        ));
+        assert!(e.to_string().contains("/compact"), "got: {e}");
+        // …while unrelated errors pass through verbatim.
+        let other = friendly_overflow(anyhow!("backend returned 429: rate limited"));
+        assert_eq!(other.to_string(), "backend returned 429: rate limited");
+    }
+
+    #[tokio::test]
+    async fn compact_refuses_a_fresh_session() {
+        // Only the system prompt present — nothing to summarize, and the
+        // guard must fire before any network dial.
+        let mut agent = fake_agent();
+        let err = agent.compact().await.unwrap_err();
+        assert!(err.to_string().contains("nothing to compact"), "got: {err}");
     }
 
     #[test]
