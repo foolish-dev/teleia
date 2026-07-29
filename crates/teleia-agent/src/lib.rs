@@ -68,13 +68,26 @@ about paths and names. Output only the summary.";
 /// body (where the phrasing lives) is part of the matched text.
 fn friendly_overflow(e: anyhow::Error) -> anyhow::Error {
     if teleia_llm::is_context_overflow(&format!("{e:#}")) {
-        anyhow!(
-            "context limit exceeded — the conversation no longer fits the model's context \
-             window; run /compact to continue it in a fresh session, or /reset to start over"
-        )
+        anyhow!(CONTEXT_OVERFLOW_HELP)
     } else {
         e
     }
+}
+
+/// User-facing guidance when the input overflows the model's context
+/// window. Exposed so the TUI renders identical wording when auto-compact
+/// is off (or can't recover) — one source of truth for the message.
+pub const CONTEXT_OVERFLOW_HELP: &str =
+    "context limit exceeded — the conversation no longer fits the model's context \
+     window; run /compact to continue it in a fresh session, or /reset to start over";
+
+/// True when `err` is the context-window-overflow condition — either a raw
+/// backend overflow or the [`CONTEXT_OVERFLOW_HELP`] rewrap produced by
+/// `friendly_overflow`. Lets the TUI auto-compact + retry instead of
+/// surfacing a dead-end error.
+pub fn is_overflow_error(err: &anyhow::Error) -> bool {
+    let s = format!("{err:#}");
+    teleia_llm::is_context_overflow(&s) || s.contains(CONTEXT_OVERFLOW_HELP)
 }
 
 /// Events emitted by `turn()`. The TUI consumes these to render
@@ -1036,6 +1049,20 @@ mod tests {
         // …while unrelated errors pass through verbatim.
         let other = friendly_overflow(anyhow!("backend returned 429: rate limited"));
         assert_eq!(other.to_string(), "backend returned 429: rate limited");
+    }
+
+    #[test]
+    fn is_overflow_error_matches_raw_and_friendly() {
+        // Raw backend phrasing is recognized…
+        assert!(is_overflow_error(&anyhow!(
+            "anthropic 400: prompt is too long: 213462 tokens > 200000 maximum"
+        )));
+        // …and so is the friendly rewrap that `turn()` surfaces to the TUI.
+        assert!(is_overflow_error(&friendly_overflow(anyhow!(
+            "openai 400: context_length_exceeded"
+        ))));
+        // Unrelated errors are not overflow.
+        assert!(!is_overflow_error(&anyhow!("connection refused")));
     }
 
     #[tokio::test]
