@@ -711,8 +711,7 @@ impl LlmClient {
                 let chunk = chunk.context("read stream chunk")?;
                 push_utf8_chunk(&mut buf, &mut carry, &chunk);
 
-                while let Some(pos) = buf.find("\n\n") {
-                    let event: String = buf.drain(..pos + 2).collect();
+                while let Some(event) = next_sse_event(&mut buf) {
                     for line in event.lines() {
                         let Some(payload) = line.strip_prefix("data:") else { continue; };
                         let payload = payload.trim();
@@ -805,8 +804,7 @@ impl LlmClient {
                 let chunk = chunk.context("read stream chunk")?;
                 push_utf8_chunk(&mut buf, &mut carry, &chunk);
 
-                while let Some(pos) = buf.find("\n\n") {
-                    let event: String = buf.drain(..pos + 2).collect();
+                while let Some(event) = next_sse_event(&mut buf) {
                     for line in event.lines() {
                         let Some(payload) = line.strip_prefix("data:") else { continue; };
                         let payload = payload.trim();
@@ -1165,7 +1163,36 @@ struct AccTool {
     arguments: String,
 }
 
+/// Pop the next complete SSE event (through its blank-line terminator) off
+/// the front of `buf`, or `None` if no terminator is buffered yet. Frames on
+/// whichever separator appears first — `\n\n` (LF streams) or `\r\n\r\n`
+/// (CRLF streams) — so a CRLF backend's events don't sit unframed until the
+/// stream ends (which stalls output and the MAX_STREAM_BUF guard eventually
+/// aborts). `event.lines()` already strips the trailing `\r`.
+fn next_sse_event(buf: &mut String) -> Option<String> {
+    let (pos, len) = match (buf.find("\n\n"), buf.find("\r\n\r\n")) {
+        (Some(a), Some(b)) => {
+            if a <= b {
+                (a, 2)
+            } else {
+                (b, 4)
+            }
+        }
+        (Some(a), None) => (a, 2),
+        (None, Some(b)) => (b, 4),
+        (None, None) => return None,
+    };
+    Some(buf.drain(..pos + len).collect())
+}
+
 fn accumulate(acc: &mut Vec<AccTool>, delta: ToolCallDelta) {
+    // A single assistant turn never emits hundreds of parallel tool calls;
+    // an index this large is a malformed/hostile stream trying to make the
+    // pad loop below allocate unboundedly (OOM). Drop it.
+    const MAX_TOOL_CALLS: usize = 256;
+    if delta.index >= MAX_TOOL_CALLS {
+        return;
+    }
     while acc.len() <= delta.index {
         acc.push(AccTool {
             id: String::new(),
@@ -1306,6 +1333,39 @@ mod tests {
         assert_eq!(acc[2].name, "bash");
         assert_eq!(acc[0].id, "");
         assert_eq!(acc[1].id, "");
+    }
+
+    #[test]
+    fn next_sse_event_frames_lf_and_crlf() {
+        // LF-delimited stream.
+        let mut buf = String::from("data: a\n\ndata: b\n\n");
+        assert_eq!(next_sse_event(&mut buf).as_deref(), Some("data: a\n\n"));
+        assert_eq!(next_sse_event(&mut buf).as_deref(), Some("data: b\n\n"));
+        assert_eq!(next_sse_event(&mut buf), None);
+        // CRLF-delimited stream must frame too, not stall until EOF.
+        let mut buf = String::from("data: a\r\n\r\ndata: b\r\n\r\n");
+        assert_eq!(next_sse_event(&mut buf).as_deref(), Some("data: a\r\n\r\n"));
+        assert_eq!(next_sse_event(&mut buf).as_deref(), Some("data: b\r\n\r\n"));
+        assert_eq!(next_sse_event(&mut buf), None);
+        // A partial event without its terminator stays buffered.
+        let mut buf = String::from("data: partial");
+        assert_eq!(next_sse_event(&mut buf), None);
+        assert_eq!(buf, "data: partial");
+    }
+
+    #[test]
+    fn accumulate_drops_pathologically_large_index() {
+        // A hostile/garbage stream with a huge index must not make the pad
+        // loop allocate unboundedly — the delta is dropped, acc stays empty.
+        let mut acc = Vec::new();
+        accumulate(
+            &mut acc,
+            delta(usize::MAX, Some("x"), Some("read"), Some("{}")),
+        );
+        assert!(acc.is_empty());
+        // A normal index still works right after.
+        accumulate(&mut acc, delta(0, Some("a"), Some("read"), Some("{}")));
+        assert_eq!(acc.len(), 1);
     }
 
     #[test]

@@ -369,7 +369,10 @@ impl Agent {
         match prev {
             Some(id) => {
                 let messages = store.load(&id)?;
-                let seq = messages.len();
+                // Past the highest stored seq, not the loaded count — a row
+                // skipped by load() (corrupt payload) must not make the next
+                // append reuse a live seq.
+                let seq = store.next_seq(&id)?;
                 Ok(Self {
                     llm,
                     tools: teleia_tools::definitions(),
@@ -681,9 +684,9 @@ impl Agent {
     pub fn load_alias(&mut self, name: &str) -> Result<String> {
         let session_id = self.store.resolve_alias(name)?;
         let messages = self.store.load(&session_id)?;
+        self.seq = self.store.next_seq(&session_id)?;
         self.session_id = session_id.clone();
         self.messages = messages;
-        self.seq = self.messages.len();
         self.tokens = TokenCounts::default();
         Ok(session_id)
     }

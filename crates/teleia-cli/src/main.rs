@@ -323,9 +323,10 @@ struct Args {
     /// `grok-*` → xAI, `deepseek-*` → DeepSeek, `mistral-*` /
     /// `codestral-*` → Mistral. Use `groq:NAME` or `openrouter:NAME` for
     /// providers whose model names collide with local Ollama; anything
-    /// else routes to local Ollama.
-    #[arg(long, default_value = DEFAULT_MODEL)]
-    model: String,
+    /// else routes to local Ollama. Omitted, it restores the last-used
+    /// model (falling back to the built-in default on a fresh install).
+    #[arg(long)]
+    model: Option<String>,
     /// Override the auto-detected base URL. See --model for the
     /// per-provider defaults; Ollama is http://127.0.0.1:11434/v1.
     #[arg(long)]
@@ -408,18 +409,18 @@ async fn main() -> Result<()> {
     // feed into the rest of startup before LlmClient is built.
     let store = Store::open()?;
 
-    // Restore previously-active model when the user didn't pass --model
-    // explicitly. `args.model == DEFAULT_MODEL` is the heuristic for
-    // "no flag supplied" since clap derive doesn't surface value-source
-    // cleanly.
-    let model = if args.model == DEFAULT_MODEL {
-        store
+    // An explicit --model always wins (even when it equals DEFAULT_MODEL).
+    // When omitted, restore the last-used model, falling back to the
+    // built-in default. `Option` distinguishes "flag passed" from "absent"
+    // cleanly — the old `== DEFAULT_MODEL` heuristic silently overrode a
+    // user who explicitly asked for the default name.
+    let model = match args.model {
+        Some(m) => m,
+        None => store
             .get_pref("current_model")
             .ok()
             .flatten()
-            .unwrap_or_else(|| args.model.clone())
-    } else {
-        args.model.clone()
+            .unwrap_or_else(|| DEFAULT_MODEL.to_string()),
     };
 
     // Resolve provider:
