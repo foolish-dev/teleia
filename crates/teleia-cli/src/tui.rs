@@ -1789,9 +1789,7 @@ fn execute_ex(state: &mut State, agent: &mut Agent, cmd: &str) {
             // hlsearch` knob to flip it back on, so a fresh `/` is
             // how you re-highlight.
             state.selection = None;
-            state.search_pattern = None;
-            state.search_matches.clear();
-            state.search_idx = None;
+            clear_search(state);
         }
         "r" | "read" => {
             if arg.is_empty() {
@@ -2820,6 +2818,7 @@ async fn run_compact<B: ratatui::backend::Backend>(
         Ok(()) => {
             let after = agent.context_estimate();
             state.history.clear();
+            clear_search(state);
             state.tokens = TokenCounts::default();
             state.push(Entry::Info(format!(
                 "compacted: history ~{} → ~{} tokens · session {} · previous session recoverable via /load prev",
@@ -2901,6 +2900,16 @@ fn approval_decision(k: KeyEvent) -> Option<ToolApproval> {
     }
 }
 
+/// Drop any active `/`-search state. `search_matches` index into
+/// `state.history`, so this must run wherever the history is cleared or
+/// replaced (`/clear`, `/reset`, `/load`, compaction) — otherwise the
+/// overlay highlight and `n`/`N` point at entries that no longer exist.
+fn clear_search(state: &mut State) {
+    state.search_pattern = None;
+    state.search_matches.clear();
+    state.search_idx = None;
+}
+
 fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
     let mut parts = cmd.splitn(2, char::is_whitespace);
     let name = parts.next().unwrap_or("").trim();
@@ -2909,6 +2918,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
         "reset" => match agent.reset() {
             Ok(()) => {
                 state.history.clear();
+                clear_search(state);
                 state.tokens = TokenCounts::default();
                 state.push(Entry::Info(format!(
                     "started new session {}",
@@ -2941,6 +2951,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
             match agent.load_alias(arg) {
                 Ok(id) => {
                     state.history.clear();
+                    clear_search(state);
                     state.tokens = TokenCounts::default();
                     state.push(Entry::Info(format!(
                         "loaded '{arg}' → session {}",
@@ -2968,6 +2979,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
         },
         "clear" => {
             state.history.clear();
+            clear_search(state);
             state.scroll = 0;
             state.follow_bottom = true;
             state.last_total_lines = 0;

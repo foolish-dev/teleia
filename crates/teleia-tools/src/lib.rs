@@ -616,12 +616,20 @@ async fn bash_tool(args: Value) -> Result<String> {
         .spawn()
         .with_context(|| format!("spawn bash for: {command}"))?;
     let mut stdout = child.stdout.take().expect("stdout piped");
-    // Drain in a separate task so we keep accumulating output regardless of
-    // whether the child exits naturally or we kill it on timeout.
+    // Drain into a SHARED buffer (rather than one the task only returns on a
+    // clean join) so the 5s backstop below can recover whatever was captured
+    // if it has to abort the drain — otherwise a slow/blocked reader loses
+    // ALL output, not just the unread tail.
+    let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let drain_buf = captured.clone();
     let mut drain = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        let _ = stdout.read_to_end(&mut buf).await;
-        buf
+        let mut chunk = [0u8; 8192];
+        loop {
+            match stdout.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => drain_buf.lock().unwrap().extend_from_slice(&chunk[..n]),
+            }
+        }
     });
 
     // bash's own pid == its process-group id (set via setpgid in
@@ -660,10 +668,12 @@ async fn bash_tool(args: Value) -> Result<String> {
     // (e.g. a daemon that called setsid but kept fd 1 open) still can't
     // hang the tool indefinitely.
     let buf = tokio::select! {
-        joined = &mut drain => joined.unwrap_or_default(),
+        _ = &mut drain => std::mem::take(&mut *captured.lock().unwrap()),
         _ = tokio::time::sleep(Duration::from_secs(5)) => {
             drain.abort();
-            Vec::new()
+            let mut b = std::mem::take(&mut *captured.lock().unwrap());
+            b.extend_from_slice(b"\n[output drain timed out]");
+            b
         }
     };
     let mut out = String::from_utf8_lossy(&buf).into_owned();

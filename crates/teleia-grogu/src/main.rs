@@ -409,6 +409,9 @@ fn read_teleia_theme() -> Result<Option<String>> {
         return Ok(None);
     }
     let conn = Connection::open(&path).with_context(|| format!("open {}", path.display()))?;
+    // teleia may hold a write lock; wait for it instead of erroring immediately
+    // with SQLITE_BUSY. Matches teleia-store's own busy_timeout.
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
     let mut stmt = conn.prepare("SELECT value FROM prefs WHERE key = 'theme'")?;
     let mut rows = stmt.query([])?;
     if let Some(row) = rows.next()? {
@@ -458,6 +461,8 @@ fn apply_teleia(theme: &Theme, dry_run: bool) -> Result<String> {
         return Ok(msg);
     }
     let conn = Connection::open(&path).with_context(|| format!("open {}", path.display()))?;
+    // Wait for teleia's write lock rather than hard-erroring on SQLITE_BUSY.
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
     conn.execute(
         "INSERT OR REPLACE INTO prefs (key, value) VALUES ('theme', ?1)",
         params![teleia_slug],

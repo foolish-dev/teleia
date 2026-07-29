@@ -15,7 +15,7 @@ use anyhow::{anyhow, Context, Result};
 use futures_util::future::BoxFuture;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::Path;
 use teleia_agent::ToolRouter;
 use teleia_llm::ToolDef;
@@ -66,9 +66,11 @@ pub struct LspClient {
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     next_id: u64,
-    /// URIs the agent has already pushed a `didOpen` for, so we don't
-    /// re-open the same buffer on every diagnostics pull.
-    open_docs: HashSet<String>,
+    /// URIs the agent has pushed a `didOpen` for, mapped to the last
+    /// document version we sent. A re-query bumps the version and pushes a
+    /// `didChange` with the current on-disk text, so the server never keeps
+    /// reporting against the stale buffer it first opened.
+    open_docs: HashMap<String, i32>,
 }
 
 impl LspClient {
@@ -101,7 +103,7 @@ impl LspClient {
             stdin,
             stdout: BufReader::new(stdout),
             next_id: 1,
-            open_docs: HashSet::new(),
+            open_docs: HashMap::new(),
         };
         // Bound the handshake: a server that spawns but never answers
         // `initialize` (or stays stdout-silent) would otherwise hang boot
@@ -208,11 +210,21 @@ impl LspClient {
         self.write_frame(&payload).await
     }
 
-    /// Send `textDocument/didOpen` for `uri` if we haven't already.
-    /// Idempotent — subsequent calls for the same URI no-op.
+    /// Push the current `text` for `uri` to the server. The first call
+    /// sends `textDocument/didOpen` (version 1); every later call bumps the
+    /// version and sends a full-sync `textDocument/didChange`. Without the
+    /// didChange, an agentic edit-then-re-query loop would keep getting
+    /// diagnostics/hover for the buffer the server opened with — stale the
+    /// moment the file is edited on disk.
     pub async fn open_document(&mut self, uri: &str, language_id: &str, text: &str) -> Result<()> {
-        if self.open_docs.contains(uri) {
-            return Ok(());
+        if let Some(version) = self.open_docs.get(uri).copied() {
+            let version = version + 1;
+            self.open_docs.insert(uri.to_string(), version);
+            let params = json!({
+                "textDocument": { "uri": uri, "version": version },
+                "contentChanges": [ { "text": text } ],
+            });
+            return self.notify("textDocument/didChange", params).await;
         }
         let params = json!({
             "textDocument": {
@@ -223,7 +235,7 @@ impl LspClient {
             }
         });
         self.notify("textDocument/didOpen", params).await?;
-        self.open_docs.insert(uri.to_string());
+        self.open_docs.insert(uri.to_string(), 1);
         Ok(())
     }
 

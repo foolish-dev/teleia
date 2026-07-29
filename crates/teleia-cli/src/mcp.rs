@@ -274,8 +274,18 @@ fn method_not_found_reply(msg: &Value) -> Option<Value> {
 /// `id` (plus a `method`); without the `method` check, one whose id
 /// happened to collide with ours would be mis-read as our response —
 /// dropping the real reply and leaving the server's request unanswered.
+///
+/// The id is matched both as a number and as its decimal string: JSON-RPC
+/// permits string ids, and a server that echoes ours as `"5"` would
+/// otherwise never match, hanging the request loop on the next read.
 fn is_response_to(msg: &Value, id: u64) -> bool {
-    msg.get("id").and_then(Value::as_u64) == Some(id) && msg.get("method").is_none()
+    if msg.get("method").is_some() {
+        return false;
+    }
+    match msg.get("id") {
+        Some(v) => v.as_u64() == Some(id) || v.as_str() == Some(id.to_string().as_str()),
+        None => false,
+    }
 }
 
 impl Drop for McpClient {
@@ -592,6 +602,10 @@ mod tests {
             &json!({ "method": "notifications/message" }),
             2
         ));
+        // A server that echoes our id as a JSON-RPC string id still matches —
+        // otherwise the request loop would never recognize it and hang.
+        assert!(is_response_to(&json!({ "id": "2", "result": {} }), 2));
+        assert!(!is_response_to(&json!({ "id": "9", "result": {} }), 2));
     }
 
     #[test]

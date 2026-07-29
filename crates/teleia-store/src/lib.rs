@@ -155,6 +155,20 @@ impl Store {
         Ok(out)
     }
 
+    /// The next free `seq` for a session: one past the highest stored, or 0
+    /// when empty. Derived from `MAX(seq)` rather than the loaded message
+    /// count so that a row skipped by [`Store::load`] (corrupt/legacy payload)
+    /// can't make the next append reuse a live seq — which would collide and
+    /// reorder history on the next `ORDER BY seq` load.
+    pub fn next_seq(&self, session_id: &str) -> Result<usize> {
+        let next: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(seq), -1) + 1 FROM messages WHERE session_id = ?1",
+            params![session_id],
+            |row| row.get(0),
+        )?;
+        Ok(next as usize)
+    }
+
     pub fn save_alias(&self, name: &str, session_id: &str) -> Result<()> {
         self.conn.execute(
             "INSERT OR REPLACE INTO aliases (name, session_id, created_at) VALUES (?1, ?2, ?3)",
@@ -383,5 +397,49 @@ mod tests {
         assert_eq!(messages.len(), 2);
         assert!(matches!(&messages[0], Message::User { content } if content == "one"));
         assert!(matches!(&messages[1], Message::User { content } if content == "two"));
+    }
+
+    #[test]
+    fn next_seq_stays_past_a_skipped_corrupt_row() {
+        let path = tmp_db();
+        let _cleanup = Cleanup(path.clone());
+        let store = Store::open_at(&path).unwrap();
+        let session = store.create_session("m").unwrap();
+
+        // Three rows at seq 0/1/2, the middle one corrupt so load() skips it.
+        store
+            .append(
+                &session,
+                0,
+                &Message::User {
+                    content: "a".into(),
+                },
+            )
+            .unwrap();
+        store
+            .conn
+            .execute(
+                "INSERT INTO messages (session_id, seq, payload) VALUES (?1, ?2, ?3)",
+                params![session, 1_i64, "{bad"],
+            )
+            .unwrap();
+        store
+            .append(
+                &session,
+                2,
+                &Message::User {
+                    content: "c".into(),
+                },
+            )
+            .unwrap();
+
+        // load() yields 2 messages, but the next seq must be 3 (past MAX),
+        // not 2 (the count) — else the next append collides with seq 2.
+        assert_eq!(store.load(&session).unwrap().len(), 2);
+        assert_eq!(store.next_seq(&session).unwrap(), 3);
+
+        // A fresh session with no rows starts at 0.
+        let empty = store.create_session("m").unwrap();
+        assert_eq!(store.next_seq(&empty).unwrap(), 0);
     }
 }
