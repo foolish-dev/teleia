@@ -816,20 +816,23 @@ impl LlmClient {
                         match ev {
                             AnthropicEvent::MessageStart { message } => {
                                 if let Some(u) = message.usage {
-                                    usage.prompt_tokens = u.input_tokens
-                                        + u.cache_read_input_tokens
-                                        + u.cache_creation_input_tokens;
+                                    usage.prompt_tokens = u
+                                        .input_tokens
+                                        .saturating_add(u.cache_read_input_tokens)
+                                        .saturating_add(u.cache_creation_input_tokens);
                                 }
                             }
                             AnthropicEvent::ContentBlockStart { content_block } => match content_block {
                                 AnthropicBlockStart::ToolUse { id, name } => {
-                                    tools_acc.push(AccTool {
-                                        id,
-                                        kind: "function".into(),
-                                        name,
-                                        arguments: String::new(),
-                                    });
-                                    cur_tool = Some(tools_acc.len() - 1);
+                                    cur_tool = push_tool_capped(
+                                        &mut tools_acc,
+                                        AccTool {
+                                            id,
+                                            kind: "function".into(),
+                                            name,
+                                            arguments: String::new(),
+                                        },
+                                    );
                                 }
                                 AnthropicBlockStart::Other => cur_tool = None,
                             },
@@ -1185,11 +1188,27 @@ fn next_sse_event(buf: &mut String) -> Option<String> {
     Some(buf.drain(..pos + len).collect())
 }
 
+/// Cap on accumulated tool calls in one assistant turn. A stream claiming
+/// more is malformed/hostile — dropping the excess bounds the accumulator
+/// (OOM guard). Shared by the OpenAI (`accumulate`) and Anthropic
+/// (`push_tool_capped`) streaming paths.
+const MAX_TOOL_CALLS: usize = 256;
+
+/// Push a streamed tool-call block, bounded by [`MAX_TOOL_CALLS`]. Returns
+/// its index, or `None` at the cap so the caller drops the block (and its
+/// later argument deltas) rather than misattributing them to another tool.
+fn push_tool_capped(acc: &mut Vec<AccTool>, tool: AccTool) -> Option<usize> {
+    if acc.len() >= MAX_TOOL_CALLS {
+        return None;
+    }
+    acc.push(tool);
+    Some(acc.len() - 1)
+}
+
 fn accumulate(acc: &mut Vec<AccTool>, delta: ToolCallDelta) {
     // A single assistant turn never emits hundreds of parallel tool calls;
     // an index this large is a malformed/hostile stream trying to make the
     // pad loop below allocate unboundedly (OOM). Drop it.
-    const MAX_TOOL_CALLS: usize = 256;
     if delta.index >= MAX_TOOL_CALLS {
         return;
     }
@@ -1366,6 +1385,27 @@ mod tests {
         // A normal index still works right after.
         accumulate(&mut acc, delta(0, Some("a"), Some("read"), Some("{}")));
         assert_eq!(acc.len(), 1);
+    }
+
+    #[test]
+    fn push_tool_capped_indexes_then_stops_at_the_cap() {
+        let tool = || AccTool {
+            id: String::new(),
+            kind: "function".into(),
+            name: String::new(),
+            arguments: String::new(),
+        };
+        let mut acc: Vec<AccTool> = Vec::new();
+        // Fills sequentially, handing back each new index.
+        for i in 0..MAX_TOOL_CALLS {
+            assert_eq!(push_tool_capped(&mut acc, tool()), Some(i));
+        }
+        assert_eq!(acc.len(), MAX_TOOL_CALLS);
+        // At the cap: returns None and does not grow the Vec — so the
+        // Anthropic caller's cur_tool becomes None and later arg deltas are
+        // dropped instead of misattributed.
+        assert_eq!(push_tool_capped(&mut acc, tool()), None);
+        assert_eq!(acc.len(), MAX_TOOL_CALLS, "Vec did not grow past the cap");
     }
 
     #[test]
