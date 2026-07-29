@@ -47,6 +47,7 @@ fn mode_hints(mode: Mode) -> &'static str {
 const SLASH_COMMANDS: &[&str] = &[
     "ask",
     "auto",
+    "autocompact",
     "build",
     "cd",
     "clear",
@@ -528,6 +529,11 @@ struct State {
     /// Toggled via `/entropy` (its UI name; this field + pref key stay
     /// `autoprompt`), persisted across launches; defaults off.
     autoprompt: bool,
+    /// When a turn overflows the model's context window, automatically
+    /// `/compact` (summarize + reseed a fresh session) and retry the turn
+    /// once, instead of surfacing a dead-end error. Toggled via
+    /// `/autocompact`, persisted across launches; defaults on.
+    auto_compact: bool,
     /// Set by `run_turn`: did the turn just streamed dispatch at least one
     /// tool? The auto-prompt loop reads it right after to decide whether the
     /// agent still has work to do. Reset at the start of every turn.
@@ -710,6 +716,7 @@ impl State {
             username: username(),
             notify: true,
             autoprompt: false,
+            auto_compact: true,
             turn_used_tool: false,
             selection: None,
             log_area: Rect::default(),
@@ -903,6 +910,9 @@ pub async fn run(
     }
     if let Some(v) = agent.get_pref("autoprompt") {
         state.autoprompt = v == "on";
+    }
+    if let Some(v) = agent.get_pref("auto_compact") {
+        state.auto_compact = v == "on";
     }
     if let Some(v) = agent.get_pref("show_thinking") {
         set_show_thinking(v == "on");
@@ -1645,7 +1655,7 @@ async fn submit_input<B: ratatui::backend::Backend>(
     } else {
         state.push(Entry::User(trimmed.to_string()));
         state.working = true;
-        let mut outcome = run_turn(terminal, state, agent, trimmed.to_string()).await;
+        let mut outcome = run_turn_ac(terminal, state, agent, trimmed.to_string()).await;
         // Sticky auto-prompting: keep the agent going on its own. After a
         // turn that used a tool (did work rather than just answering),
         // re-submit "continue" and run again — stopping as soon as a turn
@@ -1656,7 +1666,7 @@ async fn submit_input<B: ratatui::backend::Backend>(
             steps += 1;
             state.push(Entry::Info(format!("entropy {steps}")));
             state.push(Entry::User(AUTO_CONTINUE_PROMPT.to_string()));
-            outcome = run_turn(terminal, state, agent, AUTO_CONTINUE_PROMPT.to_string()).await;
+            outcome = run_turn_ac(terminal, state, agent, AUTO_CONTINUE_PROMPT.to_string()).await;
         }
         state.working = false;
     }
@@ -1867,6 +1877,7 @@ fn translate_ex(cmd: &str) -> Result<String, String> {
         "transparent" | "transparency" | "transp" => format!("transparent {arg}"),
         "entropy" => format!("entropy {arg}"),
         "thinking" => format!("thinking {arg}"),
+        "autocompact" => format!("autocompact {arg}"),
         "cd" | "lcd" | "tcd" => format!("cd {arg}"),
         "pwd" => "pwd".to_string(),
         "version" => "version".to_string(),
@@ -2000,7 +2011,7 @@ fn arg_suggestion(cmd: &str, arg: &str, aliases: &[String]) -> Option<Suggestion
                 placeholder: String::new(),
             })
         }
-        "thinking" => {
+        "thinking" | "autocompact" => {
             let value = ["on", "off"]
                 .into_iter()
                 .find(|v| v.starts_with(arg) && *v != arg)?;
@@ -2018,7 +2029,7 @@ fn arg_placeholder(cmd: &str) -> Option<&'static str> {
         "save" | "load" | "delete" | "rm" => Some(" NAME"),
         "model" => Some(" [NAME]"),
         "theme" => Some(" [NAME]"),
-        "notify" | "transparent" | "entropy" | "thinking" => Some(" [on|off]"),
+        "notify" | "transparent" | "entropy" | "thinking" | "autocompact" => Some(" [on|off]"),
         "prompt" => Some(" [NAME]"),
         "key" => Some(" PROVIDER"),
         "cd" => Some(" PATH"),
@@ -2122,7 +2133,10 @@ fn compute_menu(
                 kind: MenuKind::Theme,
             });
         }
-        if matches!(cmd, "notify" | "transparent" | "entropy" | "thinking") {
+        if matches!(
+            cmd,
+            "notify" | "transparent" | "entropy" | "thinking" | "autocompact"
+        ) {
             let items: Vec<String> = ["on", "off"]
                 .iter()
                 .filter(|n| n.starts_with(arg))
@@ -2218,6 +2232,7 @@ fn compute_menu(
 /// (they'd clutter the menu with ambiguous prefixes).
 const EX_COMMANDS: &[&str] = &[
     "auto",
+    "autocompact",
     "build",
     "cd",
     "clear",
@@ -2262,7 +2277,7 @@ fn ex_arg_placeholder(cmd: &str) -> Option<&'static str> {
     match cmd {
         "write" | "load" | "edit" | "delete" => Some(" NAME"),
         "model" | "theme" | "colorscheme" => Some(" [NAME]"),
-        "notify" | "transparent" | "entropy" | "thinking" => Some(" [on|off]"),
+        "notify" | "transparent" | "entropy" | "thinking" | "autocompact" => Some(" [on|off]"),
         "mcps" => Some(" [enable|disable NAME]"),
         "effort" => Some(" [off|low|medium|high|xhigh|max|leetcode]"),
         "loop" => Some(" N PROMPT"),
@@ -2531,6 +2546,10 @@ enum TurnOutcome {
     /// Ended early — user interrupt (Esc / Ctrl-C) or a draw/stream
     /// error. `/loop` stops on this.
     Stopped,
+    /// The request overflowed the model's context window. Internal signal
+    /// consumed by [`run_turn_ac`], which auto-compacts + retries; callers
+    /// that go through the wrapper never observe it.
+    ContextOverflow,
 }
 
 async fn run_turn<B: ratatui::backend::Backend>(
@@ -2641,6 +2660,12 @@ async fn run_turn<B: ratatui::backend::Backend>(
                     }
                     Some(Err(e)) => {
                         state.finalize_trailing_stream();
+                        // A context-window overflow is handled by the caller
+                        // (`run_turn_ac` auto-compacts + retries); everything
+                        // else is a genuine stop shown in the transcript.
+                        if teleia_agent::is_overflow_error(&e) {
+                            return TurnOutcome::ContextOverflow;
+                        }
                         state.push(Entry::Error(e.to_string()));
                         return TurnOutcome::Stopped;
                     }
@@ -2652,6 +2677,57 @@ async fn run_turn<B: ratatui::backend::Backend>(
             }
         }
     }
+}
+
+/// Run one turn and, on a context-window overflow, auto-compact the
+/// session (summarize + reseed a fresh one) and retry the same input
+/// once — when `state.auto_compact` is on. This turns a dead-end
+/// "context limit exceeded" into an automatic recovery. When it can't
+/// recover it stops: with the toggle off — or a second overflow even
+/// after compaction — it surfaces the standard guidance; if compaction
+/// itself fails or is interrupted (session id unchanged) it stops
+/// quietly, since `run_compact` has already reported why. Every turn
+/// driver goes through this wrapper, so `TurnOutcome::ContextOverflow`
+/// never leaks past it.
+async fn run_turn_ac<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+    state: &mut State,
+    agent: &mut Agent,
+    input: String,
+) -> TurnOutcome {
+    let outcome = run_turn(terminal, state, agent, input.clone()).await;
+    if outcome != TurnOutcome::ContextOverflow {
+        return outcome;
+    }
+    if !state.auto_compact {
+        state.push(Entry::Error(
+            teleia_agent::CONTEXT_OVERFLOW_HELP.to_string(),
+        ));
+        return TurnOutcome::Stopped;
+    }
+    // Summarize + reseed, then re-ask against the smaller session. Guard on
+    // the session id: a cancelled/failed compaction leaves it unchanged, and
+    // retrying would just overflow again — so bail instead of looping.
+    let before = agent.session_id().to_string();
+    run_compact(terminal, state, agent).await;
+    if agent.session_id() == before {
+        return TurnOutcome::Stopped;
+    }
+    // run_compact clears the visual log on success; note the automatic
+    // compaction and restore the prompt above its incoming reply.
+    state.push(Entry::Info(
+        "(auto-compacted: the context window was full)".into(),
+    ));
+    state.push(Entry::User(input.clone()));
+    state.working = true;
+    let retry = run_turn(terminal, state, agent, input).await;
+    if retry == TurnOutcome::ContextOverflow {
+        state.push(Entry::Error(
+            teleia_agent::CONTEXT_OVERFLOW_HELP.to_string(),
+        ));
+        return TurnOutcome::Stopped;
+    }
+    retry
 }
 
 /// Drive a bounded `/loop`: re-submit `spec.prompt` as a chat turn up to
@@ -2669,7 +2745,7 @@ async fn run_loop<B: ratatui::backend::Backend>(
         state.push(Entry::Info(format!("loop {}/{}", i + 1, spec.count)));
         state.push(Entry::User(spec.prompt.clone()));
         state.working = true;
-        let outcome = run_turn(terminal, state, agent, spec.prompt.clone()).await;
+        let outcome = run_turn_ac(terminal, state, agent, spec.prompt.clone()).await;
         state.working = false;
         if outcome == TurnOutcome::Stopped {
             state.push(Entry::Info(format!(
@@ -3195,6 +3271,29 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                 },
             ));
         }
+        "autocompact" => {
+            let new = match arg.to_ascii_lowercase().as_str() {
+                "on" | "true" | "yes" | "1" => true,
+                "off" | "false" | "no" | "0" => false,
+                "" => !state.auto_compact,
+                _ => {
+                    state.push(Entry::Error(format!(
+                        "usage: /autocompact [on|off]  (current: {})",
+                        if state.auto_compact { "on" } else { "off" }
+                    )));
+                    return;
+                }
+            };
+            state.auto_compact = new;
+            agent.set_pref("auto_compact", if new { "on" } else { "off" });
+            state.push(Entry::Info(
+                if new {
+                    "autocompact on — a full context window auto-summarizes into a fresh session and the turn retries (previous recoverable via /load prev)".to_string()
+                } else {
+                    "autocompact off — a full context window surfaces an error; run /compact yourself".to_string()
+                },
+            ));
+        }
         // Show/hide the model's reasoning stream. Display-only: the model
         // still reasons (that's `/effort`); this just gates rendering, so
         // toggling back on re-reveals the current session's thinking.
@@ -3346,7 +3445,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
         }
         "help" | "?" => {
             state.push(Entry::Info(
-                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /effort [off|low|medium|high|xhigh|max|leetcode] · /key PROVIDER · /keys · /mcps · /lsps · /tools · /context · /compact · /plan · /build · /auto · /loop N PROMPT · /prompt [NAME] · /theme [NAME] · /notify [on|off] · /entropy [on|off] · /thinking [on|off] · /transparent [on|off] · /copy · /cd PATH · /pwd · /version · /show · /help · /quit"
+                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /effort [off|low|medium|high|xhigh|max|leetcode] · /key PROVIDER · /keys · /mcps · /lsps · /tools · /context · /compact · /plan · /build · /auto · /loop N PROMPT · /prompt [NAME] · /theme [NAME] · /notify [on|off] · /entropy [on|off] · /autocompact [on|off] · /thinking [on|off] · /transparent [on|off] · /copy · /cd PATH · /pwd · /version · /show · /help · /quit"
                     .into(),
             ));
         }
@@ -6179,6 +6278,24 @@ mod tests {
         assert!(EX_COMMANDS.contains(&"entropy"));
         assert_eq!(arg_placeholder("entropy"), Some(" [on|off]"));
         assert_eq!(translate_ex("entropy on").unwrap(), "entropy on");
+    }
+
+    #[test]
+    fn autocompact_is_a_listed_toggle_with_on_off_completion() {
+        assert!(SLASH_COMMANDS.contains(&"autocompact"));
+        assert!(EX_COMMANDS.contains(&"autocompact"));
+        assert_eq!(arg_placeholder("autocompact"), Some(" [on|off]"));
+        assert_eq!(ex_arg_placeholder("autocompact"), Some(" [on|off]"));
+        assert_eq!(translate_ex("autocompact off").unwrap(), "autocompact off");
+        // ghost-text autocomplete: "/autocompact o" → "on", "of" → "off"
+        assert_eq!(
+            arg_suggestion("autocompact", "o", &[]).map(|s| s.completion),
+            Some("n".to_string())
+        );
+        assert_eq!(
+            arg_suggestion("autocompact", "of", &[]).map(|s| s.completion),
+            Some("f".to_string())
+        );
     }
 
     #[test]
