@@ -2,3 +2,9 @@
 Cargo.lock.bak
 *.sqlite
 *.db
+
+# Claude Code per-user local settings (never shared)
+.claude/settings.local.json
+
+# stray local build artifact
+/verify_fix
