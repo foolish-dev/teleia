@@ -40,6 +40,18 @@ pub struct ContextEstimate {
     pub messages: usize,
 }
 
+impl ContextEstimate {
+    /// Estimated tokens sent to the model per turn: system prompt + tool
+    /// schemas + conversation history.
+    pub fn total(&self) -> u64 {
+        self.system + self.tools + self.history
+    }
+}
+
+/// Percent of the context budget at which a turn compacts *before* sending,
+/// leaving headroom for the model's own reply.
+const COMPACT_AT_PCT: u64 = 85;
+
 const SYSTEM_PROMPT_BASE: &str = "You are τέλεια, a terse coding assistant running in a terminal. \
 Use the provided tools to do real work: read, write, edit, multi_edit, bash, list, glob, grep, \
 head, tail, tree, stat, diff, which, fetch, mkdir, mv, cp, rm, apply_patch, wc, touch, sha256, \
@@ -591,6 +603,36 @@ impl Agent {
         est
     }
 
+    /// Proactive-compaction budget in estimated tokens, or `None` when unset
+    /// (the default: pure reactive behaviour). Read from the `context_limit`
+    /// pref. Set it for backends that don't report overflow the way hosted
+    /// APIs do — notably a local Ollama model, whose `num_ctx` window is
+    /// silently truncated (or 500s) rather than returning a clean error.
+    pub fn context_limit(&self) -> Option<u64> {
+        self.get_pref("context_limit")
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|&n| n > 0)
+    }
+
+    /// Set the proactive-compaction budget, or clear it with `None`.
+    pub fn set_context_limit(&self, limit: Option<u64>) {
+        self.set_pref(
+            "context_limit",
+            &limit.map_or(String::new(), |n| n.to_string()),
+        );
+    }
+
+    /// True when the estimated prompt is within [`COMPACT_AT_PCT`]% of the
+    /// configured budget and there is prior conversation to summarise — the
+    /// cue to compact *before* a turn overflows a window the backend may
+    /// never report on. Always `false` when no budget is set.
+    pub fn should_compact(&self) -> bool {
+        let Some(limit) = self.context_limit() else {
+            return false;
+        };
+        self.message_count() > 1 && self.context_estimate().total() * 100 >= limit * COMPACT_AT_PCT
+    }
+
     // ---- preference + history pass-through ----
     // Centralised so the TUI doesn't need to own its own Store handle.
 
@@ -1040,6 +1082,59 @@ mod tests {
         assert_eq!(est2.system, est.system, "system prompt is unchanged");
         assert!(est2.history > 0, "the user message counts as history");
         assert_eq!(est2.messages, 1);
+    }
+
+    #[test]
+    fn context_estimate_total_sums_the_buckets() {
+        let est = ContextEstimate {
+            system: 10,
+            tools: 20,
+            history: 30,
+            messages: 2,
+        };
+        assert_eq!(est.total(), 60);
+    }
+
+    #[test]
+    fn context_limit_roundtrips_and_clears_via_pref() {
+        let agent = fake_agent();
+        assert_eq!(agent.context_limit(), None, "unset by default");
+        agent.set_context_limit(Some(32768));
+        assert_eq!(agent.context_limit(), Some(32768));
+        agent.set_context_limit(None);
+        assert_eq!(agent.context_limit(), None, "cleared");
+    }
+
+    #[test]
+    fn should_compact_fires_only_over_budget_with_history() {
+        let mut agent = fake_agent();
+        // No budget set → never, regardless of size.
+        assert!(!agent.should_compact());
+        agent
+            .push(Message::User {
+                content: "some conversation to summarise. ".repeat(8),
+            })
+            .unwrap();
+        let total = agent.context_estimate().total();
+        assert!(total > 0);
+        // Budget == current estimate → 100% ≥ 85% threshold, with history.
+        agent.set_context_limit(Some(total));
+        assert!(
+            agent.should_compact(),
+            "over the 85% threshold with history"
+        );
+        // Budget far above the estimate → well under, no compaction.
+        agent.set_context_limit(Some(total * 100));
+        assert!(!agent.should_compact(), "well under budget");
+    }
+
+    #[test]
+    fn should_compact_never_on_a_fresh_session() {
+        let agent = fake_agent();
+        // Even an absurd budget can't compact a session that's only the
+        // system prompt — nothing prior to summarise.
+        agent.set_context_limit(Some(1));
+        assert!(!agent.should_compact());
     }
 
     #[test]
