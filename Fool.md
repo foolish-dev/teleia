@@ -30,9 +30,9 @@ Not done until all four pass. Pin new behavior with a test first; for a
 bug, write the failing test first.
 
 ## 5. Auto-prompting loop
-Drive the task to done on your own: plan, act, verify, take the next step
-without waiting for a nudge. A failing check is a cue to keep going, not
-a stop; don't narrate progress or ask "shall I continue?" — continue.
-Still stop for what the earlier principles reserve — real ambiguity, a
-user-only decision, an irreversible or outward-facing action — or when
-the same check keeps failing (say what's blocking rather than spin).
+Drive the task to done yourself: plan, act, verify, repeat — no nudge
+needed. A failing check is a cue to keep going, not to stop; don't narrate
+progress or ask "shall I continue?" — continue. Still stop where the
+earlier principles reserve it: real ambiguity, a user-only decision, an
+irreversible or outward-facing action — or when the same check keeps
+failing (say what's blocking rather than spin).
