@@ -2033,6 +2033,7 @@ fn arg_placeholder(cmd: &str) -> Option<&'static str> {
         "cd" => Some(" PATH"),
         "mcps" => Some(" [enable|disable NAME]"),
         "effort" => Some(" [off|low|medium|high|xhigh|max|leetcode]"),
+        "context" => Some(" [N|off]"),
         "loop" => Some(" N PROMPT"),
         _ => None,
     }
@@ -2278,6 +2279,7 @@ fn ex_arg_placeholder(cmd: &str) -> Option<&'static str> {
         "notify" | "transparent" | "entropy" | "thinking" | "autocompact" => Some(" [on|off]"),
         "mcps" => Some(" [enable|disable NAME]"),
         "effort" => Some(" [off|low|medium|high|xhigh|max|leetcode]"),
+        "context" => Some(" [N|off]"),
         "loop" => Some(" N PROMPT"),
         _ => None,
     }
@@ -2693,6 +2695,19 @@ async fn run_turn_ac<B: ratatui::backend::Backend>(
     agent: &mut Agent,
     input: String,
 ) -> TurnOutcome {
+    // Proactive compaction: for backends that don't report overflow the way
+    // hosted APIs do (a local Ollama model silently truncates or 500s), a
+    // budget set via `/context N` lets us summarize *before* the turn
+    // overflows, instead of waiting for an error that never arrives.
+    if state.auto_compact && agent.should_compact() {
+        let before = agent.session_id().to_string();
+        run_compact(terminal, state, agent).await;
+        if agent.session_id() != before {
+            state.push(Entry::Info(
+                "(auto-compacted: approaching the context limit)".into(),
+            ));
+        }
+    }
     let outcome = run_turn(terminal, state, agent, input.clone()).await;
     if outcome != TurnOutcome::ContextOverflow {
         return outcome;
@@ -3040,25 +3055,54 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
             state.push(Entry::Info(body));
         }
         "context" => {
-            let est = agent.context_estimate();
-            let total = est.system + est.tools + est.history;
-            let t = agent.tokens();
-            state.push(Entry::Info(format!(
-                "context · {} · {} msgs\n  \
-                 system prompt  ~{} tok\n  \
-                 tools ({})  ~{} tok\n  \
-                 history  ~{} tok\n  \
-                 → ~{} tok sent per turn · session ↑{} ↓{}",
-                agent.model(),
-                est.messages,
-                format_count(est.system),
-                agent.tools().len(),
-                format_count(est.tools),
-                format_count(est.history),
-                format_count(total),
-                format_count(t.prompt),
-                format_count(t.completion),
-            )));
+            let a = arg.trim();
+            if a.is_empty() {
+                let est = agent.context_estimate();
+                let total = est.total();
+                let t = agent.tokens();
+                let budget_line = match agent.context_limit() {
+                    Some(l) => format!(
+                        "\n  budget  {} tok  ({}% used · auto-compact at 85%)",
+                        format_count(l),
+                        total.saturating_mul(100) / l,
+                    ),
+                    None => "\n  budget  unset  (/context N to auto-compact before overflow)"
+                        .to_string(),
+                };
+                state.push(Entry::Info(format!(
+                    "context · {} · {} msgs\n  \
+                     system prompt  ~{} tok\n  \
+                     tools ({})  ~{} tok\n  \
+                     history  ~{} tok\n  \
+                     → ~{} tok sent per turn · session ↑{} ↓{}{}",
+                    agent.model(),
+                    est.messages,
+                    format_count(est.system),
+                    agent.tools().len(),
+                    format_count(est.tools),
+                    format_count(est.history),
+                    format_count(total),
+                    format_count(t.prompt),
+                    format_count(t.completion),
+                    budget_line,
+                )));
+            } else if a.eq_ignore_ascii_case("off") || a == "0" {
+                agent.set_context_limit(None);
+                state.push(Entry::Info(
+                    "context budget cleared — proactive auto-compact off".into(),
+                ));
+            } else if let Ok(n) = a.replace('_', "").parse::<u64>() {
+                agent.set_context_limit(Some(n));
+                state.push(Entry::Info(format!(
+                    "context budget set to {} tok — teleia auto-compacts before a turn exceeds \
+                     ~85% of it (match your local model's num_ctx)",
+                    format_count(n),
+                )));
+            } else {
+                state.push(Entry::Error(
+                    "usage: /context [N | off]   (N = token budget, e.g. 32768)".into(),
+                ));
+            }
         }
         "mcps" => {
             let mut sub = arg.splitn(2, char::is_whitespace);

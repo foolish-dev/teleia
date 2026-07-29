@@ -1,0 +1,12 @@
+{
+  "disabledMcpServers": [
+    "context7",
+    "filesystem",
+    "fetch",
+    "playwright",
+    "sequential-thinking",
+    "memory",
+    "git",
+    "hexstrike-ai"
+  ]
+}
