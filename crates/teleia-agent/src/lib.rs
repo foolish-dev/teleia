@@ -630,7 +630,9 @@ impl Agent {
         let Some(limit) = self.context_limit() else {
             return false;
         };
-        self.message_count() > 1 && self.context_estimate().total() * 100 >= limit * COMPACT_AT_PCT
+        self.message_count() > 1
+            && self.context_estimate().total().saturating_mul(100)
+                >= limit.saturating_mul(COMPACT_AT_PCT)
     }
 
     // ---- preference + history pass-through ----
@@ -1135,6 +1137,20 @@ mod tests {
         // system prompt — nothing prior to summarise.
         agent.set_context_limit(Some(1));
         assert!(!agent.should_compact());
+    }
+
+    #[test]
+    fn should_compact_survives_a_pathological_budget() {
+        // A huge /context value must not overflow-panic (debug) or wrap
+        // (release) the threshold arithmetic — saturating math keeps it safe.
+        let mut agent = fake_agent();
+        agent
+            .push(Message::User {
+                content: "some history".into(),
+            })
+            .unwrap();
+        agent.set_context_limit(Some(u64::MAX));
+        assert!(!agent.should_compact(), "nowhere near a u64::MAX budget");
     }
 
     #[test]
