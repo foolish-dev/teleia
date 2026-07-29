@@ -508,7 +508,9 @@ impl Agent {
 
     fn persist_mcp_disabled(&self) {
         let joined: Vec<&str> = self.mcp_disabled.iter().map(String::as_str).collect();
-        self.set_pref("mcp_disabled", &joined.join(","));
+        // Best-effort: a failed persist only means the toggle won't survive a
+        // restart; the in-memory state is already correct.
+        self.set_pref("mcp_disabled", &joined.join(",")).ok();
     }
 
     pub fn permission_mode(&self) -> PermissionMode {
@@ -532,7 +534,9 @@ impl Agent {
     /// in-flight turn stream — so the field-of-truth flip persists here.
     fn promote_to_auto(&mut self) {
         self.permission_mode = PermissionMode::Auto;
-        self.set_pref("permission_mode", PermissionMode::Auto.label_canonical());
+        // Best-effort persist (see persist_mcp_disabled).
+        self.set_pref("permission_mode", PermissionMode::Auto.label_canonical())
+            .ok();
     }
 
     pub fn auto_mode(&self) -> bool {
@@ -615,11 +619,11 @@ impl Agent {
     }
 
     /// Set the proactive-compaction budget, or clear it with `None`.
-    pub fn set_context_limit(&self, limit: Option<u64>) {
+    pub fn set_context_limit(&self, limit: Option<u64>) -> Result<()> {
         self.set_pref(
             "context_limit",
             &limit.map_or(String::new(), |n| n.to_string()),
-        );
+        )
     }
 
     /// True when the estimated prompt is within [`COMPACT_AT_PCT`]% of the
@@ -642,8 +646,11 @@ impl Agent {
         self.store.get_pref(key).ok().flatten()
     }
 
-    pub fn set_pref(&self, key: &str, value: &str) {
-        let _ = self.store.set_pref(key, value);
+    /// Persist a preference. Propagates the store error (an
+    /// `INSERT OR REPLACE` can fail on a full/locked DB) so the caller can
+    /// surface it instead of silently losing the setting.
+    pub fn set_pref(&self, key: &str, value: &str) -> Result<()> {
+        self.store.set_pref(key, value)
     }
 
     pub fn push_input_history(&self, line: &str) {
@@ -1101,9 +1108,9 @@ mod tests {
     fn context_limit_roundtrips_and_clears_via_pref() {
         let agent = fake_agent();
         assert_eq!(agent.context_limit(), None, "unset by default");
-        agent.set_context_limit(Some(32768));
+        agent.set_context_limit(Some(32768)).unwrap();
         assert_eq!(agent.context_limit(), Some(32768));
-        agent.set_context_limit(None);
+        agent.set_context_limit(None).unwrap();
         assert_eq!(agent.context_limit(), None, "cleared");
     }
 
@@ -1120,13 +1127,13 @@ mod tests {
         let total = agent.context_estimate().total();
         assert!(total > 0);
         // Budget == current estimate → 100% ≥ 85% threshold, with history.
-        agent.set_context_limit(Some(total));
+        agent.set_context_limit(Some(total)).unwrap();
         assert!(
             agent.should_compact(),
             "over the 85% threshold with history"
         );
         // Budget far above the estimate → well under, no compaction.
-        agent.set_context_limit(Some(total * 100));
+        agent.set_context_limit(Some(total * 100)).unwrap();
         assert!(!agent.should_compact(), "well under budget");
     }
 
@@ -1135,7 +1142,7 @@ mod tests {
         let agent = fake_agent();
         // Even an absurd budget can't compact a session that's only the
         // system prompt — nothing prior to summarise.
-        agent.set_context_limit(Some(1));
+        agent.set_context_limit(Some(1)).unwrap();
         assert!(!agent.should_compact());
     }
 
@@ -1149,7 +1156,7 @@ mod tests {
                 content: "some history".into(),
             })
             .unwrap();
-        agent.set_context_limit(Some(u64::MAX));
+        agent.set_context_limit(Some(u64::MAX)).unwrap();
         assert!(!agent.should_compact(), "nowhere near a u64::MAX budget");
     }
 

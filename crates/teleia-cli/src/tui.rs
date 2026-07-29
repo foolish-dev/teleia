@@ -86,13 +86,22 @@ const SLASH_COMMANDS: &[&str] = &[
 /// Sync the permission-mode change across the agent + the State mirror
 /// and surface a one-line confirmation in the chat log. Centralised so
 /// the slash commands and Shift+Tab handler stay tight.
+/// Persist a pref and surface a transcript error if the write fails, so a
+/// setting that silently didn't save (a full or locked DB) is visible instead
+/// of quietly reverting on the next launch.
+fn set_pref_warn(state: &mut State, agent: &Agent, key: &str, value: &str) {
+    if let Err(e) = agent.set_pref(key, value) {
+        state.push(Entry::Error(format!("couldn't save '{key}': {e}")));
+    }
+}
+
 fn set_mode(state: &mut State, agent: &mut Agent, mode: PermissionMode) {
     if state.permission_mode == mode {
         return;
     }
     agent.set_permission_mode(mode);
     state.permission_mode = mode;
-    agent.set_pref("permission_mode", mode.label_canonical());
+    set_pref_warn(state, agent, "permission_mode", mode.label_canonical());
     let blurb = match mode {
         PermissionMode::Plan => {
             "plan mode — read/list/glob/grep run; write/edit/bash are blocked. Use Shift+Tab or /build to execute."
@@ -1053,7 +1062,12 @@ async fn event_loop<B: ratatui::backend::Backend>(
         if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('t')) {
             let new = !show_thinking();
             set_show_thinking(new);
-            agent.set_pref("show_thinking", if new { "on" } else { "off" });
+            set_pref_warn(
+                state,
+                agent,
+                "show_thinking",
+                if new { "on" } else { "off" },
+            );
             state.push(Entry::Info(if new {
                 "thinking on — showing the model's reasoning".to_string()
             } else {
@@ -2866,7 +2880,7 @@ fn handle_key_entry(state: &mut State, agent: &mut Agent, key: KeyEvent) {
                 } else {
                     let chars = ke.buf.chars().count();
                     let pref = crate::pref_key_for(&ke.env_var);
-                    agent.set_pref(&pref, &ke.buf);
+                    set_pref_warn(state, agent, &pref, &ke.buf);
                     agent.set_api_key(Some(ke.buf));
                     state.push(Entry::Info(format!(
                         "stored {} key ({chars} chars) — saved for future launches too",
@@ -3015,7 +3029,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
             } else {
                 agent.set_model(arg.to_string());
                 state.model = arg.to_string();
-                agent.set_pref("current_model", arg);
+                set_pref_warn(state, agent, "current_model", arg);
                 state.push(Entry::Info(format!("switched model to {arg}")));
                 // For *every* cloud-model switch, drop into the
                 // hidden-input prompt so the key for the new provider
@@ -3087,17 +3101,25 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                     budget_line,
                 )));
             } else if a.eq_ignore_ascii_case("off") || a == "0" {
-                agent.set_context_limit(None);
-                state.push(Entry::Info(
-                    "context budget cleared — proactive auto-compact off".into(),
-                ));
+                match agent.set_context_limit(None) {
+                    Ok(()) => state.push(Entry::Info(
+                        "context budget cleared — proactive auto-compact off".into(),
+                    )),
+                    Err(e) => {
+                        state.push(Entry::Error(format!("couldn't clear context budget: {e}")))
+                    }
+                }
             } else if let Ok(n) = a.replace('_', "").parse::<u64>() {
-                agent.set_context_limit(Some(n));
-                state.push(Entry::Info(format!(
-                    "context budget set to {} tok — teleia auto-compacts before a turn exceeds \
-                     ~85% of it (match your local model's num_ctx)",
-                    format_count(n),
-                )));
+                match agent.set_context_limit(Some(n)) {
+                    Ok(()) => state.push(Entry::Info(format!(
+                        "context budget set to {} tok — teleia auto-compacts before a turn \
+                         exceeds ~85% of it (match your local model's num_ctx)",
+                        format_count(n),
+                    ))),
+                    Err(e) => {
+                        state.push(Entry::Error(format!("couldn't save context budget: {e}")))
+                    }
+                }
             } else {
                 state.push(Entry::Error(
                     "usage: /context [N | off]   (N = token budget, e.g. 32768)".into(),
@@ -3257,7 +3279,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                     names
                 )));
             } else if let Some(canonical) = set_theme(arg) {
-                agent.set_pref("theme", canonical);
+                set_pref_warn(state, agent, "theme", canonical);
                 state.push(Entry::Info(format!("switched theme to {canonical}")));
             } else {
                 state.push(Entry::Error(format!(
@@ -3297,7 +3319,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                 }
             };
             state.notify = new;
-            agent.set_pref("notify", if new { "on" } else { "off" });
+            set_pref_warn(state, agent, "notify", if new { "on" } else { "off" });
             state.push(Entry::Info(format!(
                 "desktop notifications {}",
                 if new { "on" } else { "off" }
@@ -3318,7 +3340,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                 }
             };
             state.autoprompt = new;
-            agent.set_pref("autoprompt", if new { "on" } else { "off" });
+            set_pref_warn(state, agent, "autoprompt", if new { "on" } else { "off" });
             state.push(Entry::Info(
                 if new {
                     "entropy on — after each turn I'll continue on my own until the task is done (esc/^c stops, cap 100)".to_string()
@@ -3341,7 +3363,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                 }
             };
             state.auto_compact = new;
-            agent.set_pref("auto_compact", if new { "on" } else { "off" });
+            set_pref_warn(state, agent, "auto_compact", if new { "on" } else { "off" });
             state.push(Entry::Info(
                 if new {
                     "autocompact on — a full context window auto-summarizes into a fresh session and the turn retries (previous recoverable via /load prev)".to_string()
@@ -3367,7 +3389,12 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                 }
             };
             set_show_thinking(new);
-            agent.set_pref("show_thinking", if new { "on" } else { "off" });
+            set_pref_warn(
+                state,
+                agent,
+                "show_thinking",
+                if new { "on" } else { "off" },
+            );
             state.push(Entry::Info(if new {
                 "thinking on — showing the model's reasoning".to_string()
             } else {
@@ -3450,7 +3477,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                 }
             };
             set_transparent(new);
-            agent.set_pref("transparent", if new { "on" } else { "off" });
+            set_pref_warn(state, agent, "transparent", if new { "on" } else { "off" });
             state.push(Entry::Info(format!(
                 "transparent background {} — terminal alpha + compositor blur now {}",
                 if new { "on" } else { "off" },
@@ -3470,13 +3497,13 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                 match arg {
                     "off" | "none" => {
                         agent.set_reasoning_effort(None);
-                        agent.set_pref("reasoning_effort", "off");
+                        set_pref_warn(state, agent, "reasoning_effort", "off");
                         state.reasoning_effort = None;
                         state.push(Entry::Info("reasoning effort: off".into()));
                     }
                     other if teleia_agent::is_reasoning_effort(other) => {
                         agent.set_reasoning_effort(Some(arg.to_string()));
-                        agent.set_pref("reasoning_effort", arg);
+                        set_pref_warn(state, agent, "reasoning_effort", arg);
                         state.reasoning_effort = Some(arg.to_string());
                         state.push(Entry::Info(format!(
                             "reasoning effort: {arg} (reasoning-capable models only)"
