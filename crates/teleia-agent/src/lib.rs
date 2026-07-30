@@ -49,8 +49,9 @@ impl ContextEstimate {
 }
 
 /// Percent of the context budget at which a turn compacts *before* sending,
-/// leaving headroom for the model's own reply.
-const COMPACT_AT_PCT: u64 = 85;
+/// leaving headroom for the model's own reply. Public so the TUI's context
+/// gauge and `/context` help quote the same threshold instead of drifting.
+pub const COMPACT_AT_PCT: u64 = 85;
 
 /// Default proactive-compaction budget (estimated tokens) for local Ollama
 /// backends when the user hasn't set one with `/context`. Matches the settled
