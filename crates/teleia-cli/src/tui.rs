@@ -885,6 +885,24 @@ pub async fn run(
     lsp_summary: Option<String>,
     update_check: Option<crate::update::UpdateCheck>,
 ) -> Result<()> {
+    // Restore the terminal before the default panic handler prints. Without
+    // this, a panic anywhere in the event loop skips the teardown below and
+    // leaves the terminal in raw mode + alternate screen with mouse capture
+    // on — no echo, no line editing — until the user blind-types `reset`. The
+    // hook writes to a fresh stdout handle (it can't reach the ratatui
+    // `terminal`), mirroring the normal teardown order.
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(
+            io::stdout(),
+            LeaveAlternateScreen,
+            DisableMouseCapture,
+            DisableBracketedPaste
+        );
+        original_hook(info);
+    }));
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     // Mouse capture forwards wheel events to teleia so the log can scroll
