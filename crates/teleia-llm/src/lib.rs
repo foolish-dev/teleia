@@ -424,12 +424,15 @@ pub fn looks_like_ollama(base_url: &str) -> bool {
 
 /// Pull the `num_ctx` value out of Ollama `/api/show`'s `parameters` blob (a
 /// newline-separated list of the model's baked `PARAMETER` lines, e.g.
-/// `num_ctx                        32768`). `None` when the model has no
-/// `num_ctx` set (it then runs at Ollama's own default).
+/// `num_ctx                        32768`). Parsed as `f64` first because
+/// Ollama prints large values in scientific notation — a `num_ctx` of 1000000
+/// comes back as `1e+06`, which a direct `u64` parse rejects (leaving the
+/// budget mis-sized and the turn free to overflow). `None` when the model has
+/// no `num_ctx` set (it then runs at Ollama's own default).
 fn parse_num_ctx_param(parameters: &str) -> Option<u64> {
     parameters.lines().find_map(|line| {
         let mut it = line.split_whitespace();
-        (it.next() == Some("num_ctx")).then(|| it.next()?.parse().ok())?
+        (it.next() == Some("num_ctx")).then(|| it.next()?.parse::<f64>().ok().map(|n| n as u64))?
     })
 }
 
@@ -525,12 +528,16 @@ impl LlmClient {
         &self.model
     }
 
-    /// Best-effort: ask Ollama's native `/api/show` for the model's baked
-    /// `num_ctx` so the caller can size the context budget to the window the
-    /// model actually loads with (which teleia can't otherwise see — the
-    /// OpenAI-compat `/v1` path ignores a per-request `num_ctx`). `None` for
-    /// non-Ollama backends, or on any network / parse failure — callers fall
-    /// back to a default. The native API sits at the host root, not `/v1`.
+    /// Best-effort: ask Ollama's native `/api/show` for the window the model
+    /// actually loads with, so the caller can size the context budget to it
+    /// (teleia can't otherwise see it — the OpenAI-compat `/v1` path ignores a
+    /// per-request `num_ctx`). Returns the baked `num_ctx` **capped at the
+    /// model's trained `context_length`**, because Ollama clamps a larger
+    /// `num_ctx` down to the trained window at load — so a capability-first
+    /// `1e+06` default is reported here as the 262144 it really runs at, not a
+    /// budget that would never trigger compaction. `None` for non-Ollama
+    /// backends, or on any network / parse failure — callers fall back to a
+    /// default. The native API sits at the host root, not `/v1`.
     pub async fn detect_ollama_num_ctx(&self) -> Option<u64> {
         if !looks_like_ollama(&self.base_url) {
             return None;
@@ -548,7 +555,15 @@ impl LlmClient {
             return None;
         }
         let body: Value = resp.json().await.ok()?;
-        parse_num_ctx_param(body.get("parameters")?.as_str()?)
+        let num_ctx = parse_num_ctx_param(body.get("parameters")?.as_str()?)?;
+        // Ollama clamps a baked `num_ctx` to the model's trained context window
+        // at load, so the effective budget is the smaller of the two.
+        let trained = body
+            .get("model_info")
+            .and_then(Value::as_object)
+            .and_then(|mi| mi.iter().find(|(k, _)| k.ends_with(".context_length")))
+            .and_then(|(_, v)| v.as_u64());
+        Some(trained.map_or(num_ctx, |t| num_ctx.min(t)))
     }
 
     /// Re-point at a different model. If the new name resolves to a
@@ -1288,6 +1303,12 @@ mod tests {
         // /api/show `parameters` is space-padded PARAMETER lines.
         let blob = "num_ctx                        4096\nstop                           \"<|im_end|>\"\ntemperature                    0.6";
         assert_eq!(parse_num_ctx_param(blob), Some(4096));
+        // Ollama prints large num_ctx in scientific notation (1000000 -> 1e+06);
+        // a plain u64 parse rejects it, so it must go through f64.
+        assert_eq!(
+            parse_num_ctx_param("num_ctx                        1e+06"),
+            Some(1_000_000)
+        );
         // No num_ctx line → None (model runs at Ollama's own default).
         assert_eq!(
             parse_num_ctx_param("stop \"<|im_end|>\"\ntemperature 0.6"),
