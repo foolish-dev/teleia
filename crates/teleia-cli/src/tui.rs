@@ -511,6 +511,12 @@ struct State {
     should_quit: bool,
     frame: usize, // monotonic tick driving the spinner animation
     tokens: TokenCounts,
+    /// Status-bar context gauge: (estimated tokens sent per turn, budget).
+    /// `None` when no compaction budget is set (gauge hidden). Synced after
+    /// anything that can move it — turns, loops, compaction, slash and ex
+    /// commands — rather than per frame: the estimate re-serializes the
+    /// whole history, too heavy for the animation tick.
+    ctx: Option<(u64, u64)>,
     suggestion: Option<Suggestion>,
     menu: Option<Menu>,
     mode: Mode,
@@ -718,6 +724,7 @@ impl State {
             should_quit: false,
             frame: 0,
             tokens: TokenCounts::default(),
+            ctx: None,
             suggestion: None,
             menu: None,
             mode: Mode::Insert,
@@ -930,6 +937,7 @@ pub async fn run(
     let mut terminal = Terminal::new(backend)?;
 
     let mut state = State::new(agent.session_id(), agent.model());
+    sync_ctx(&mut state, &agent);
     state.permission_mode = agent.permission_mode();
     state.reasoning_effort = agent.reasoning_effort().map(String::from);
     state.mcp_summary = mcp_summary;
@@ -1532,6 +1540,9 @@ async fn event_loop<B: ratatui::backend::Backend>(
                     if std::mem::take(&mut state.pending_redetect) {
                         refresh_local_budget(state, agent).await;
                     }
+                    // Any of the above (or the ex command itself) can move
+                    // the context gauge.
+                    sync_ctx(state, agent);
                 }
                 _ => {}
             },
@@ -1644,6 +1655,23 @@ async fn event_loop<B: ratatui::backend::Backend>(
 
 /// Submit the contents of state.input — slash command or chat turn.
 /// Extracted so both Insert-Enter and Normal-Enter can call it.
+/// Refresh the status-bar context gauge from the agent: what the next turn
+/// would send vs the compaction budget. `None` (gauge hidden) when no budget
+/// is set — backends without a known window stay reactive.
+fn sync_ctx(state: &mut State, agent: &Agent) {
+    state.ctx = agent
+        .context_limit()
+        .map(|budget| (agent.context_estimate().total(), budget));
+}
+
+/// Percent of the context budget the estimate fills. Truncates rather than
+/// rounds (84.9% must not read as the 85% compaction alarm), can exceed 100
+/// (the estimate is taken before compaction trims it back under), and a zero
+/// budget can't divide by zero.
+fn ctx_pct(est: u64, budget: u64) -> u64 {
+    est.saturating_mul(100) / budget.max(1)
+}
+
 async fn submit_input<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     state: &mut State,
@@ -1699,6 +1727,9 @@ async fn submit_input<B: ratatui::backend::Backend>(
         } else if std::mem::take(&mut state.pending_compact) {
             run_compact(terminal, state, agent).await;
         } else {
+            // Plain slash commands (`/context`, `/reset`, `/load`, …) can
+            // move the gauge too — sync before the early return.
+            sync_ctx(state, agent);
             return;
         }
     } else {
@@ -1720,6 +1751,7 @@ async fn submit_input<B: ratatui::backend::Backend>(
         state.working = false;
     }
     state.tokens = agent.tokens();
+    sync_ctx(state, agent);
     state.status = format!(
         "session {} · ready",
         &agent.session_id()[..agent.session_id().len().min(12)]
@@ -4221,6 +4253,22 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
         ),
         Style::default().fg(th.yellow),
     ));
+    // Context gauge: how much of the compaction budget the next turn sends.
+    // Colour tracks urgency — dim while comfortable, yellow past half, red
+    // from the 85% auto-compact threshold — so compaction stops being a
+    // surprise. Hidden when no budget is set (nothing to fill against).
+    if let Some((est, budget)) = state.ctx {
+        let pct = ctx_pct(est, budget);
+        let style = if pct >= 85 {
+            Style::default().fg(th.red).add_modifier(Modifier::BOLD)
+        } else if pct >= 50 {
+            Style::default().fg(th.yellow)
+        } else {
+            Style::default().fg(th.dim)
+        };
+        status_spans.push(Span::styled(" · ", Style::default().fg(th.dim)));
+        status_spans.push(Span::styled(format!("ctx {pct}%"), style));
+    }
     // Permission-mode chip. Always shown so the user can't lose track:
     // PLAN (blue) is read-only, BUILD (green) prompts per-call, AUTO
     // (red) skips every prompt — colour-coded by risk.
@@ -5982,6 +6030,19 @@ fn render_entry(entry: &Entry, frame: usize, username: &str) -> Vec<Line<'static
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ctx_pct_tracks_budget_share() {
+        assert_eq!(ctx_pct(0, 32_768), 0);
+        assert_eq!(ctx_pct(16_384, 32_768), 50);
+        // Truncates rather than rounds — 84.99% must not read as the 85%
+        // auto-compact alarm; the exact threshold does.
+        assert_eq!(ctx_pct(27_852, 32_768), 84);
+        assert_eq!(ctx_pct(27_853, 32_768), 85);
+        // Over budget shows the honest figure; a zero budget can't panic.
+        assert_eq!(ctx_pct(40_000, 32_768), 122);
+        assert_eq!(ctx_pct(1, 0), 100);
+    }
 
     #[test]
     fn base64_encode_empty_is_empty() {
