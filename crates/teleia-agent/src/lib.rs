@@ -52,6 +52,28 @@ impl ContextEstimate {
 /// leaving headroom for the model's own reply.
 const COMPACT_AT_PCT: u64 = 85;
 
+/// Cap on a single tool result's size (in `char`s) before it enters the
+/// conversation history. Whole-session compaction reduces the *accumulated*
+/// history; this bounds the *per-result* cost so one unbounded output — a
+/// huge file read, a chatty build log — can't blow the budget in a single
+/// shot. Head and tail are kept (the start of a file, the last lines of a
+/// log); the middle is elided. Only the model's copy is trimmed — the TUI
+/// still shows the full output.
+const MAX_TOOL_OUTPUT_CHARS: usize = 12_000;
+const TRIM_HEAD_CHARS: usize = 8_000;
+const TRIM_TAIL_CHARS: usize = 3_000;
+
+fn trim_tool_output(output: String) -> String {
+    let total = output.chars().count();
+    if total <= MAX_TOOL_OUTPUT_CHARS {
+        return output;
+    }
+    let omitted = total - TRIM_HEAD_CHARS - TRIM_TAIL_CHARS;
+    let head: String = output.chars().take(TRIM_HEAD_CHARS).collect();
+    let tail: String = output.chars().skip(total - TRIM_TAIL_CHARS).collect();
+    format!("{head}\n\n… [{omitted} characters trimmed to fit the context budget] …\n\n{tail}")
+}
+
 const SYSTEM_PROMPT_BASE: &str = "You are τέλεια, a terse coding assistant running in a terminal. \
 Use the provided tools to do real work: read, write, edit, multi_edit, bash, list, glob, grep, \
 head, tail, tree, stat, diff, which, fetch, mkdir, mv, cp, rm, apply_patch, wc, touch, sha256, \
@@ -969,7 +991,7 @@ impl Agent {
                     };
                     self.push(Message::Tool {
                         tool_call_id: call.id.clone(),
-                        content: output,
+                        content: trim_tool_output(output),
                     })?;
                 }
                 steps += 1;
@@ -1055,6 +1077,30 @@ mod tests {
 
     fn fake_def(name: &str) -> ToolDef {
         ToolDef::new(name, format!("desc for {name}"), json!({"type": "object"}))
+    }
+
+    #[test]
+    fn trim_tool_output_keeps_small_results_verbatim() {
+        let small = "the quick brown fox".to_string();
+        assert_eq!(trim_tool_output(small.clone()), small);
+    }
+
+    #[test]
+    fn trim_tool_output_caps_oversized_results() {
+        let big = "x".repeat(50_000);
+        let trimmed = trim_tool_output(big);
+        assert!(trimmed.chars().count() <= MAX_TOOL_OUTPUT_CHARS + 200);
+        assert!(trimmed.contains("characters trimmed"));
+        assert!(trimmed.starts_with("xxxx"));
+        assert!(trimmed.ends_with("xxxx"));
+    }
+
+    #[test]
+    fn trim_tool_output_slices_on_char_boundaries() {
+        // Multibyte chars must not panic the head/tail slicing.
+        let big = "é".repeat(20_000);
+        let trimmed = trim_tool_output(big);
+        assert!(trimmed.contains("characters trimmed"));
     }
 
     #[test]
