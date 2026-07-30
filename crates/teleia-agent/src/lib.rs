@@ -62,14 +62,16 @@ const LOCAL_DEFAULT_CONTEXT: u64 = 32_768;
 /// Native context window (tokens) of Claude Fable 5 / Mythos 5 — 1M, which is
 /// also the default on those models. Used as the proactive-compaction budget
 /// when teleia targets one of them, so a turn compacts before it overflows the
-/// window rather than relying on the backend to report it. Also applied to the
-/// local Janus/Thanatos models by preference (see [`default_context_limit`]).
+/// window rather than relying on the backend to report it.
 const FABLE_DEFAULT_CONTEXT: u64 = 1_000_000;
 
 /// Model names that get [`FABLE_DEFAULT_CONTEXT`] as their default budget,
-/// matched case-insensitively as a substring of the model id. Fable/Mythos 5
-/// have a real 1M window; Janus/Thanatos are here by user preference.
-const FABLE_BUDGET_MODELS: &[&str] = &["fable", "mythos", "janus", "thanatos"];
+/// matched case-insensitively as a substring of the model id — only models
+/// with a genuine 1M window. Local models (incl. Janus/Thanatos on Ollama)
+/// must NOT be here: an out-of-reach budget means [`Agent::should_compact`]
+/// never fires, so history grows unbounded — they fall to the far smaller
+/// local default instead (see [`default_context_limit`]).
+const FABLE_BUDGET_MODELS: &[&str] = &["fable", "mythos"];
 
 /// Cap on a single tool result's size (in `char`s) before it enters the
 /// conversation history. Whole-session compaction reduces the *accumulated*
@@ -1152,9 +1154,11 @@ mod tests {
     }
 
     #[test]
-    fn context_limit_uses_fable_budget_for_local_janus_and_thanatos() {
-        // The local Qwen models get the Fable budget by preference — matched
-        // case-insensitively against their capitalized `-HERETIC` model ids.
+    fn context_limit_uses_local_default_for_janus_and_thanatos() {
+        // The local Qwen models must NOT get the out-of-reach 1M Fable budget
+        // (it would stop should_compact from ever firing, so history grows
+        // unbounded). On a local Ollama endpoint they fall to the local
+        // default, which compacts at a reachable ~28K.
         for model in ["Janus-35B-HERETIC", "Thanatos-27B-HERETIC"] {
             let agent = Agent::new(
                 LlmClient::new("http://127.0.0.1:11434/v1", model),
@@ -1163,7 +1167,7 @@ mod tests {
             .unwrap();
             assert_eq!(
                 agent.context_limit(),
-                Some(FABLE_DEFAULT_CONTEXT),
+                Some(LOCAL_DEFAULT_CONTEXT),
                 "{model}"
             );
         }
