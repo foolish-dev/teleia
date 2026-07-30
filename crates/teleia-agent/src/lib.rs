@@ -1287,6 +1287,166 @@ mod tests {
         assert_eq!(s.record("edit", r#"{"path":"c"}"#, true), 1);
     }
 
+    /// Minimal blocking HTTP server speaking just enough of the OpenAI SSE
+    /// protocol to script `turn()` end to end — no production seam needed:
+    /// `LlmClient` dials whatever base_url it's given, so these tests
+    /// exercise the real request/SSE-parse path too. Each element of
+    /// `rounds` answers one `/chat/completions` POST, in order: its `data:`
+    /// payloads stream out, then the connection closes (a closed body is
+    /// what makes the stream emit `Done`). The listener drops once the
+    /// script is exhausted, so a turn that dials an extra round fails fast
+    /// (connection refused) instead of hanging; joining the handle asserts
+    /// every scripted round was consumed.
+    fn scripted_llm(rounds: Vec<Vec<serde_json::Value>>) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind scripted llm");
+        let base = format!("http://{}/v1", listener.local_addr().expect("local addr"));
+        let handle = std::thread::spawn(move || {
+            for round in rounds {
+                let (sock, _) = listener.accept().expect("accept");
+                let mut reader = BufReader::new(sock);
+                // Drain the request — headers, then exactly content-length
+                // body bytes — so the client sees a clean exchange.
+                let mut content_len = 0usize;
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).expect("read header");
+                    let line = line.trim();
+                    if line.is_empty() {
+                        break;
+                    }
+                    if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        content_len = v.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0u8; content_len];
+                reader.read_exact(&mut body).expect("read body");
+                let mut sse = String::new();
+                for payload in round {
+                    sse.push_str(&format!("data: {payload}\n\n"));
+                }
+                let mut sock = reader.into_inner();
+                write!(
+                    sock,
+                    "HTTP/1.1 200 OK\r\nconnection: close\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\r\n{sse}",
+                    sse.len()
+                )
+                .expect("write response");
+            }
+        });
+        (base, handle)
+    }
+
+    /// A round that answers with plain text and a natural stop.
+    fn say(text: &str) -> Vec<serde_json::Value> {
+        vec![
+            json!({"choices": [{"delta": {"content": text}, "finish_reason": null}]}),
+            json!({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
+        ]
+    }
+
+    /// A round that answers with a single tool call.
+    fn call(name: &str, args: &str) -> Vec<serde_json::Value> {
+        vec![json!({"choices": [{"delta": {"tool_calls": [{
+            "index": 0, "id": "call_1", "type": "function",
+            "function": {"name": name, "arguments": args},
+        }]}, "finish_reason": "tool_calls"}]})]
+    }
+
+    fn scripted_agent(base: String) -> Agent {
+        let mut agent = Agent::new(LlmClient::new(base, "test-model"), tmp_store()).unwrap();
+        // Auto: Build would yield an approval request whose dropped
+        // responder reads as a denial, and denied calls skip execution.
+        agent.set_permission_mode(PermissionMode::Auto);
+        agent
+    }
+
+    async fn drive(agent: &mut Agent, input: &str) -> Vec<TurnEvent> {
+        let stream = agent.turn(input.to_string());
+        pin_mut!(stream);
+        let mut events = Vec::new();
+        while let Some(ev) = stream.next().await {
+            events.push(ev.expect("turn event"));
+        }
+        events
+    }
+
+    fn tool_outputs(events: &[TurnEvent]) -> Vec<&str> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                TurnEvent::ToolEnd { output, .. } => Some(output.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn assistant_text(events: &[TurnEvent]) -> String {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                TurnEvent::AssistantDelta(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn turn_streams_scripted_content_and_ends() {
+        let (base, server) = scripted_llm(vec![say("hello from the fake")]);
+        let mut agent = scripted_agent(base);
+        let events = drive(&mut agent, "hi").await;
+        assert_eq!(assistant_text(&events), "hello from the fake");
+        assert!(matches!(events.last(), Some(TurnEvent::TurnEnd)));
+        server.join().expect("all scripted rounds consumed");
+    }
+
+    #[tokio::test]
+    async fn turn_appends_dropped_argument_hint() {
+        // `edit` with empty args fails serde with "missing field" — the
+        // dropped-required-argument shape — then the model recovers.
+        let (base, server) = scripted_llm(vec![call("edit", "{}"), say("recovered")]);
+        let mut agent = scripted_agent(base);
+        let events = drive(&mut agent, "edit something").await;
+        let outputs = tool_outputs(&events);
+        assert_eq!(outputs.len(), 1);
+        assert!(outputs[0].starts_with("error: "), "{}", outputs[0]);
+        assert!(outputs[0].contains("missing field"), "{}", outputs[0]);
+        assert!(
+            outputs[0].contains(INCOMPLETE_TOOL_ARGS_HINT),
+            "hint missing from: {}",
+            outputs[0]
+        );
+        assert_eq!(assistant_text(&events), "recovered");
+        server.join().expect("all scripted rounds consumed");
+    }
+
+    #[tokio::test]
+    async fn turn_breaks_an_identical_retry_loop() {
+        // The same failing call three rounds running: hint the loop on the
+        // second, stop the turn on the third — without dialling a fourth
+        // round (the join asserts exactly three requests were served).
+        let (base, server) = scripted_llm(vec![
+            call("edit", "{}"),
+            call("edit", "{}"),
+            call("edit", "{}"),
+        ]);
+        let mut agent = scripted_agent(base);
+        let events = drive(&mut agent, "keep editing").await;
+        let outputs = tool_outputs(&events);
+        assert_eq!(outputs.len(), 3);
+        assert!(!outputs[0].contains(REPEATED_CALL_HINT), "{}", outputs[0]);
+        assert!(outputs[1].contains(REPEATED_CALL_HINT), "{}", outputs[1]);
+        assert!(outputs[2].contains(REPEATED_CALL_HINT), "{}", outputs[2]);
+        let note = assistant_text(&events);
+        assert!(
+            note.contains("identical failing `edit` calls"),
+            "stop note missing: {note}"
+        );
+        assert!(matches!(events.last(), Some(TurnEvent::TurnEnd)));
+        server.join().expect("all scripted rounds consumed");
+    }
+
     #[test]
     fn context_limit_defaults_on_for_local_backends() {
         // No pref set: a local Ollama endpoint gets the default budget so
