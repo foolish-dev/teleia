@@ -422,6 +422,17 @@ pub fn looks_like_ollama(base_url: &str) -> bool {
     base_url.contains("11434") || base_url.contains("ollama")
 }
 
+/// Pull the `num_ctx` value out of Ollama `/api/show`'s `parameters` blob (a
+/// newline-separated list of the model's baked `PARAMETER` lines, e.g.
+/// `num_ctx                        32768`). `None` when the model has no
+/// `num_ctx` set (it then runs at Ollama's own default).
+fn parse_num_ctx_param(parameters: &str) -> Option<u64> {
+    parameters.lines().find_map(|line| {
+        let mut it = line.split_whitespace();
+        (it.next() == Some("num_ctx")).then(|| it.next()?.parse().ok())?
+    })
+}
+
 /// True when an error message means "the request no longer fits the
 /// model's context window" — i.e. the *input* overflowed, as opposed to
 /// a truncated response (`finish_reason: "length"`, handled separately).
@@ -512,6 +523,32 @@ impl LlmClient {
 
     pub fn model(&self) -> &str {
         &self.model
+    }
+
+    /// Best-effort: ask Ollama's native `/api/show` for the model's baked
+    /// `num_ctx` so the caller can size the context budget to the window the
+    /// model actually loads with (which teleia can't otherwise see — the
+    /// OpenAI-compat `/v1` path ignores a per-request `num_ctx`). `None` for
+    /// non-Ollama backends, or on any network / parse failure — callers fall
+    /// back to a default. The native API sits at the host root, not `/v1`.
+    pub async fn detect_ollama_num_ctx(&self) -> Option<u64> {
+        if !looks_like_ollama(&self.base_url) {
+            return None;
+        }
+        let root = self.base_url.trim_end_matches('/');
+        let root = root.strip_suffix("/v1").unwrap_or(root);
+        let resp = self
+            .http
+            .post(format!("{root}/api/show"))
+            .json(&serde_json::json!({ "model": self.model }))
+            .send()
+            .await
+            .ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        let body: Value = resp.json().await.ok()?;
+        parse_num_ctx_param(body.get("parameters")?.as_str()?)
     }
 
     /// Re-point at a different model. If the new name resolves to a
@@ -1245,6 +1282,20 @@ fn accumulate(acc: &mut Vec<AccTool>, delta: ToolCallDelta) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn parse_num_ctx_param_reads_the_ollama_show_blob() {
+        // /api/show `parameters` is space-padded PARAMETER lines.
+        let blob = "num_ctx                        4096\nstop                           \"<|im_end|>\"\ntemperature                    0.6";
+        assert_eq!(parse_num_ctx_param(blob), Some(4096));
+        // No num_ctx line → None (model runs at Ollama's own default).
+        assert_eq!(
+            parse_num_ctx_param("stop \"<|im_end|>\"\ntemperature 0.6"),
+            None
+        );
+        // Garbage value → None, not a panic.
+        assert_eq!(parse_num_ctx_param("num_ctx notanumber"), None);
+    }
 
     #[test]
     fn chunk_delta_parses_reasoning_and_its_alias() {

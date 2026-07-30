@@ -384,6 +384,12 @@ pub struct Agent {
     /// `self.tools`. Synced to the `mcp_disabled` pref so the choice
     /// survives restart.
     mcp_disabled: BTreeSet<String>,
+    /// Local model's `num_ctx` as read from Ollama's `/api/show`, populated
+    /// once at startup by [`Agent::detect_context_window`]. Used as the
+    /// proactive-compaction budget when the user hasn't set `/context`, so it
+    /// tracks the window the model actually loads with. `None` until detected
+    /// (or when detection isn't applicable / fails).
+    detected_context: Option<u64>,
 }
 
 impl Agent {
@@ -408,6 +414,7 @@ impl Agent {
             router: None,
             mcp_servers: BTreeMap::new(),
             mcp_disabled: BTreeSet::new(),
+            detected_context: None,
         };
         agent.push(Message::System {
             content: system_prompt(),
@@ -441,6 +448,7 @@ impl Agent {
                     router: None,
                     mcp_servers: BTreeMap::new(),
                     mcp_disabled: BTreeSet::new(),
+                    detected_context: None,
                 })
             }
             None => Self::new(llm, store),
@@ -664,10 +672,16 @@ impl Agent {
         }
     }
 
-    /// Budget applied when the user hasn't run `/context`: the 1M Fable-class
-    /// budget for a [`FABLE_BUDGET_MODELS`] match, the settled local `num_ctx`
-    /// for an Ollama-style endpoint, `None` for other hosted providers.
+    /// Budget applied when the user hasn't run `/context`. A detected local
+    /// `num_ctx` (from Ollama's `/api/show`, see [`detect_context_window`])
+    /// wins — it's the window the model actually loads with. Otherwise the 1M
+    /// Fable-class budget for a [`FABLE_BUDGET_MODELS`] match, the settled
+    /// [`LOCAL_DEFAULT_CONTEXT`] fallback for an Ollama-style endpoint whose
+    /// window couldn't be read, and `None` for other hosted providers.
     fn default_context_limit(&self) -> Option<u64> {
+        if let Some(n) = self.detected_context {
+            return Some(n);
+        }
         let model = self.model().to_ascii_lowercase();
         if FABLE_BUDGET_MODELS.iter().any(|m| model.contains(m)) {
             Some(FABLE_DEFAULT_CONTEXT)
@@ -676,6 +690,16 @@ impl Agent {
         } else {
             None
         }
+    }
+
+    /// Read the local model's real `num_ctx` from Ollama's `/api/show` and
+    /// remember it as the default compaction budget. Best-effort and idempotent
+    /// — call once at startup; `None` for non-Ollama backends or on failure,
+    /// in which case the budget falls back to [`LOCAL_DEFAULT_CONTEXT`]. An
+    /// explicit `/context N` still overrides a detected value.
+    pub async fn detect_context_window(&mut self) -> Option<u64> {
+        self.detected_context = self.llm.detect_ollama_num_ctx().await;
+        self.detected_context
     }
 
     /// Set the proactive-compaction budget, or clear it with `None`.
