@@ -335,6 +335,50 @@ fn incomplete_tool_args(output: &str) -> bool {
 /// repeating the same truncated call.
 const INCOMPLETE_TOOL_ARGS_HINT: &str = "\n\n[teleia] a required argument was missing from that tool call — a large value (e.g. a file's `content`) was likely dropped while encoding the call. Resend it with the field present; for large files, write them in smaller pieces across multiple calls.";
 
+/// Appended when the model re-issues a call that already failed with the
+/// exact same arguments — recovery hints alone don't always break the loop,
+/// so name the loop itself.
+const REPEATED_CALL_HINT: &str = "\n\n[teleia] this exact call already failed with these arguments — do not resend it unchanged; change the arguments or take a different approach.";
+
+/// Consecutive identical failures of one call after which the turn stops
+/// instead of burning the remaining tool-step budget on a stuck loop.
+const MAX_IDENTICAL_FAILURES: usize = 3;
+
+/// Streak counter for consecutive identical failing tool calls — the
+/// signature of a model blindly retrying instead of correcting. `record`
+/// returns the streak length for a failing call (1 = first failure, 2 =
+/// the same `(name, arguments)` failed again, …) and 0 for a success. The
+/// same call succeeding clears the streak; an unrelated success in between
+/// (e.g. a read while a write keeps failing) leaves it intact.
+#[derive(Default)]
+struct RetryStreak {
+    last_failed: Option<(String, String)>,
+    count: usize,
+}
+
+impl RetryStreak {
+    fn record(&mut self, name: &str, arguments: &str, failed: bool) -> usize {
+        let same = self
+            .last_failed
+            .as_ref()
+            .is_some_and(|(n, a)| n == name && a == arguments);
+        if failed {
+            if !same {
+                self.last_failed = Some((name.to_string(), arguments.to_string()));
+                self.count = 0;
+            }
+            self.count += 1;
+            self.count
+        } else {
+            if same {
+                self.last_failed = None;
+                self.count = 0;
+            }
+            0
+        }
+    }
+}
+
 /// Format a Unix timestamp (seconds) as `s-YYYY-MM-DD-HHMMSS` in UTC.
 /// Pure integer math (Howard Hinnant's civil-from-days) so it needs no
 /// date crate and renders identically on every platform teleia ships to —
@@ -943,6 +987,7 @@ impl Agent {
             self.push(Message::User { content: user_input })?;
 
             let mut steps = 0usize;
+            let mut retry_streak = RetryStreak::default();
             loop {
                 if steps >= MAX_TOOL_STEPS {
                     // History ends on a tool result here (a valid stop), so
@@ -1017,6 +1062,7 @@ impl Agent {
                     return;
                 }
 
+                let mut stuck: Option<String> = None;
                 for call in tool_calls {
                     // Permission gate. Three modes, each with its own
                     // policy: Auto runs everything; Plan auto-allows
@@ -1117,6 +1163,25 @@ impl Agent {
                     } else {
                         output
                     };
+                    // A byte-identical re-issue of a failing call means the
+                    // model is retrying blindly, not correcting. Name the
+                    // loop on the second failure; arm the stop on the third
+                    // (the round still finishes so no call is orphaned).
+                    let failed =
+                        output.starts_with("error: ") || incomplete_tool_args(&output);
+                    let streak = retry_streak.record(
+                        &call.function.name,
+                        &call.function.arguments,
+                        failed,
+                    );
+                    let output = if streak >= 2 {
+                        format!("{output}{REPEATED_CALL_HINT}")
+                    } else {
+                        output
+                    };
+                    if streak >= MAX_IDENTICAL_FAILURES {
+                        stuck = Some(call.function.name.clone());
+                    }
                     yield TurnEvent::ToolEnd {
                         name: call.function.name.clone(),
                         output: output.clone(),
@@ -1125,6 +1190,23 @@ impl Agent {
                         tool_call_id: call.id.clone(),
                         content: trim_tool_output(output),
                     })?;
+                }
+                if let Some(name) = stuck {
+                    // Same shape as the MAX_TOOL_STEPS stop: history ends on
+                    // a tool result (a valid stop), so note it and end the
+                    // turn rather than burn more rounds on a stuck call.
+                    let note = format!(
+                        "stopped after {MAX_IDENTICAL_FAILURES} identical failing `{name}` calls — the same arguments keep failing; ask me to continue if you want another approach"
+                    );
+                    yield TurnEvent::AssistantStart;
+                    yield TurnEvent::AssistantDelta(note.clone());
+                    yield TurnEvent::AssistantEnd;
+                    self.push(Message::Assistant {
+                        content: Some(note),
+                        tool_calls: Vec::new(),
+                    })?;
+                    yield TurnEvent::TurnEnd;
+                    return;
                 }
                 steps += 1;
             }
@@ -1227,6 +1309,22 @@ mod tests {
         // Success and unrelated errors leave the hint off.
         assert!(!incomplete_tool_args("wrote 42 bytes to app.py"));
         assert!(!incomplete_tool_args("error: file not found"));
+    }
+
+    #[test]
+    fn retry_streak_counts_identical_failures_and_resets() {
+        let mut s = RetryStreak::default();
+        // Identical failing calls grow the streak toward the stop threshold.
+        assert_eq!(s.record("edit", r#"{"path":"a"}"#, true), 1);
+        assert_eq!(s.record("edit", r#"{"path":"a"}"#, true), 2);
+        // An unrelated success in between (e.g. a read) doesn't clear it.
+        assert_eq!(s.record("read_file", r#"{"path":"b"}"#, false), 0);
+        assert_eq!(s.record("edit", r#"{"path":"a"}"#, true), 3);
+        // Changed arguments = the model corrected course: fresh streak.
+        assert_eq!(s.record("edit", r#"{"path":"c"}"#, true), 1);
+        // The same call succeeding clears the streak entirely.
+        assert_eq!(s.record("edit", r#"{"path":"c"}"#, false), 0);
+        assert_eq!(s.record("edit", r#"{"path":"c"}"#, true), 1);
     }
 
     #[test]
