@@ -285,6 +285,26 @@ fn is_readonly_call(name: &str, arguments: &str) -> bool {
     false
 }
 
+/// A tool call whose result rejects a required argument as `undefined` /
+/// missing usually means the model dropped a large value — most often a
+/// file's `content` — while encoding the call (these reasoning models can
+/// fail to emit a huge argument in one shot, so the field never lands). Detect
+/// that failure shape in a tool's error output so the caller can attach a
+/// recovery hint, turning a blind identical-retry loop into a self-correcting
+/// one. Substrings cover MCP/zod (`received undefined`) and serde-derived
+/// tools (`missing field`).
+fn incomplete_tool_args(output: &str) -> bool {
+    let o = output.to_ascii_lowercase();
+    o.contains("received undefined")
+        || o.contains("missing field")
+        || (o.contains("invalid arguments for tool") && o.contains("undefined"))
+}
+
+/// Actionable guidance appended to a dropped-argument tool result (see
+/// [`incomplete_tool_args`]) so the model's retry fixes the cause instead of
+/// repeating the same truncated call.
+const INCOMPLETE_TOOL_ARGS_HINT: &str = "\n\n[teleia] a required argument was missing from that tool call — a large value (e.g. a file's `content`) was likely dropped while encoding the call. Resend it with the field present; for large files, write them in smaller pieces across multiple calls.";
+
 /// Format a Unix timestamp (seconds) as `s-YYYY-MM-DD-HHMMSS` in UTC.
 /// Pure integer math (Howard Hinnant's civil-from-days) so it needs no
 /// date crate and renders identically on every platform teleia ships to —
@@ -1048,6 +1068,15 @@ impl Agent {
                             Err(e) => format!("error: {e}"),
                         }
                     };
+                    // A dropped required argument (e.g. a large file `content`
+                    // the model failed to encode in one call) comes back as a
+                    // validation error; attach a recovery hint so the retry
+                    // fixes the cause instead of repeating the same call.
+                    let output = if incomplete_tool_args(&output) {
+                        format!("{output}{INCOMPLETE_TOOL_ARGS_HINT}")
+                    } else {
+                        output
+                    };
                     yield TurnEvent::ToolEnd {
                         name: call.function.name.clone(),
                         output: output.clone(),
@@ -1145,6 +1174,19 @@ mod tests {
     fn local_agent() -> Agent {
         let llm = LlmClient::new("http://127.0.0.1:11434/v1", "test-model");
         Agent::new(llm, tmp_store()).unwrap()
+    }
+
+    #[test]
+    fn incomplete_tool_args_flags_dropped_required_arguments() {
+        // MCP/zod: a required argument came through undefined.
+        assert!(incomplete_tool_args(
+            "MCP error -32602: Invalid arguments for tool write_file: content: expected string, received undefined"
+        ));
+        // serde-derived tool: a required field was absent.
+        assert!(incomplete_tool_args("error: missing field `old_string`"));
+        // Success and unrelated errors leave the hint off.
+        assert!(!incomplete_tool_args("wrote 42 bytes to app.py"));
+        assert!(!incomplete_tool_args("error: file not found"));
     }
 
     #[test]
