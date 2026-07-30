@@ -100,9 +100,15 @@ fn trim_tool_output(output: String) -> String {
     if total <= MAX_TOOL_OUTPUT_CHARS {
         return output;
     }
-    let omitted = total - TRIM_HEAD_CHARS - TRIM_TAIL_CHARS;
     let head: String = output.chars().take(TRIM_HEAD_CHARS).collect();
     let tail: String = output.chars().skip(total - TRIM_TAIL_CHARS).collect();
+    // Snap each window to a line boundary so the model only ever sees whole
+    // lines — end the head at its last newline, start the tail after its
+    // first — falling back to the raw char cut when a window has no newline.
+    // `\n` is one ASCII byte, so these byte slices land on char boundaries.
+    let head = head.rfind('\n').map_or(head.as_str(), |i| &head[..i]);
+    let tail = tail.find('\n').map_or(tail.as_str(), |i| &tail[i + 1..]);
+    let omitted = total - head.chars().count() - tail.chars().count();
     format!("{head}\n\n… [{omitted} characters trimmed to fit the context budget] …\n\n{tail}")
 }
 
@@ -1314,6 +1320,28 @@ mod tests {
         assert!(trimmed.contains("characters trimmed"));
         assert!(trimmed.starts_with("xxxx"));
         assert!(trimmed.ends_with("xxxx"));
+    }
+
+    #[test]
+    fn trim_tool_output_snaps_to_whole_lines() {
+        // Fixed-width numbered lines "L0000\n".."L2999\n" (6 chars each, 18k
+        // total). Trimming must land the head/tail on line boundaries, so the
+        // last line of the head and the first line of the tail are complete
+        // 5-char "LNNNN" tokens — never a mid-line cut.
+        let big: String = (0..3000).map(|i| format!("L{i:04}\n")).collect();
+        let trimmed = trim_tool_output(big);
+        let (head, rest) = trimmed.split_once("\n\n… [").unwrap();
+        let tail = rest.split_once("] …\n\n").unwrap().1;
+        let last_head = head.lines().last().unwrap();
+        let first_tail = tail.lines().next().unwrap();
+        assert!(
+            last_head.starts_with('L') && last_head.len() == 5,
+            "{last_head:?}"
+        );
+        assert!(
+            first_tail.starts_with('L') && first_tail.len() == 5,
+            "{first_tail:?}"
+        );
     }
 
     #[test]
