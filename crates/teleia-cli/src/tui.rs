@@ -575,6 +575,10 @@ struct State {
     /// `pending_loop`). `submit_input` takes it and drives
     /// `run_compact`, which summarizes the session via the model.
     pending_compact: bool,
+    /// Armed by `/model` (same sync-handler constraint). The async path
+    /// takes it and re-detects the local `num_ctx` for the new model, since
+    /// the compaction budget is per-model. See `refresh_local_budget`.
+    pending_redetect: bool,
     /// Mirror of `agent.permission_mode()`. Kept in sync so the status
     /// bar + Shift+Tab cycle don't need to touch the agent for reads.
     permission_mode: PermissionMode,
@@ -733,6 +737,7 @@ impl State {
             pending_key_entry: None,
             pending_loop: None,
             pending_compact: false,
+            pending_redetect: false,
             permission_mode: PermissionMode::default(),
             reasoning_effort: None,
             mcp_summary: None,
@@ -959,18 +964,8 @@ pub async fn run(
     }
     // Size the proactive-compaction budget to the local model's real num_ctx
     // (read from Ollama's /api/show) rather than a guessed default — the guess
-    // is what wedges a constrained host mid-turn. Best-effort; a miss keeps the
-    // default. Announce it only when it's the active budget (no explicit
-    // /context pinned), and always attempt detection so a later /context off
-    // still has the real window to fall back to.
-    let detected = agent.detect_context_window().await;
-    if let Some(n) = detected {
-        if agent.get_pref("context_limit").is_none() {
-            state.push(Entry::Info(format!(
-                "context budget auto-set to {n} tok (local model num_ctx) — /context N to override"
-            )));
-        }
-    }
+    // is what wedges a constrained host mid-turn.
+    refresh_local_budget(&mut state, &mut agent).await;
 
     let result = event_loop(&mut terminal, &mut state, &mut agent).await;
 
@@ -1515,6 +1510,10 @@ async fn event_loop<B: ratatui::backend::Backend>(
                             &agent.session_id()[..agent.session_id().len().min(12)]
                         );
                     }
+                    // And `:model`, which arms a budget re-detect.
+                    if std::mem::take(&mut state.pending_redetect) {
+                        refresh_local_budget(state, agent).await;
+                    }
                 }
                 _ => {}
             },
@@ -1670,10 +1669,13 @@ async fn submit_input<B: ratatui::backend::Backend>(
     }
     if let Some(cmd) = trimmed.strip_prefix('/') {
         handle_slash(state, agent, cmd);
-        // `/loop` and `/compact` arm their pending flags but can't run
-        // async work from the sync slash handler — drive them here, then
-        // fall through to the usual post-turn bookkeeping (which also
-        // refreshes the status line with /compact's new session id).
+        // `/loop`, `/compact`, `/model` arm pending flags but can't run async
+        // work from the sync slash handler — drive them here. `/model`'s
+        // re-detect is independent of the turn-drivers below, so drain it
+        // first (it doesn't run a turn, so the chain still falls through).
+        if std::mem::take(&mut state.pending_redetect) {
+            refresh_local_budget(state, agent).await;
+        }
         if let Some(spec) = state.pending_loop.take() {
             run_loop(terminal, state, agent, spec).await;
         } else if std::mem::take(&mut state.pending_compact) {
@@ -2581,6 +2583,22 @@ enum TurnOutcome {
     ContextOverflow,
 }
 
+/// Read the local model's real `num_ctx` (Ollama `/api/show`) and make it the
+/// proactive-compaction budget, best-effort. Announces it only when it's the
+/// active budget (the user hasn't pinned one with `/context`). Called at
+/// startup and after a `/model` switch, since the window is per-model. A
+/// non-Ollama backend or any failure clears the detected value and falls back
+/// to the default budget.
+async fn refresh_local_budget(state: &mut State, agent: &mut Agent) {
+    if let Some(n) = agent.detect_context_window().await {
+        if agent.get_pref("context_limit").is_none() {
+            state.push(Entry::Info(format!(
+                "context budget set to {n} tok (local model num_ctx) — /context N to override"
+            )));
+        }
+    }
+}
+
 /// Heuristic: does this stream error look like a local backend crashing or
 /// timing out under an oversized prompt (Ollama 5xx / runner death), rather
 /// than a clean client error (auth, 400)? Used only to attach a
@@ -3073,6 +3091,9 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                 state.model = arg.to_string();
                 set_pref_warn(state, agent, "current_model", arg);
                 state.push(Entry::Info(format!("switched model to {arg}")));
+                // The compaction budget is per-model; re-detect the new
+                // model's num_ctx. Async, so the sync handler only arms it.
+                state.pending_redetect = true;
                 // For *every* cloud-model switch, drop into the
                 // hidden-input prompt so the key for the new provider
                 // can be confirmed or replaced. When a key is already
