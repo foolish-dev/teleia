@@ -62,8 +62,14 @@ const LOCAL_DEFAULT_CONTEXT: u64 = 32_768;
 /// Native context window (tokens) of Claude Fable 5 / Mythos 5 — 1M, which is
 /// also the default on those models. Used as the proactive-compaction budget
 /// when teleia targets one of them, so a turn compacts before it overflows the
-/// window rather than relying on the backend to report it.
+/// window rather than relying on the backend to report it. Also applied to the
+/// local Janus/Thanatos models by preference (see [`default_context_limit`]).
 const FABLE_DEFAULT_CONTEXT: u64 = 1_000_000;
+
+/// Model names that get [`FABLE_DEFAULT_CONTEXT`] as their default budget,
+/// matched case-insensitively as a substring of the model id. Fable/Mythos 5
+/// have a real 1M window; Janus/Thanatos are here by user preference.
+const FABLE_BUDGET_MODELS: &[&str] = &["fable", "mythos", "janus", "thanatos"];
 
 /// Cap on a single tool result's size (in `char`s) before it enters the
 /// conversation history. Whole-session compaction reduces the *accumulated*
@@ -656,12 +662,12 @@ impl Agent {
         }
     }
 
-    /// Budget applied when the user hasn't run `/context`: Fable/Mythos 5's 1M
-    /// window when targeting one of them, the settled local `num_ctx` for an
-    /// Ollama-style endpoint, `None` for other hosted providers.
+    /// Budget applied when the user hasn't run `/context`: the 1M Fable-class
+    /// budget for a [`FABLE_BUDGET_MODELS`] match, the settled local `num_ctx`
+    /// for an Ollama-style endpoint, `None` for other hosted providers.
     fn default_context_limit(&self) -> Option<u64> {
-        let model = self.model();
-        if model.contains("fable") || model.contains("mythos") {
+        let model = self.model().to_ascii_lowercase();
+        if FABLE_BUDGET_MODELS.iter().any(|m| model.contains(m)) {
             Some(FABLE_DEFAULT_CONTEXT)
         } else if teleia_llm::looks_like_ollama(self.llm.base_url()) {
             Some(LOCAL_DEFAULT_CONTEXT)
@@ -1131,16 +1137,36 @@ mod tests {
     fn context_limit_defaults_to_fable_window_for_fable_models() {
         // Fable/Mythos 5 have a 1M native window; the budget tracks it even on
         // a hosted endpoint, and regardless of the base_url.
-        let llm = LlmClient::new("https://api.anthropic.com/v1", "claude-fable-5");
-        let agent = Agent::new(llm, tmp_store()).unwrap();
-        assert_eq!(agent.context_limit(), Some(FABLE_DEFAULT_CONTEXT));
+        for model in ["claude-fable-5", "claude-mythos-5"] {
+            let agent = Agent::new(
+                LlmClient::new("https://api.anthropic.com/v1", model),
+                tmp_store(),
+            )
+            .unwrap();
+            assert_eq!(
+                agent.context_limit(),
+                Some(FABLE_DEFAULT_CONTEXT),
+                "{model}"
+            );
+        }
+    }
 
-        let mythos = Agent::new(
-            LlmClient::new("https://api.anthropic.com/v1", "claude-mythos-5"),
-            tmp_store(),
-        )
-        .unwrap();
-        assert_eq!(mythos.context_limit(), Some(FABLE_DEFAULT_CONTEXT));
+    #[test]
+    fn context_limit_uses_fable_budget_for_local_janus_and_thanatos() {
+        // The local Qwen models get the Fable budget by preference — matched
+        // case-insensitively against their capitalized `-HERETIC` model ids.
+        for model in ["Janus-35B-HERETIC", "Thanatos-27B-HERETIC"] {
+            let agent = Agent::new(
+                LlmClient::new("http://127.0.0.1:11434/v1", model),
+                tmp_store(),
+            )
+            .unwrap();
+            assert_eq!(
+                agent.context_limit(),
+                Some(FABLE_DEFAULT_CONTEXT),
+                "{model}"
+            );
+        }
     }
 
     #[test]
