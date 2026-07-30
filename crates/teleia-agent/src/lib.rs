@@ -52,6 +52,13 @@ impl ContextEstimate {
 /// leaving headroom for the model's own reply.
 const COMPACT_AT_PCT: u64 = 85;
 
+/// Default proactive-compaction budget (estimated tokens) for local Ollama
+/// backends when the user hasn't set one with `/context`. Matches the settled
+/// `num_ctx` of the models run locally; hosted providers report overflow
+/// cleanly and have large windows, so they stay reactive (no default).
+/// Override any time with `/context N`, or turn it off with `/context off`.
+const LOCAL_DEFAULT_CONTEXT: u64 = 32_768;
+
 /// Cap on a single tool result's size (in `char`s) before it enters the
 /// conversation history. Whole-session compaction reduces the *accumulated*
 /// history; this bounds the *per-result* cost so one unbounded output — a
@@ -629,15 +636,24 @@ impl Agent {
         est
     }
 
-    /// Proactive-compaction budget in estimated tokens, or `None` when unset
-    /// (the default: pure reactive behaviour). Read from the `context_limit`
-    /// pref. Set it for backends that don't report overflow the way hosted
+    /// Proactive-compaction budget in estimated tokens, or `None` for pure
+    /// reactive behaviour. Backends that don't report overflow the way hosted
     /// APIs do — notably a local Ollama model, whose `num_ctx` window is
-    /// silently truncated (or 500s) rather than returning a clean error.
+    /// silently truncated (or 500s) rather than returning a clean error —
+    /// default to [`LOCAL_DEFAULT_CONTEXT`] so compaction fires without the
+    /// user opting in. A `/context N` sets an explicit budget; `/context off`
+    /// (an empty pref) disables it even for local backends.
     pub fn context_limit(&self) -> Option<u64> {
-        self.get_pref("context_limit")
-            .and_then(|v| v.parse::<u64>().ok())
-            .filter(|&n| n > 0)
+        match self.get_pref("context_limit") {
+            Some(v) => v.parse::<u64>().ok().filter(|&n| n > 0),
+            None => self.default_context_limit(),
+        }
+    }
+
+    /// Budget applied when the user hasn't run `/context`: the settled local
+    /// `num_ctx` for an Ollama-style endpoint, `None` for hosted providers.
+    fn default_context_limit(&self) -> Option<u64> {
+        teleia_llm::looks_like_ollama(self.llm.base_url()).then_some(LOCAL_DEFAULT_CONTEXT)
     }
 
     /// Set the proactive-compaction budget, or clear it with `None`.
@@ -651,7 +667,8 @@ impl Agent {
     /// True when the estimated prompt is within [`COMPACT_AT_PCT`]% of the
     /// configured budget and there is prior conversation to summarise — the
     /// cue to compact *before* a turn overflows a window the backend may
-    /// never report on. Always `false` when no budget is set.
+    /// never report on. `false` when the budget is off (see
+    /// [`context_limit`](Self::context_limit)).
     pub fn should_compact(&self) -> bool {
         let Some(limit) = self.context_limit() else {
             return false;
@@ -1077,6 +1094,37 @@ mod tests {
 
     fn fake_def(name: &str) -> ToolDef {
         ToolDef::new(name, format!("desc for {name}"), json!({"type": "object"}))
+    }
+
+    fn local_agent() -> Agent {
+        let llm = LlmClient::new("http://127.0.0.1:11434/v1", "test-model");
+        Agent::new(llm, tmp_store()).unwrap()
+    }
+
+    #[test]
+    fn context_limit_defaults_on_for_local_backends() {
+        // No pref set: a local Ollama endpoint gets the default budget so
+        // proactive compaction fires without the user opting in.
+        let local = local_agent();
+        assert_eq!(local.context_limit(), Some(LOCAL_DEFAULT_CONTEXT));
+
+        // A hosted endpoint stays reactive (reports overflow cleanly).
+        let hosted = fake_agent();
+        assert_eq!(hosted.context_limit(), None);
+    }
+
+    #[test]
+    fn context_off_disables_default_for_local_backends() {
+        let local = local_agent();
+        local.set_context_limit(None).unwrap(); // `/context off`
+        assert_eq!(local.context_limit(), None);
+    }
+
+    #[test]
+    fn context_limit_explicit_value_overrides_default() {
+        let local = local_agent();
+        local.set_context_limit(Some(65_536)).unwrap();
+        assert_eq!(local.context_limit(), Some(65_536));
     }
 
     #[test]
