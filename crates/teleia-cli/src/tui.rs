@@ -22,7 +22,7 @@ use ratatui::{
     Terminal,
 };
 use std::{io, time::Duration};
-use teleia_agent::{Agent, PermissionMode, TokenCounts, ToolApproval, TurnEvent};
+use teleia_agent::{Agent, PermissionMode, TokenCounts, ToolApproval, TurnEvent, COMPACT_AT_PCT};
 
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -2884,6 +2884,11 @@ async fn run_loop<B: ratatui::backend::Backend>(
         state.working = true;
         let outcome = run_turn_ac(terminal, state, agent, spec.prompt.clone()).await;
         state.working = false;
+        // Nothing inside run_turn touches these, so a long loop would show
+        // stale token counts and context gauge until the final iteration —
+        // refresh both between turns.
+        state.tokens = agent.tokens();
+        sync_ctx(state, agent);
         if outcome == TurnOutcome::Stopped {
             state.push(Entry::Info(format!(
                 "loop stopped after {}/{}",
@@ -3189,7 +3194,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                 let t = agent.tokens();
                 let budget_line = match agent.context_limit() {
                     Some(l) => format!(
-                        "\n  budget  {} tok  ({}% used · auto-compact at 85%)",
+                        "\n  budget  {} tok  ({}% used · auto-compact at {COMPACT_AT_PCT}%)",
                         format_count(l),
                         total.saturating_mul(100) / l,
                     ),
@@ -3226,7 +3231,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                 match agent.set_context_limit(Some(n)) {
                     Ok(()) => state.push(Entry::Info(format!(
                         "context budget set to {} tok — teleia auto-compacts before a turn \
-                         exceeds ~85% of it (match your local model's num_ctx)",
+                         exceeds ~{COMPACT_AT_PCT}% of it (match your local model's num_ctx)",
                         format_count(n),
                     ))),
                     Err(e) => {
@@ -4259,7 +4264,7 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
     // surprise. Hidden when no budget is set (nothing to fill against).
     if let Some((est, budget)) = state.ctx {
         let pct = ctx_pct(est, budget);
-        let style = if pct >= 85 {
+        let style = if pct >= COMPACT_AT_PCT {
             Style::default().fg(th.red).add_modifier(Modifier::BOLD)
         } else if pct >= 50 {
             Style::default().fg(th.yellow)
