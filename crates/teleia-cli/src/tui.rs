@@ -957,6 +957,21 @@ pub async fn run(
             );
         }
     }
+    // Size the proactive-compaction budget to the local model's real num_ctx
+    // (read from Ollama's /api/show) rather than a guessed default — the guess
+    // is what wedges a constrained host mid-turn. Best-effort; a miss keeps the
+    // default. Announce it only when it's the active budget (no explicit
+    // /context pinned), and always attempt detection so a later /context off
+    // still has the real window to fall back to.
+    let detected = agent.detect_context_window().await;
+    if let Some(n) = detected {
+        if agent.get_pref("context_limit").is_none() {
+            state.push(Entry::Info(format!(
+                "context budget auto-set to {n} tok (local model num_ctx) — /context N to override"
+            )));
+        }
+    }
+
     let result = event_loop(&mut terminal, &mut state, &mut agent).await;
 
     disable_raw_mode()?;
