@@ -59,6 +59,12 @@ const COMPACT_AT_PCT: u64 = 85;
 /// Override any time with `/context N`, or turn it off with `/context off`.
 const LOCAL_DEFAULT_CONTEXT: u64 = 32_768;
 
+/// Native context window (tokens) of Claude Fable 5 / Mythos 5 — 1M, which is
+/// also the default on those models. Used as the proactive-compaction budget
+/// when teleia targets one of them, so a turn compacts before it overflows the
+/// window rather than relying on the backend to report it.
+const FABLE_DEFAULT_CONTEXT: u64 = 1_000_000;
+
 /// Cap on a single tool result's size (in `char`s) before it enters the
 /// conversation history. Whole-session compaction reduces the *accumulated*
 /// history; this bounds the *per-result* cost so one unbounded output — a
@@ -650,10 +656,18 @@ impl Agent {
         }
     }
 
-    /// Budget applied when the user hasn't run `/context`: the settled local
-    /// `num_ctx` for an Ollama-style endpoint, `None` for hosted providers.
+    /// Budget applied when the user hasn't run `/context`: Fable/Mythos 5's 1M
+    /// window when targeting one of them, the settled local `num_ctx` for an
+    /// Ollama-style endpoint, `None` for other hosted providers.
     fn default_context_limit(&self) -> Option<u64> {
-        teleia_llm::looks_like_ollama(self.llm.base_url()).then_some(LOCAL_DEFAULT_CONTEXT)
+        let model = self.model();
+        if model.contains("fable") || model.contains("mythos") {
+            Some(FABLE_DEFAULT_CONTEXT)
+        } else if teleia_llm::looks_like_ollama(self.llm.base_url()) {
+            Some(LOCAL_DEFAULT_CONTEXT)
+        } else {
+            None
+        }
     }
 
     /// Set the proactive-compaction budget, or clear it with `None`.
@@ -1111,6 +1125,22 @@ mod tests {
         // A hosted endpoint stays reactive (reports overflow cleanly).
         let hosted = fake_agent();
         assert_eq!(hosted.context_limit(), None);
+    }
+
+    #[test]
+    fn context_limit_defaults_to_fable_window_for_fable_models() {
+        // Fable/Mythos 5 have a 1M native window; the budget tracks it even on
+        // a hosted endpoint, and regardless of the base_url.
+        let llm = LlmClient::new("https://api.anthropic.com/v1", "claude-fable-5");
+        let agent = Agent::new(llm, tmp_store()).unwrap();
+        assert_eq!(agent.context_limit(), Some(FABLE_DEFAULT_CONTEXT));
+
+        let mythos = Agent::new(
+            LlmClient::new("https://api.anthropic.com/v1", "claude-mythos-5"),
+            tmp_store(),
+        )
+        .unwrap();
+        assert_eq!(mythos.context_limit(), Some(FABLE_DEFAULT_CONTEXT));
     }
 
     #[test]
