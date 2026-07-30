@@ -2566,6 +2566,20 @@ enum TurnOutcome {
     ContextOverflow,
 }
 
+/// Heuristic: does this stream error look like a local backend crashing or
+/// timing out under an oversized prompt (Ollama 5xx / runner death), rather
+/// than a clean client error (auth, 400)? Used only to attach a
+/// non-destructive recovery hint — never to trigger auto-compaction, so a
+/// false positive costs at most one stray hint line.
+fn looks_like_backend_crash(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    m.contains("returned 5") // "backend returned 5xx: ..."
+        || m.contains("runner")
+        || m.contains("terminated")
+        || m.contains("timed out")
+        || m.contains("timeout")
+}
+
 async fn run_turn<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     state: &mut State,
@@ -2680,7 +2694,20 @@ async fn run_turn<B: ratatui::backend::Backend>(
                         if teleia_agent::is_overflow_error(&e) {
                             return TurnOutcome::ContextOverflow;
                         }
-                        state.push(Entry::Error(e.to_string()));
+                        let msg = e.to_string();
+                        // A local backend (Ollama) can drop a turn with a bare
+                        // 5xx / runner crash / timeout when the prompt overruns
+                        // the model's real num_ctx, without the clean overflow
+                        // phrasing `is_overflow_error` matches. Point at the
+                        // recovery instead of leaving a bare error — a hint
+                        // only, never a guessed auto-compaction.
+                        let backend_crash = looks_like_backend_crash(&msg);
+                        state.push(Entry::Error(msg));
+                        if backend_crash {
+                            state.push(Entry::Info(
+                                "if this was a long session the prompt may have overrun the model's context — run /compact, or set /context to your model's num_ctx so teleia compacts before the backend fails".into(),
+                            ));
+                        }
                         return TurnOutcome::Stopped;
                     }
                     None => return TurnOutcome::Completed,
@@ -7529,5 +7556,24 @@ mod tests {
             kind: SelectionKind::Char,
         };
         assert!(selection_cells(chr, area).is_empty(), "Char point: empty");
+    }
+
+    #[test]
+    fn backend_crash_heuristic_flags_server_failures_not_client_errors() {
+        // Local-backend crash/timeout shapes → hint.
+        assert!(looks_like_backend_crash(
+            "backend returned 500: internal error"
+        ));
+        assert!(looks_like_backend_crash(
+            "POST .../chat: llama runner process has terminated: signal: killed"
+        ));
+        assert!(looks_like_backend_crash("request timed out after 120s"));
+        // Clean client errors → no hint (compacting wouldn't help).
+        assert!(!looks_like_backend_crash(
+            "backend returned 401: invalid api key"
+        ));
+        assert!(!looks_like_backend_crash(
+            "backend returned 400: bad request"
+        ));
     }
 }
