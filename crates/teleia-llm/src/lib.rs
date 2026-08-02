@@ -961,11 +961,13 @@ impl LlmClient {
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 /// Output-token ceiling for the native Anthropic path. Anthropic *requires*
-/// `max_tokens` (the OpenAI path sends none). 8192 is accepted by every
-/// current Claude model without a beta header, so it never 400s on capability
-/// grounds; hitting it surfaces as a `length` truncation notice, same as the
-/// OpenAI path.
-const ANTHROPIC_MAX_TOKENS: u32 = 8192;
+/// `max_tokens` (the OpenAI path sends none). 128000 is the max output for
+/// Claude Fable 5 / Mythos 5 (and Opus 5 / Sonnet 5 / Opus 4.6-4.8 / Sonnet
+/// 4.6) on the sync Messages API, no beta header needed. Models with a lower
+/// cap (Sonnet 4.5 / Opus 4.5 / Haiku 4.5 = 64k, Opus 4.1 = 32k) will 400 at
+/// this value — clamp per model if you target those. Hitting the ceiling
+/// surfaces as a `length` truncation notice, same as the OpenAI path.
+const ANTHROPIC_MAX_TOKENS: u32 = 128_000;
 
 /// Build the JSON body for a native Anthropic `/v1/messages` request. `system`
 /// is lifted out of the message list into the top-level field (with a cache
@@ -1785,7 +1787,7 @@ mod tests {
         let body = build_anthropic_body("claude-x", &msgs, Some(&tools));
 
         assert_eq!(body["model"], "claude-x");
-        assert_eq!(body["max_tokens"], 8192);
+        assert_eq!(body["max_tokens"], 128000);
         assert_eq!(body["stream"], true);
         assert_eq!(body["system"][0]["text"], "sys");
         assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
