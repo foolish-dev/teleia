@@ -63,6 +63,13 @@ const COMPACT_AT_PCT: u64 = 85;
 /// Override any time with `/context N`, or turn it off with `/context off`.
 const LOCAL_DEFAULT_CONTEXT: u64 = 262_144;
 
+/// Conservative fallback budget for a NON-Qwen local Ollama model whose window
+/// couldn't be detected. [`LOCAL_DEFAULT_CONTEXT`] (262144) is the Qwen
+/// (Janus/Thanatos) native window; a Llama/Mistral/Phi with a smaller window
+/// would never fire compaction under it, so unknown local models get this
+/// reachable floor instead.
+const LOCAL_DEFAULT_FALLBACK: u64 = 32_768;
+
 /// Native context window (tokens) of Claude Fable 5 / Mythos 5 — 1M, which is
 /// also the default on those models. Used as the proactive-compaction budget
 /// when teleia targets one of them, so a turn compacts before it overflows the
@@ -121,13 +128,16 @@ work seamlessly. Include: the user's goals and constraints, what has been done s
 touched, commands run, decisions made and why), the current state, and what remains. Be specific \
 about paths and names. Output only the summary.";
 
-/// Rewrap a backend "request exceeds the context window" error with an
-/// actionable message; every other error passes through untouched.
-/// `{e:#}` flattens the anyhow context chain so the provider's error
-/// body (where the phrasing lives) is part of the matched text.
+/// Rewrap a backend context-overflow or local-runner-crash error with
+/// actionable guidance; every other error passes through untouched. `{e:#}`
+/// flattens the anyhow context chain so the provider's error body (where the
+/// phrasing lives) is part of the matched text.
 fn friendly_overflow(e: anyhow::Error) -> anyhow::Error {
-    if teleia_llm::is_context_overflow(&format!("{e:#}")) {
+    let s = format!("{e:#}");
+    if teleia_llm::is_context_overflow(&s) {
         anyhow!(CONTEXT_OVERFLOW_HELP)
+    } else if teleia_llm::is_backend_crash(&s) {
+        anyhow!(BACKEND_CRASH_HELP)
     } else {
         e
     }
@@ -139,6 +149,15 @@ fn friendly_overflow(e: anyhow::Error) -> anyhow::Error {
 pub const CONTEXT_OVERFLOW_HELP: &str =
     "context limit exceeded — the conversation no longer fits the model's context \
      window; run /compact to continue it in a fresh session, or /reset to start over";
+
+/// User-facing guidance when the local model backend's runner crashes (see
+/// [`teleia_llm::is_backend_crash`]). It's an Ollama/llama.cpp-level failure,
+/// not a teleia bug — most often a GPU-backend or version skew.
+pub const BACKEND_CRASH_HELP: &str =
+    "the local model backend crashed (its runner process terminated) — an \
+     Ollama/llama.cpp failure, not teleia. Usually a GPU-backend or version mismatch \
+     (e.g. ollama vs its GPU runner ollama-vulkan). Try a CPU-only tag (num_gpu 0), \
+     realign the runner versions, or /model to a cloud backend";
 
 /// True when `err` is the context-window-overflow condition — either a raw
 /// backend overflow or the [`CONTEXT_OVERFLOW_HELP`] rewrap produced by
@@ -710,7 +729,17 @@ impl Agent {
         if FABLE_BUDGET_MODELS.iter().any(|m| model.contains(m)) {
             Some(FABLE_DEFAULT_CONTEXT)
         } else if teleia_llm::looks_like_ollama(self.llm.base_url()) {
-            Some(LOCAL_DEFAULT_CONTEXT)
+            // 262144 is the Qwen (Janus/Thanatos) native window; other local
+            // models have unknown windows, so budget them to a reachable floor
+            // that still fires compaction rather than the out-of-reach ceiling.
+            if ["qwen", "janus", "thanatos"]
+                .iter()
+                .any(|m| model.contains(m))
+            {
+                Some(LOCAL_DEFAULT_CONTEXT)
+            } else {
+                Some(LOCAL_DEFAULT_FALLBACK)
+            }
         } else {
             None
         }
@@ -1195,10 +1224,11 @@ mod tests {
 
     #[test]
     fn context_limit_defaults_on_for_local_backends() {
-        // No pref set: a local Ollama endpoint gets the default budget so
-        // proactive compaction fires without the user opting in.
+        // No pref set: a local Ollama endpoint gets a default budget so
+        // proactive compaction fires without the user opting in. A generic
+        // (non-Qwen) local model gets the conservative fallback floor.
         let local = local_agent();
-        assert_eq!(local.context_limit(), Some(LOCAL_DEFAULT_CONTEXT));
+        assert_eq!(local.context_limit(), Some(LOCAL_DEFAULT_FALLBACK));
 
         // A hosted endpoint stays reactive (reports overflow cleanly).
         let hosted = fake_agent();
@@ -1242,6 +1272,18 @@ mod tests {
                 "{model}"
             );
         }
+    }
+
+    #[test]
+    fn context_limit_uses_conservative_fallback_for_non_qwen_local() {
+        // A non-Qwen local model (detection off) gets the reachable 32K floor,
+        // not the out-of-reach 262144 Qwen native window.
+        let agent = Agent::new(
+            LlmClient::new("http://127.0.0.1:11434/v1", "llama3.1:8b"),
+            tmp_store(),
+        )
+        .unwrap();
+        assert_eq!(agent.context_limit(), Some(LOCAL_DEFAULT_FALLBACK));
     }
 
     #[test]
@@ -1395,6 +1437,20 @@ mod tests {
         // …while unrelated errors pass through verbatim.
         let other = friendly_overflow(anyhow!("backend returned 429: rate limited"));
         assert_eq!(other.to_string(), "backend returned 429: rate limited");
+    }
+
+    #[test]
+    fn friendly_overflow_rewraps_local_runner_crash() {
+        // A runner-crash body (GGML assert / process terminated) becomes the
+        // actionable backend-crash hint…
+        let e = friendly_overflow(anyhow!(
+            "backend returned 500: llama-server process has terminated: GGML_ASSERT(...) failed"
+        ));
+        assert!(e.to_string().contains("crashed"), "got: {e}");
+        assert!(e.to_string().contains("num_gpu 0"), "got: {e}");
+        // …while a plain 4xx is neither overflow nor crash → passes through.
+        let other = friendly_overflow(anyhow!("backend returned 400: bad request"));
+        assert_eq!(other.to_string(), "backend returned 400: bad request");
     }
 
     #[test]
