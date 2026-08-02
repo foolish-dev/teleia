@@ -53,11 +53,14 @@ impl ContextEstimate {
 const COMPACT_AT_PCT: u64 = 85;
 
 /// Default proactive-compaction budget (estimated tokens) for local Ollama
-/// backends when the user hasn't set one with `/context`. Matches the settled
-/// `num_ctx` of the models run locally; hosted providers report overflow
-/// cleanly and have large windows, so they stay reactive (no default).
+/// backends when the user hasn't set one with `/context` and the real
+/// `num_ctx` couldn't be detected. A 1M capability ceiling matching the Fable
+/// window (and the 1M `num_ctx` the local model cards ship); a detected Ollama
+/// `num_ctx` still overrides it down, and `/context N` trims per session.
+/// Hosted providers report overflow cleanly and have large windows, so they
+/// stay reactive (no default).
 /// Override any time with `/context N`, or turn it off with `/context off`.
-const LOCAL_DEFAULT_CONTEXT: u64 = 32_768;
+const LOCAL_DEFAULT_CONTEXT: u64 = 1_000_000;
 
 /// Native context window (tokens) of Claude Fable 5 / Mythos 5 — 1M, which is
 /// also the default on those models. Used as the proactive-compaction budget
@@ -1221,10 +1224,11 @@ mod tests {
 
     #[test]
     fn context_limit_uses_local_default_for_janus_and_thanatos() {
-        // The local Qwen models must NOT get the out-of-reach 1M Fable budget
-        // (it would stop should_compact from ever firing, so history grows
-        // unbounded). On a local Ollama endpoint they fall to the local
-        // default, which compacts at a reachable ~28K.
+        // On a local Ollama endpoint the Qwen models take the
+        // LOCAL_DEFAULT_CONTEXT branch (ollama URL, non-Fable name), not the
+        // Fable-name branch — even though that default is now the same 1M
+        // ceiling. In real use a detected `num_ctx` from `/api/show` overrides
+        // it down so should_compact still fires; detection is off in this test.
         for model in ["Janus-35B-HERETIC", "Thanatos-27B-HERETIC"] {
             let agent = Agent::new(
                 LlmClient::new("http://127.0.0.1:11434/v1", model),
