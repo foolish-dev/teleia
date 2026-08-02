@@ -436,6 +436,23 @@ fn parse_num_ctx_param(parameters: &str) -> Option<u64> {
     })
 }
 
+/// Effective `num_ctx` for an Ollama model from its `/api/show` body: the
+/// baked `num_ctx` capped at the model's trained context window (Ollama clamps
+/// a larger baked value down at load, so a `1e+06` default really runs at the
+/// 262144 native window). `None` when the body has no `num_ctx` parameter (the
+/// model then runs at Ollama's own default). Factored out of
+/// [`LlmClient::detect_ollama_num_ctx`] so the clamp — the load-bearing half of
+/// the budget calc — is unit-testable without an HTTP mock.
+fn effective_num_ctx(body: &Value) -> Option<u64> {
+    let num_ctx = parse_num_ctx_param(body.get("parameters")?.as_str()?)?;
+    let trained = body
+        .get("model_info")
+        .and_then(Value::as_object)
+        .and_then(|mi| mi.iter().find(|(k, _)| k.ends_with(".context_length")))
+        .and_then(|(_, v)| v.as_u64());
+    Some(trained.map_or(num_ctx, |t| num_ctx.min(t)))
+}
+
 /// True when an error message means "the request no longer fits the
 /// model's context window" — i.e. the *input* overflowed, as opposed to
 /// a truncated response (`finish_reason: "length"`, handled separately).
@@ -450,6 +467,18 @@ pub fn is_context_overflow(text: &str) -> bool {
         || t.contains("prompt is too long")
         || t.contains("request_too_large")
         || t.contains("exceed context limit")
+}
+
+/// True when `text` looks like the local model backend's runner process
+/// *crashed* mid-request — an Ollama llama-server / llama.cpp abort (a ggml
+/// assertion or "process has terminated"), as opposed to a normal 4xx/5xx.
+/// It's a backend/GPU/version-skew failure, not a teleia bug; the TUI rewraps
+/// it into actionable guidance instead of dumping the raw runner backtrace.
+pub fn is_backend_crash(text: &str) -> bool {
+    let t = text.to_ascii_lowercase();
+    t.contains("process has terminated")
+        || t.contains("ggml_assert")
+        || t.contains("llama runner process")
 }
 
 /// Cap on the un-drained streaming buffer. A single SSE event / NDJSON
@@ -555,15 +584,7 @@ impl LlmClient {
             return None;
         }
         let body: Value = resp.json().await.ok()?;
-        let num_ctx = parse_num_ctx_param(body.get("parameters")?.as_str()?)?;
-        // Ollama clamps a baked `num_ctx` to the model's trained context window
-        // at load, so the effective budget is the smaller of the two.
-        let trained = body
-            .get("model_info")
-            .and_then(Value::as_object)
-            .and_then(|mi| mi.iter().find(|(k, _)| k.ends_with(".context_length")))
-            .and_then(|(_, v)| v.as_u64());
-        Some(trained.map_or(num_ctx, |t| num_ctx.min(t)))
+        effective_num_ctx(&body)
     }
 
     /// Re-point at a different model. If the new name resolves to a
@@ -1299,6 +1320,33 @@ fn accumulate(acc: &mut Vec<AccTool>, delta: ToolCallDelta) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn effective_num_ctx_clamps_to_trained_window() {
+        // Baked 1e+06 num_ctx, trained window 262144 → clamped to the window.
+        let body = json!({"parameters": "num_ctx 1e+06\nstop \"<|im_end|>\"", "model_info": {"qwen3moe.context_length": 262144}});
+        assert_eq!(effective_num_ctx(&body), Some(262144));
+        // num_ctx below the trained window → passes through unclamped.
+        let body = json!({"parameters": "num_ctx 8192", "model_info": {"qwen3moe.context_length": 262144}});
+        assert_eq!(effective_num_ctx(&body), Some(8192));
+        // No model_info → num_ctx passes through (nothing to clamp against).
+        let body = json!({"parameters": "num_ctx 4096"});
+        assert_eq!(effective_num_ctx(&body), Some(4096));
+        // No num_ctx parameter → None (model runs at Ollama's own default).
+        let body = json!({"parameters": "temperature 0.6", "model_info": {"qwen3moe.context_length": 262144}});
+        assert_eq!(effective_num_ctx(&body), None);
+    }
+
+    #[test]
+    fn is_backend_crash_detects_runner_aborts() {
+        assert!(is_backend_crash(
+            "backend returned 500: llama-server process has terminated: GGML_ASSERT(tensor->op == GGML_OP_UNARY) failed"
+        ));
+        assert!(is_backend_crash("llama runner process has terminated"));
+        // Normal errors are not runner crashes.
+        assert!(!is_backend_crash("context_length_exceeded"));
+        assert!(!is_backend_crash("connection refused"));
+    }
 
     #[test]
     fn parse_num_ctx_param_reads_the_ollama_show_blob() {
