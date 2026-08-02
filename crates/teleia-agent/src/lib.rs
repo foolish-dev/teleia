@@ -54,13 +54,14 @@ const COMPACT_AT_PCT: u64 = 85;
 
 /// Default proactive-compaction budget (estimated tokens) for local Ollama
 /// backends when the user hasn't set one with `/context` and the real
-/// `num_ctx` couldn't be detected. A 1M capability ceiling matching the Fable
-/// window (and the 1M `num_ctx` the local model cards ship); a detected Ollama
-/// `num_ctx` still overrides it down, and `/context N` trims per session.
-/// Hosted providers report overflow cleanly and have large windows, so they
-/// stay reactive (no default).
+/// `num_ctx` couldn't be detected. 262144 is the native/trained window of the
+/// local Qwen model cards (Janus/Thanatos): a baked 1M `num_ctx` really runs at
+/// this window, so budgeting here (not to the 1M advertised ceiling) means
+/// compaction actually fires. A detected Ollama `num_ctx` still overrides it,
+/// and `/context N` trims per session. Hosted providers report overflow
+/// cleanly and have large windows, so they stay reactive (no default).
 /// Override any time with `/context N`, or turn it off with `/context off`.
-const LOCAL_DEFAULT_CONTEXT: u64 = 1_000_000;
+const LOCAL_DEFAULT_CONTEXT: u64 = 262_144;
 
 /// Native context window (tokens) of Claude Fable 5 / Mythos 5 — 1M, which is
 /// also the default on those models. Used as the proactive-compaction budget
@@ -1226,9 +1227,9 @@ mod tests {
     fn context_limit_uses_local_default_for_janus_and_thanatos() {
         // On a local Ollama endpoint the Qwen models take the
         // LOCAL_DEFAULT_CONTEXT branch (ollama URL, non-Fable name), not the
-        // Fable-name branch — even though that default is now the same 1M
-        // ceiling. In real use a detected `num_ctx` from `/api/show` overrides
-        // it down so should_compact still fires; detection is off in this test.
+        // Fable-name branch. That default is the 262144 Qwen native window, so
+        // compaction fires; a detected `num_ctx` from `/api/show` still
+        // overrides it in real use (detection is off in this test).
         for model in ["Janus-35B-HERETIC", "Thanatos-27B-HERETIC"] {
             let agent = Agent::new(
                 LlmClient::new("http://127.0.0.1:11434/v1", model),
