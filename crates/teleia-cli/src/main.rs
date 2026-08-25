@@ -15,14 +15,14 @@ use teleia_agent::Agent;
 use teleia_llm::{detect_endpoint, looks_like_ollama, LlmClient, PullProgress};
 use teleia_store::Store;
 
+/// Active model on first launch, when no `--model` was passed and no
+/// saved `current_model` pref exists.
+const DEFAULT_MODEL: &str = "hf.co/FoolDev/Thanatos-27B-HERETIC:Q4_K_M";
+
 /// Local Ollama models teleia tries to keep cached on startup so `/model`
 /// can switch between them without a fresh download. The active `--model`
 /// is added to this set automatically if it isn't already in it. Only
 /// pulled when the resolved base URL looks like Ollama.
-/// Active model on first launch — also used to detect "user didn't
-/// supply --model" so a saved `current_model` pref can take over.
-const DEFAULT_MODEL: &str = "hf.co/FoolDev/Thanatos-27B-HERETIC:Q4_K_M";
-
 const DEFAULT_OLLAMA_MODELS: &[&str] = &[
     "hf.co/FoolDev/Thanatos-27B-HERETIC:Q4_K_M",
     "hf.co/FoolDev/Janus-35B-HERETIC:Q4_K_M",
@@ -343,8 +343,8 @@ struct Args {
     #[arg(long)]
     api_key: Option<String>,
     /// Colour theme. Known: tokyo-night (default), catppuccin, dracula.
-    #[arg(long, default_value = "tokyo-night")]
-    theme: String,
+    #[arg(long)]
+    theme: Option<String>,
     /// Skip the pre-flight check that pulls missing models via Ollama.
     /// Useful for non-Ollama backends, or when you've already pulled
     /// what you want by hand.
@@ -394,12 +394,13 @@ async fn main() -> Result<()> {
     if args.self_update {
         return update::self_update().await;
     }
-    if tui::set_theme(&args.theme).is_none() {
-        eprintln!(
-            "warning: unknown theme '{}'. Known: {}",
-            args.theme,
-            tui::theme_names().join(", ")
-        );
+    if let Some(theme) = args.theme.as_deref() {
+        if tui::set_theme(theme).is_none() {
+            eprintln!(
+                "warning: unknown theme '{theme}'. Known: {}",
+                tui::theme_names().join(", ")
+            );
+        }
     }
 
     // Optional user config — register custom LLM endpoints + MCP / LSP servers.
@@ -531,7 +532,10 @@ async fn main() -> Result<()> {
             agent.set_reasoning_effort(Some(effort));
         }
     }
-    if args.theme == "tokyo-night" {
+    // An explicit --theme always wins (even when it names the default) —
+    // the same Option-vs-default fix as --model above. Without the flag,
+    // restore the saved theme pref.
+    if args.theme.is_none() {
         apply_theme_from_agent(&agent);
     }
     // --auto / --plan flag → permission mode. The TUI status bar
@@ -841,9 +845,9 @@ pub fn pref_key_for(env_var: &str) -> String {
 
 /// Read an API key for `prov` from the terminal with input hidden, after
 /// asking the user for permission. Returns `None` if stdin isn't a TTY,
-/// the user declines, or the typed string is empty. The key lives in
-/// process memory only — persistence is up to the user (env var or the
-/// `[llms.NAME]` config entry).
+/// the user declines, or the typed string is empty. The caller persists
+/// the key to the local pref store for future launches — the consent
+/// prompt says so, so a "yes" covers the save.
 fn prompt_api_key(prov: &teleia_llm::Provider) -> Option<String> {
     if !std::io::stdin().is_terminal() {
         return None;
@@ -852,7 +856,7 @@ fn prompt_api_key(prov: &teleia_llm::Provider) -> Option<String> {
         "· {} API key not found (looked at ${}).",
         prov.name, prov.env_var
     );
-    eprint!("  enter a key now? [Y/n] ");
+    eprint!("  enter a key now? it will be saved to teleia's local pref store [Y/n] ");
     let _ = std::io::stderr().flush();
     let mut line = String::new();
     if std::io::stdin().lock().read_line(&mut line).is_err() {
@@ -864,7 +868,7 @@ fn prompt_api_key(prov: &teleia_llm::Provider) -> Option<String> {
     let prompt = format!("  {} key: ", prov.name);
     match rpassword::prompt_password(prompt) {
         Ok(k) if !k.is_empty() => {
-            eprintln!("  ✓ key stored for this session ({} chars)", k.len());
+            eprintln!("  ✓ key saved for future launches ({} chars)", k.len());
             Some(k)
         }
         _ => None,
@@ -915,6 +919,16 @@ fn human_bytes(n: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_theme_flag_is_distinct_from_absent() {
+        // The Some/None split is what lets an explicit `--theme
+        // tokyo-night` beat a saved theme pref (same fix as --model).
+        let absent = Args::parse_from(["teleia"]);
+        assert_eq!(absent.theme, None);
+        let explicit = Args::parse_from(["teleia", "--theme", "tokyo-night"]);
+        assert_eq!(explicit.theme.as_deref(), Some("tokyo-night"));
+    }
 
     #[test]
     fn render_pull_line_survives_completed_over_total() {
