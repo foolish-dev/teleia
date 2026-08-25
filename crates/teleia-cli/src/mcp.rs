@@ -184,7 +184,7 @@ impl McpClient {
         };
         let params = json!({ "name": name, "arguments": arguments });
         let result = self.request("tools/call", params).await?;
-        Ok(flatten_content(&result))
+        tool_call_outcome(&self.name, name, &result)
     }
 
     /// MCP `resources/read`. Returns the resource body as text — for
@@ -293,6 +293,19 @@ impl Drop for McpClient {
         // kill_on_drop is set on the Command; this is belt-and-braces.
         let _ = self.child.start_kill();
     }
+}
+
+/// Convert a `tools/call` result into the tool's outcome. MCP surfaces
+/// tool-execution failures in-band — a normal result carrying
+/// `isError: true` — not as JSON-RPC errors, so returning the flattened
+/// content unconditionally would show the model a failure as a clean
+/// success and its error-recovery hints would never engage.
+fn tool_call_outcome(server: &str, tool: &str, result: &Value) -> Result<String> {
+    let text = flatten_content(result);
+    if result.get("isError").and_then(Value::as_bool) == Some(true) {
+        return Err(anyhow!("MCP `{server}` tool `{tool}` failed: {text}"));
+    }
+    Ok(text)
 }
 
 /// Flatten an MCP `tools/call` result's `content` array into a plain
@@ -572,6 +585,30 @@ impl ToolRouter for McpRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_call_outcome_surfaces_is_error_as_failure() {
+        let v = json!({
+            "isError": true,
+            "content": [{ "type": "text", "text": "boom: no such row" }]
+        });
+        let err = tool_call_outcome("srv", "frob", &v).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("frob"), "{msg}");
+        assert!(msg.contains("boom: no such row"), "{msg}");
+    }
+
+    #[test]
+    fn tool_call_outcome_ok_without_is_error() {
+        let v = json!({ "content": [{ "type": "text", "text": "fine" }] });
+        assert_eq!(tool_call_outcome("srv", "frob", &v).unwrap(), "fine");
+        // An explicit `isError: false` is a success too.
+        let v = json!({
+            "isError": false,
+            "content": [{ "type": "text", "text": "fine" }]
+        });
+        assert_eq!(tool_call_outcome("srv", "frob", &v).unwrap(), "fine");
+    }
 
     #[test]
     fn flatten_resource_text_joins_with_blank_lines() {
