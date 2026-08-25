@@ -872,6 +872,12 @@ impl State {
             TurnEvent::Notice(msg) => {
                 self.push(Entry::Info(format!("⚠ {msg}")));
             }
+            TurnEvent::Tokens(t) => {
+                // Keeps the status-bar ↑/↓ tracker live between rounds of
+                // a long multi-tool turn; the post-turn `agent.tokens()`
+                // refresh still covers the final state.
+                self.tokens = t;
+            }
             TurnEvent::TurnEnd => {}
             TurnEvent::ToolApprovalRequest {
                 name,
@@ -7274,6 +7280,17 @@ mod tests {
         assert!(!ctrl_c_should_quit(&mut s));
         assert_eq!(s.mode, Mode::Normal);
         assert!(s.search_buf.is_empty());
+    }
+
+    #[test]
+    fn apply_tokens_updates_status_bar_counts_mid_turn() {
+        let mut s = State::new("dummy", "dummy");
+        s.apply(TurnEvent::Tokens(teleia_agent::TokenCounts {
+            prompt: 1200,
+            completion: 34,
+        }));
+        assert_eq!(s.tokens.prompt, 1200);
+        assert_eq!(s.tokens.completion, 34);
     }
 
     #[test]

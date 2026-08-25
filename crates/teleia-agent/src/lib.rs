@@ -21,7 +21,7 @@ pub trait ToolRouter: Send {
 #[path = "Fool.rs"]
 mod fool;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct TokenCounts {
     pub prompt: u64,
     pub completion: u64,
@@ -206,6 +206,10 @@ pub enum TurnEvent {
     /// A one-off informational note surfaced in the transcript (e.g. the
     /// model's response was truncated at the context limit).
     Notice(String),
+    /// Cumulative session token counts, emitted after each model round
+    /// that reports usage — keeps the UI's tracker live during long
+    /// multi-tool turns instead of only refreshing at turn end.
+    Tokens(TokenCounts),
     TurnEnd,
 }
 
@@ -1038,6 +1042,7 @@ impl Agent {
                                         .tokens
                                         .completion
                                         .saturating_add(u.completion_tokens as u64);
+                                    yield TurnEvent::Tokens(self.tokens);
                                 }
                             }
                         }
@@ -1484,6 +1489,45 @@ mod tests {
             "stop note missing: {note}"
         );
         assert!(matches!(events.last(), Some(TurnEvent::TurnEnd)));
+        server.join().expect("all scripted rounds consumed");
+    }
+
+    #[tokio::test]
+    async fn turn_emits_live_token_counts_per_round() {
+        // Each round's usage chunk (empty `choices`, like OpenAI's
+        // include_usage final frame) surfaces as a Tokens event carrying
+        // the RUNNING session total, so the tracker moves mid-turn
+        // instead of only after the whole turn.
+        let mut round1 = call("edit", "{}");
+        round1
+            .push(json!({"choices": [], "usage": {"prompt_tokens": 100, "completion_tokens": 10}}));
+        let mut round2 = say("done");
+        round2
+            .push(json!({"choices": [], "usage": {"prompt_tokens": 150, "completion_tokens": 20}}));
+        let (base, server) = scripted_llm(vec![round1, round2]);
+        let mut agent = scripted_agent(base);
+        let events = drive(&mut agent, "edit something").await;
+        let counts: Vec<TokenCounts> = events
+            .iter()
+            .filter_map(|e| match e {
+                TurnEvent::Tokens(t) => Some(*t),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            counts,
+            [
+                TokenCounts {
+                    prompt: 100,
+                    completion: 10
+                },
+                TokenCounts {
+                    prompt: 250,
+                    completion: 30
+                },
+            ]
+        );
+        assert_eq!(agent.tokens(), counts[1]);
         server.join().expect("all scripted rounds consumed");
     }
 
