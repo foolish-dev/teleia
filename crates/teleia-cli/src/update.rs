@@ -179,12 +179,17 @@ pub async fn self_update() -> anyhow::Result<()> {
         );
     }
 
-    // Integrity: abort on a real mismatch; skip only when the release has
-    // no SHA256SUMS or doesn't list this asset (older tags) — mirrors
-    // install.sh's verify_prebuilt.
+    // Integrity: abort on a real mismatch; skip only when the release
+    // PROVABLY has no SHA256SUMS (HTTP 404, older tags) or doesn't list
+    // this asset — mirrors install.sh's verify_prebuilt. Any other
+    // failure (network error, 5xx, truncated body) can't prove absence,
+    // so it aborts rather than installing unverified.
     match client.get(format!("{base}/SHA256SUMS")).send().await {
         Ok(r) if r.status().is_success() => {
-            let sums = r.text().await.unwrap_or_default();
+            let sums = r
+                .text()
+                .await
+                .context("read SHA256SUMS — refusing to install unverified")?;
             match expected_sha(&sums, &asset) {
                 Some(expected) => {
                     let actual = teleia_tools::sha256(&bin);
@@ -199,7 +204,17 @@ pub async fn self_update() -> anyhow::Result<()> {
                 None => eprintln!("note: {asset} not in SHA256SUMS — skipping integrity check"),
             }
         }
-        _ => eprintln!("note: no SHA256SUMS for this release — skipping integrity check"),
+        Ok(r) if r.status() == reqwest::StatusCode::NOT_FOUND => {
+            eprintln!("note: no SHA256SUMS for this release — skipping integrity check")
+        }
+        Ok(r) => bail!(
+            "SHA256SUMS fetch failed (HTTP {}) — refusing to install unverified",
+            r.status()
+        ),
+        Err(e) => {
+            return Err(anyhow::Error::new(e)
+                .context("SHA256SUMS fetch failed — refusing to install unverified"))
+        }
     }
 
     // Swap the running executable. `self_replace` handles the platform
