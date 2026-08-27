@@ -406,10 +406,22 @@ impl McpRegistry {
         entry: &McpEntry,
     ) -> Result<(McpClient, Vec<ToolDef>, Vec<McpResource>)> {
         let mut client = McpClient::spawn(name, entry).await?;
-        let tools = client.list_tools().await?;
+        // Same bound as the `initialize` handshake: a server that answers
+        // the handshake but stalls on `tools/list` would otherwise hang
+        // boot forever (spawn_all awaits each spawn serially).
+        let tools = tokio::time::timeout(std::time::Duration::from_secs(10), client.list_tools())
+            .await
+            .map_err(|_| anyhow!("MCP `{name}` tools/list timed out after 10s"))??;
         // Resources are optional — many servers don't expose any.
-        // Treat a list error as "no resources".
-        let resources = client.list_resources().await.unwrap_or_default();
+        // Treat a list error as "no resources"; a stall likewise degrades —
+        // the late reply is skipped by the id match in `request`.
+        let resources =
+            match tokio::time::timeout(std::time::Duration::from_secs(10), client.list_resources())
+                .await
+            {
+                Ok(res) => res.unwrap_or_default(),
+                Err(_) => Vec::new(),
+            };
         Ok((client, tools, resources))
     }
 
