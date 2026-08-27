@@ -16,13 +16,15 @@ it. Prefer `&str` over `String` until you need ownership.
 Touch only what the task requires. Don't reformat, reorder, rename, or
 change the visibility of adjacent items, and don't derive traits you
 don't use. Match the surrounding style; remove only the imports your own
-change orphans.
+change orphans. Before fixing code that merely looks wrong, check
+git log/blame and the tests that pin it — wrong-looking is often
+deliberate; fix only what you can show is broken.
 
 ## 4. Goal-driven execution
 Define success criteria, then loop until verified:
 
     cargo fmt --all -- --check
-    cargo clippy --all-targets -- -D warnings
+    cargo clippy --all-targets --locked -- -D warnings
     cargo build --all-targets --locked
     cargo test --all-targets --locked
 
