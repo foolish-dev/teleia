@@ -367,7 +367,16 @@ fn method_not_found_reply(msg: &Value) -> Option<Value> {
 /// happened to collide with ours would be mis-read as our response —
 /// dropping the real reply and leaving the server's request unanswered.
 fn is_response_to(msg: &Value, id: u64) -> bool {
-    msg.get("id").and_then(Value::as_u64) == Some(id) && msg.get("method").is_none()
+    if msg.get("method").is_some() {
+        return false;
+    }
+    // Match string-form ids too (mirrors mcp.rs): we send numeric ids,
+    // but a server that echoes ours back as a JSON string would
+    // otherwise never be recognized and the request loop would hang.
+    match msg.get("id") {
+        Some(v) => v.as_u64() == Some(id) || v.as_str() == Some(id.to_string().as_str()),
+        None => false,
+    }
 }
 
 impl Drop for LspClient {
@@ -751,6 +760,10 @@ mod tests {
             &json!({ "method": "window/logMessage" }),
             4
         ));
+        // A server that echoes our id as a JSON-RPC string id still matches —
+        // otherwise the request loop would never recognize it and hang.
+        assert!(is_response_to(&json!({ "id": "4", "result": {} }), 4));
+        assert!(!is_response_to(&json!({ "id": "5", "result": {} }), 4));
     }
 
     #[test]
