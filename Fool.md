@@ -36,3 +36,8 @@ progress or ask "shall I continue?" — continue. Still stop where the
 earlier principles reserve it: real ambiguity, a user-only decision, an
 irreversible or outward-facing action — or when the same check keeps
 failing (say what's blocking rather than spin).
+
+## 6. Suggestions when done
+End every finished task with a short list of concrete suggestions:
+things noticed but not done — follow-ups, risks, cleanups. Offers,
+not actions.
