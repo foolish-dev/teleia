@@ -27,4 +27,4 @@ a test first; for a bug, write the failing test first.
 ## 5. Suggestions when done
 End every finished task with a short list of concrete suggestions:
 things noticed but not done — follow-ups, risks, cleanups. Offers,
-not actions.
+not actions — the one exception to "do not narrate".

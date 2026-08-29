@@ -801,11 +801,25 @@ impl Agent {
     /// dispatches.
     fn is_routed(&self, name: &str) -> bool {
         !self.shadowed_router_tools.contains(name)
+            && !self.is_disabled_router_tool(name)
             && self
                 .router
                 .as_ref()
                 .map(|r| r.handles(name))
                 .unwrap_or(false)
+    }
+
+    /// Whether this tool name belongs to a server the user turned off with
+    /// `/mcps disable`. [`Agent::hide_mcp_tools`] only drops the defs from
+    /// the catalogue; the router keeps claiming the name, so without this a
+    /// name the model saw earlier in the session still dispatches to the
+    /// server the user just disabled.
+    fn is_disabled_router_tool(&self, name: &str) -> bool {
+        self.mcp_disabled.iter().any(|server| {
+            self.mcp_servers
+                .get(server)
+                .is_some_and(|defs| defs.iter().any(|d| d.function.name == name))
+        })
     }
 
     pub fn permission_mode(&self) -> PermissionMode {
@@ -2192,6 +2206,44 @@ mod tests {
             .tools()
             .iter()
             .any(|d| d.function.name == "fs_read" || d.function.name == "fs_write"));
+    }
+
+    #[test]
+    fn disabling_a_server_unroutes_its_tools_not_just_the_catalogue() {
+        // hide_mcp_tools only drops the defs; the router keeps claiming the
+        // name. Without the mcp_disabled check in is_routed, a name the
+        // model saw earlier in the session still dispatches to the server
+        // the user just turned off.
+        let mut agent = fake_agent();
+        agent.set_tool_router(Box::new(FakeRouter("git_log")));
+        let mut servers = BTreeMap::new();
+        servers.insert("git".to_string(), vec![fake_def("git_log")]);
+        agent.set_mcp_servers(servers);
+        assert!(agent.is_routed("git_log"));
+
+        agent.disable_mcp("git").unwrap();
+        assert!(
+            !agent.is_routed("git_log"),
+            "a disabled server's tool must not dispatch"
+        );
+        agent.enable_mcp("git").unwrap();
+        assert!(agent.is_routed("git_log"), "re-enabling must restore it");
+    }
+
+    #[test]
+    fn guidelines_quote_the_base_prompt_they_carve_out_of() {
+        // Fool.md ends by calling its suggestion list "the one exception to
+        // \"do not narrate\"" — a quotation of SYSTEM_PROMPT_BASE. Reword
+        // either side and the carve-out silently stops referring to
+        // anything, with nothing else in the tree to catch it.
+        assert!(
+            SYSTEM_PROMPT_BASE.contains("do not narrate"),
+            "base prompt no longer contains the phrase Fool.md quotes"
+        );
+        assert!(
+            fool::GUIDELINES.contains("\"do not narrate\""),
+            "Fool.md no longer quotes the base prompt's phrase"
+        );
     }
 
     #[test]
