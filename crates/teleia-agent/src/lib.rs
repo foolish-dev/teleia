@@ -118,13 +118,33 @@ Use the provided tools to do real work: read, write, edit, multi_edit, bash, lis
 head, tail, tree, stat, diff, which, fetch, mkdir, mv, cp, rm, apply_patch, wc, touch, sha256, \
 date, lint, format, typecheck, test, git, symlink, env, replace, json, base64, hexdump, du, \
 realpath, todo_write, web_search (plus any MCP tools the user has configured). After any code change, run \
-`lint`/`typecheck`/`test` to \
-confirm the edit before claiming done. Always be concise. When you finish a turn, stop — \
+`format`/`lint`/`typecheck`/`test` to confirm the edit before claiming done — they report failure \
+inside their output as `[exit N]`, not as an error, so read it. Stop before anything irreversible \
+or outward-facing — a push, a release, a delete outside the worktree — and before a decision that \
+is the user's to make. Always be concise. When you finish a turn, stop — \
 do not narrate.";
 
 /// Base prompt + the fool-derived guidelines, joined once at startup.
 fn system_prompt() -> String {
     format!("{SYSTEM_PROMPT_BASE}\n\n{}", fool::GUIDELINES)
+}
+
+/// Replace whatever system turn a stored session carries with the
+/// current [`system_prompt`]. Sessions persist message 0 verbatim, so
+/// without this a resumed session keeps the guidelines frozen at the
+/// moment it was created — an edit to `Fool.md` would reach new
+/// sessions only. Retain-then-insert rather than overwriting index 0:
+/// a session whose seq-0 row was skipped as corrupt has no system turn
+/// there, and the providers concatenate every system turn wherever it
+/// sits.
+fn sync_system_prompt(messages: &mut Vec<Message>) {
+    messages.retain(|m| !matches!(m, Message::System { .. }));
+    messages.insert(
+        0,
+        Message::System {
+            content: system_prompt(),
+        },
+    );
 }
 
 /// Instruction appended to the history for [`Agent::compact`]'s
@@ -202,6 +222,12 @@ pub enum TurnEvent {
     ToolEnd {
         name: String,
         output: String,
+        /// True when the call never reached dispatch — blocked by plan
+        /// mode, or denied by the user. A tool that ran and *failed* is
+        /// not refused: retrying is the caller's business. The TUI's
+        /// auto-continue loop reads this to avoid answering a refusal
+        /// with another `continue`.
+        refused: bool,
     },
     /// A one-off informational note surfaced in the transcript (e.g. the
     /// model's response was truncated at the context limit).
@@ -528,7 +554,8 @@ impl Agent {
         let prev = store.resolve_alias("last").ok();
         match prev {
             Some(id) => {
-                let messages = store.load(&id)?;
+                let mut messages = store.load(&id)?;
+                sync_system_prompt(&mut messages);
                 // Past the highest stored seq, not the loaded count — a row
                 // skipped by load() (corrupt payload) must not make the next
                 // append reuse a live seq.
@@ -927,7 +954,8 @@ impl Agent {
 
     pub fn load_alias(&mut self, name: &str) -> Result<String> {
         let session_id = self.store.resolve_alias(name)?;
-        let messages = self.store.load(&session_id)?;
+        let mut messages = self.store.load(&session_id)?;
+        sync_system_prompt(&mut messages);
         self.seq = self.store.next_seq(&session_id)?;
         self.session_id = session_id.clone();
         self.messages = messages;
@@ -1093,6 +1121,7 @@ impl Agent {
                             yield TurnEvent::ToolEnd {
                                 name: call.function.name.clone(),
                                 output: output.clone(),
+                                refused: true,
                             };
                             self.push(Message::Tool {
                                 tool_call_id: call.id.clone(),
@@ -1122,6 +1151,7 @@ impl Agent {
                                     yield TurnEvent::ToolEnd {
                                         name: call.function.name.clone(),
                                         output: output.clone(),
+                                        refused: true,
                                     };
                                     self.push(Message::Tool {
                                         tool_call_id: call.id.clone(),
@@ -1190,6 +1220,7 @@ impl Agent {
                     yield TurnEvent::ToolEnd {
                         name: call.function.name.clone(),
                         output: output.clone(),
+                        refused: false,
                     };
                     self.push(Message::Tool {
                         tool_call_id: call.id.clone(),
@@ -1653,6 +1684,48 @@ mod tests {
         let big = "é".repeat(20_000);
         let trimmed = trim_tool_output(big);
         assert!(trimmed.contains("characters trimmed"));
+    }
+
+    #[test]
+    fn resuming_re_renders_a_stale_system_prompt() {
+        // A session stored before an edit to Fool.md carries the old text
+        // verbatim; without this the edit would reach new sessions only.
+        let mut messages = vec![
+            Message::System {
+                content: "stale guidelines from an older build".into(),
+            },
+            Message::User {
+                content: "hello".into(),
+            },
+        ];
+        sync_system_prompt(&mut messages);
+        assert_eq!(messages.len(), 2);
+        assert!(matches!(&messages[0], Message::System { content } if *content == system_prompt()));
+        assert!(matches!(&messages[1], Message::User { content } if content == "hello"));
+    }
+
+    #[test]
+    fn sync_system_prompt_repairs_a_session_that_lost_its_system_row() {
+        // load() skips a corrupt payload, so index 0 is not guaranteed to
+        // be the system turn — insert rather than overwrite.
+        let mut messages = vec![Message::User {
+            content: "hello".into(),
+        }];
+        sync_system_prompt(&mut messages);
+        assert_eq!(messages.len(), 2);
+        assert!(matches!(&messages[0], Message::System { .. }));
+        // And a duplicate system turn anywhere collapses to exactly one.
+        messages.push(Message::System {
+            content: "stray".into(),
+        });
+        sync_system_prompt(&mut messages);
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|m| matches!(m, Message::System { .. }))
+                .count(),
+            1
+        );
     }
 
     #[test]

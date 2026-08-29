@@ -267,7 +267,7 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         ToolDef::new(
             "format",
-            "Run the standard formatter for the path's language (writes in place). Auto-detects via extension: .rs → rustfmt, .py → black / ruff format, .js/.ts/.tsx/.json/.md → prettier, .go → gofmt. Returns the formatter's output.",
+            "Run the standard formatter for the path's language (writes in place). Auto-detects via extension: .rs → cargo fmt --all (whole workspace; the path only selects the language), .py → black / ruff format, .js/.ts/.tsx/.json/.md → prettier, .go → gofmt. Returns the formatter's output, with a non-zero exit reported inline as `[exit N]`.",
             json!({ "type": "object", "properties": {
                 "path": { "type": "string", "description": "File to format" }
             }, "required": ["path"] }),
@@ -1514,7 +1514,13 @@ async fn format_tool(args: Value) -> Result<String> {
     let PathArgs { path } = serde_json::from_value(args)?;
     let ext = ext_of(&path);
     match ext.as_deref() {
-        Some("rs") => run_command("rustfmt", &[&path]).await,
+        Some("rs") => {
+            // `rustfmt <path>` defaults to edition 2015 and chokes on
+            // `async fn`; cargo reads the edition from the manifest.
+            // Workspace-wide like the sibling Rust arms, so the path is
+            // informational only — and identical to what CI checks.
+            run_command("cargo", &["fmt", "--all"]).await
+        }
         Some("py") => match run_command("ruff", &["format", &path]).await {
             Ok(o) => Ok(o),
             Err(_) => run_command("black", &[&path]).await,

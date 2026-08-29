@@ -7306,6 +7306,7 @@ mod tests {
         s.apply(TurnEvent::ToolEnd {
             name: "read".into(),
             output: "file contents".into(),
+            refused: false,
         });
         s.apply(TurnEvent::AssistantStart);
         s.apply(TurnEvent::AssistantDelta("earlier answer".into()));
