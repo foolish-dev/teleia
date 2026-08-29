@@ -508,7 +508,12 @@ async fn main() -> Result<()> {
     // overridden by --model.
     let _ = store.set_pref("current_model", &model);
 
-    let llm = LlmClient::with_api_key(base_url, model, api_key);
+    // `resolve_model_name` strips the `provider:` selector — the pref above
+    // keeps the raw string so the next launch re-resolves it, but the wire
+    // must carry the bare name or the provider 404s on every request of the
+    // session. `/model` already routes through `set_model`, which resolves;
+    // this is the startup path that did not.
+    let llm = LlmClient::with_api_key(base_url, teleia_llm::resolve_model_name(&model), api_key);
     // The TUI status bar reports resumed-session info on first paint;
     // no need to announce it here on stderr.
     let mut agent = if args.resume {
