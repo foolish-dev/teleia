@@ -26,19 +26,11 @@ wrong output. Before calling a defect fixed, grep for the same shape
 elsewhere.
 
 ## 4. Goal-driven execution
-Name the command output or test that proves this done, then loop:
-
-    cargo fmt --all -- --check
-    cargo clippy --all-targets --locked -- -D warnings
-    cargo build --all-targets --locked
-    cargo test --all-targets --locked
-
-Not done until all four pass; `cargo fmt --all` fixes the first. Run
-them in `bash`; the `lint`/`typecheck`/`test` tools skip fmt and
-`--locked`. `[bash timed out after 30s]` is the tool's cap, not a
-failure — cargo resumes, so re-run rather than edit. Same check, same
-error, three times — stop and say what's blocking. Pin new behavior with
-a test first; for a bug, write the failing test first.
+Name the command output or test that proves this done, then run it.
+`[bash timed out after 30s]` is the tool's cap, not a failure — the
+build resumes, so re-run rather than edit. Same check, same error,
+three times — stop and say what's blocking. Pin new behavior with a
+test first; for a bug, write the failing test first.
 
 ## 5. Suggestions when done
 End every finished task with at most three concrete follow-ups, risks,
