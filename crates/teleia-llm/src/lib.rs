@@ -286,9 +286,13 @@ pub const PROVIDERS: &[Provider] = &[
         prefixes: &[
             "mistral-",
             "codestral-",
+            "open-codestral-",
             "ministral-",
             "pixtral-",
             "magistral-",
+            "devstral-",
+            "voxtral-",
+            "mathstral-",
             "open-mistral-",
             "open-mixtral-",
         ],
@@ -396,6 +400,12 @@ pub const PROVIDERS: &[Provider] = &[
 /// Spell entries exactly as the [`PROVIDERS`] `name` field, and only add
 /// a provider whose `prefixes` is non-empty — with no prefixes the body
 /// test can never pass and every `name:` form would route local.
+/// Provider names that are also Ollama model families, so `head:body` is
+/// ambiguous and the body must name something the provider actually
+/// serves. Adding an entry means its [`Provider::prefixes`] become
+/// load-bearing: a family missing there routes a paying customer to
+/// localhost. Note the body test also passes on a `vendor/model` path, so
+/// a prefix-less entry is not automatically local.
 const OLLAMA_FAMILY_NAMES: &[&str] = &["Mistral"];
 
 /// Split an explicit `provider:model` selector into its provider and the
@@ -454,6 +464,7 @@ pub fn provider_for_model(model: &str) -> Option<&'static Provider> {
 pub fn resolve_model_name(model: &str) -> &str {
     provider_selector(model).map_or(model, |(_, body)| body)
 }
+
 /// Detect the base URL and API-key env-var value for a model name. Used
 /// as a fallback when the caller doesn't supply `--base-url` /
 /// `--api-key` explicitly. See [`PROVIDERS`] for the full routing table;
@@ -1047,9 +1058,13 @@ const ANTHROPIC_MAX_TOKENS: u32 = 128_000;
 /// too *low* a value only truncates with a `length` notice.
 const ANTHROPIC_MAX_TOKENS_BY_PREFIX: &[(&str, u32)] = &[
     ("claude-3-5-", 8_192),
-    ("claude-3-7-", 8_192),
+    ("claude-3-7-", 64_000),
     ("claude-3-", 4_096),
+    ("claude-opus-4-0", 32_000),
+    ("claude-opus-4-2025", 32_000),
     ("claude-opus-4-1", 32_000),
+    ("claude-sonnet-4-0", 64_000),
+    ("claude-sonnet-4-2025", 64_000),
     ("claude-sonnet-4-5", 64_000),
     ("claude-haiku-4-5", 64_000),
     ("claude-opus-4-5", 64_000),
@@ -1717,7 +1732,9 @@ mod tests {
         assert_eq!(anthropic_max_tokens("claude-haiku-4-5-20251001"), 64_000);
         assert_eq!(anthropic_max_tokens("claude-opus-4-1"), 32_000);
         assert_eq!(anthropic_max_tokens("claude-3-5-sonnet-20241022"), 8_192);
-        assert_eq!(anthropic_max_tokens("claude-3-7-sonnet-latest"), 8_192);
+        assert_eq!(anthropic_max_tokens("claude-3-7-sonnet-latest"), 64_000);
+        assert_eq!(anthropic_max_tokens("claude-opus-4-20250514"), 32_000);
+        assert_eq!(anthropic_max_tokens("claude-sonnet-4-0"), 64_000);
         assert_eq!(anthropic_max_tokens("claude-3-opus-20240229"), 4_096);
         // The specific prefixes must win over the `claude-3-` catch-all.
         assert_ne!(anthropic_max_tokens("claude-3-5-haiku-latest"), 4_096);

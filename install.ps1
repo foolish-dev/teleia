@@ -76,9 +76,11 @@ function Verify-Prebuilt($target) {
             Write-Warning "no SHA256SUMS for this release — skipping integrity check"
             return
         }
-        Write-Error "could not fetch SHA256SUMS ($($_.Exception.Message))"
-        Write-Error "refusing to install unverified — re-run when the network is healthy."
-        exit 1
+        # $ErrorActionPreference = 'Stop' makes Write-Error terminating, so
+        # a second one — and the exit — would never run. Explain with a
+        # warning, then throw once.
+        Write-Warning "refusing to install unverified — re-run when the network is healthy."
+        throw "could not fetch SHA256SUMS ($($_.Exception.Message))"
     }
     $asset = "teleia-$target.exe"
     $pattern = "  " + [regex]::Escape($asset) + "$"

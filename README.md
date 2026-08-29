@@ -84,10 +84,12 @@ Three stances control tool execution — cycle with `Shift+Tab` or set explicitl
 
 | mode      | chip    | behaviour                                                                  | trigger              |
 | --------- | ------- | -------------------------------------------------------------------------- | -------------------- |
-| **PLAN**  | blue    | only inspection built-ins run unprompted — filesystem reads, search, metadata, `sha256`, `diff` (plus `git`'s `status` / `diff` / `log` with non-flag paths); `fetch`, `web_search`, `env`, `lint`, `typecheck` and `test` prompt `y`/`n`/`a` because they reach the network or compile the working tree; every mutating tool, and every MCP or LSP tool regardless of its name, short-circuits with a synthetic "blocked: plan mode" result | `/plan`, `--plan`    || **BUILD** | green (default) | every tool call pauses for `y` allow / `n` deny / `a` allow-all (auto)                          | `/build`, default    |
+| **PLAN**  | blue    | only inspection built-ins run unprompted — filesystem reads, search, metadata, `sha256`, `diff` (plus `git`'s `status` / `diff` / `log` with non-flag paths); `fetch`, `web_search`, `env`, `lint`, `typecheck` and `test` prompt `y`/`n`/`a` because they reach the network or compile the working tree; every mutating tool, and every MCP or LSP tool regardless of its name, short-circuits with a synthetic "blocked: plan mode" result | `/plan`, `--plan`    |
+| **BUILD** | green (default) | every tool call pauses for `y` allow / `n` deny / `a` allow-all (auto)                          | `/build`, default    |
 | **AUTO**  | red     | every tool dispatches immediately, no prompts                              | `/auto`, `--auto`    |
 
 `a` at any approval prompt allow-alls. From BUILD it also flips into AUTO for the rest of the session; from PLAN it approves only that call, so one keystroke can't jump the mode you deliberately picked. `Esc` denies.
+
 ## Keybindings
 
 Four modes: **Insert** (default — type and edit), **Normal** (`Esc` to enter; vim motions), **Visual** (`v` from Normal; charwise selection over the chat scrollback), **Command** (`:` from Normal; vim ex-commands). The status-bar chip and input border colour signal the active mode.
@@ -195,6 +197,7 @@ A few worth calling out: `read` syntax-highlights via scope-aware syntect; `edit
 ## Providers
 
 The model name picks the provider. Patterns match untagged names only: anything containing a `:` is read as an Ollama `family:tag` reference (`gpt-oss:20b`, `deepseek-r1:8b`, `command-r:latest`) and stays local, unless the part before the colon is a provider name. Use `provider:NAME` to disambiguate names that collide with local Ollama models. A name with no tag is still matched by pattern, so `gpt-oss` goes to OpenAI while `gpt-oss:20b` stays on Ollama — pick the tagged name from the `/model` list.
+
 | pattern                            | provider     | env var                 |
 | ---------------------------------- | ------------ | ----------------------- |
 | `claude-*`                         | Anthropic    | `ANTHROPIC_API_KEY`     |
@@ -202,7 +205,7 @@ The model name picks the provider. Patterns match untagged names only: anything 
 | `gemini-*`                         | Google       | `GEMINI_API_KEY`        |
 | `grok-*`                           | xAI          | `XAI_API_KEY`           |
 | `deepseek-*`                       | DeepSeek     | `DEEPSEEK_API_KEY`      |
-| `mistral-*`, `codestral-*`         | Mistral      | `MISTRAL_API_KEY`       |
+| `mistral-*`, `codestral-*`, `ministral-*`, `pixtral-*`, `magistral-*`, `devstral-*`, `voxtral-*`, `mathstral-*`, `open-mistral-*`, `open-mixtral-*`         | Mistral      | `MISTRAL_API_KEY`       |
 | `command-*`                        | Cohere       | `COHERE_API_KEY`        |
 | `sonar*`                           | Perplexity   | `PERPLEXITY_API_KEY`    |
 | `jamba-*`                          | AI21         | `AI21_API_KEY`          |

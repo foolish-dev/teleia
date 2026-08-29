@@ -309,7 +309,8 @@ pub fn definitions() -> Vec<ToolDef> {
             json!({ "type": "object", "properties": {
                 "name": { "type": "string", "description": "Single variable to inspect; omit to list all" }
             } }),
-        ),        ToolDef::new(
+        ),
+        ToolDef::new(
             "replace",
             "Regex find-and-replace inside a single file, written in place. Unlike `edit` (literal, unique-match), this substitutes a Rust regex; `replacement` may reference capture groups as `$1` / `$name`. Replaces every match unless `all` is false (then only the first). Returns the occurrence count.",
             json!({ "type": "object", "properties": {
@@ -1589,10 +1590,16 @@ async fn git_tool(args: Value) -> Result<String> {
         paths,
         message,
     } = serde_json::from_value(args)?;
-    let mut argv: Vec<&str> = match subcommand {
+    // `-c` overrides first: plan mode runs status/diff/log unprompted, and
+    // git will happily execute programs the *repository* names —
+    // `core.fsmonitor`, `diff.external`, and per-path textconv/diff drivers
+    // from .gitattributes. A cloned repo does not carry .git/config, but a
+    // local one can, and "nothing runs" is the whole contract of the mode.
+    let mut argv: Vec<&str> = vec!["-c", "core.fsmonitor=false", "-c", "diff.external="];
+    argv.extend(match subcommand {
         GitSub::Status => vec!["status", "--short", "--branch"],
-        GitSub::Diff => vec!["diff"],
-        GitSub::Log => vec!["log", "--oneline", "-n", "20"],
+        GitSub::Diff => vec!["diff", "--no-ext-diff", "--no-textconv"],
+        GitSub::Log => vec!["log", "--oneline", "--no-ext-diff", "-n", "20"],
         GitSub::Add => {
             if paths.is_empty() {
                 return Err(anyhow!("git add requires `paths`"));
@@ -1605,7 +1612,7 @@ async fn git_tool(args: Value) -> Result<String> {
                 .ok_or_else(|| anyhow!("git commit requires `message`"))?;
             return run_command("git", &["commit", "-m", msg]).await;
         }
-    };
+    });
     // add/diff take the caller's paths; status/log ignore them.
     if matches!(subcommand, GitSub::Add | GitSub::Diff) {
         argv.extend(paths.iter().map(String::as_str));
@@ -1756,12 +1763,13 @@ fn env_value_is_public(name: &str) -> bool {
 /// Render one variable for `env`. Anything off [`ENV_PUBLIC_VARS`]
 /// collapses to a marker: this text becomes a `Message::Tool` that the
 /// agent re-uploads to the provider on every later round
-/// (teleia-agent:992) and that teleia-store writes to sqlite in
-/// cleartext (teleia-store:130-137), so a value emitted once is leaked
+/// and that teleia-store writes to sqlite in cleartext, so a value
+/// emitted once is leaked
 /// for the life of the session. The name still ships: set-ness is what
 /// the model actually needs. `<empty>` stays distinct from `<redacted>`
 /// because "set but empty" is the failure worth diagnosing — the same
-/// distinction `/keys` makes (teleia-cli/src/tui.rs:3337-3339).
+/// distinction that matters when diagnosing a key that is exported but
+/// blank.
 fn env_value_view(name: &str, value: &std::ffi::OsStr) -> String {
     if env_value_is_public(name) {
         value.to_string_lossy().into_owned()
@@ -1799,6 +1807,7 @@ async fn env_tool(args: Value) -> Result<String> {
         }
     }
 }
+
 #[derive(Deserialize)]
 struct ReplaceArgs {
     path: String,
@@ -2753,6 +2762,7 @@ mod tests {
             assert!(env_value_is_public(v), "described but not public: {v}");
         }
     }
+
     #[tokio::test]
     async fn replace_substitutes_regex_and_counts() {
         let path = tmp_path("replace.txt");

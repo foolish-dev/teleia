@@ -104,7 +104,7 @@ fn set_mode(state: &mut State, agent: &mut Agent, mode: PermissionMode) {
     set_pref_warn(state, agent, "permission_mode", mode.label_canonical());
     let blurb = match mode {
         PermissionMode::Plan => {
-            "plan mode — read/list/glob/grep run; write/edit/bash are blocked. Use Shift+Tab or /build to execute."
+            "plan mode — inspection built-ins run; fetch/web_search/env/lint/typecheck/test prompt y/n; write/edit/bash and every MCP/LSP tool are blocked. Use Shift+Tab or /build to execute."
         }
         PermissionMode::Build => "build mode — every tool call prompts y/n/a.",
         PermissionMode::Auto => {
@@ -688,9 +688,8 @@ const AUTO_CONTINUE_LABEL: &str = "continue";
 
 /// What actually goes on the wire each round. The contract lives here, in
 /// the user turn, because the system prompt no longer carries one: the
-/// guidelines lost their auto-prompting section. A user turn is also the
-/// only place that survives `resume` — the system prompt is rendered once
-/// and stored as message 0.
+/// guidelines lost their auto-prompting section, and a user turn carries
+/// the instruction on the round it fires rather than on every round.
 const AUTO_CONTINUE_PROMPT: &str = "Continue the task yourself: plan, act, verify, repeat. \
 Stop and say why instead if it is finished, if you need a decision from me, or if the same \
 check keeps failing — and do not start the follow-ups you listed.";
@@ -2693,9 +2692,14 @@ async fn run_turn<B: ratatui::backend::Backend>(
                                 if state.permission_mode == PermissionMode::Build {
                                     state.permission_mode = PermissionMode::Auto;
                                 } else {
-                                    state.status =
+                                    // Not `state.status`: the spinner owns
+                                    // that slot for the whole turn and
+                                    // run_turn overwrites it at the end, so
+                                    // the correction was never seen.
+                                    state.push(Entry::Info(
                                         "allow-all promotes only out of BUILD — approved this call"
-                                            .into();
+                                            .into(),
+                                    ));
                                 }
                             }
                             // A dropped responder just means the agent
@@ -4064,7 +4068,14 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
                     Style::default().fg(th.yellow).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    "uto (allow all for this session)",
+                    // `allow_all_promotes` is Build-only, so in plan mode
+                    // `a` approves exactly this call — don't offer a
+                    // session-wide promotion the agent will refuse.
+                    if state.permission_mode == PermissionMode::Build {
+                        "uto (allow all for this session)"
+                    } else {
+                        "llow this call — plan mode does not promote"
+                    },
                     Style::default().fg(th.dim),
                 ),
             ]),
