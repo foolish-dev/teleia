@@ -531,10 +531,12 @@ struct State {
     /// Whether to fire a desktop notification after each chat turn ends.
     /// Toggled at runtime via `/notify`; defaults to on.
     notify: bool,
-    /// Sticky auto-prompting. While on, after a chat turn that used a
-    /// tool, `submit_input` re-submits "continue" and runs again — driving
-    /// the task to completion on its own — until a turn finishes without
-    /// touching a tool, the user interrupts, or the [`LOOP_MAX`] cap is hit.
+    /// Sticky auto-prompting. While on, after a chat turn that actually
+    /// dispatched a tool, `submit_input` re-submits
+    /// [`AUTO_CONTINUE_PROMPT`] and runs again — driving the task to
+    /// completion on its own — until a turn finishes without touching a
+    /// tool, the user interrupts, or the [`LOOP_MAX`] cap is hit. A call
+    /// plan mode blocked or the user denied does not count as work.
     /// Toggled via `/entropy` (its UI name; this field + pref key stay
     /// `autoprompt`), persisted across launches; defaults off.
     autoprompt: bool,
@@ -544,8 +546,9 @@ struct State {
     /// `/autocompact`, persisted across launches; defaults on.
     auto_compact: bool,
     /// Set by `run_turn`: did the turn just streamed dispatch at least one
-    /// tool? The auto-prompt loop reads it right after to decide whether the
-    /// agent still has work to do. Reset at the start of every turn.
+    /// tool that was not refused? The auto-prompt loop reads it right after
+    /// to decide whether the agent still has work to do. Reset at the start
+    /// of every turn.
     turn_used_tool: bool,
     /// Active mouse drag-selection, if any. Set on mouse-down inside the
     /// chat area, updated on drag, cleared on the next mouse-down (or Esc).
@@ -679,11 +682,28 @@ struct LoopSpec {
 /// larger requested count is clamped to this and the banner shows it.
 const LOOP_MAX: usize = 100;
 
-/// The prompt re-submitted each round of sticky auto-prompting
-/// (`/entropy`). Generic on purpose — the agent decides from its own
-/// prior work what "continue" means, per the auto-prompting-loop guideline
-/// carried in the system prompt.
-const AUTO_CONTINUE_PROMPT: &str = "continue";
+/// What the transcript shows for each round of sticky auto-prompting
+/// (`/entropy`) — the short form the user recognises.
+const AUTO_CONTINUE_LABEL: &str = "continue";
+
+/// What actually goes on the wire each round. The contract lives here, in
+/// the user turn, because the system prompt no longer carries one: the
+/// guidelines lost their auto-prompting section. A user turn is also the
+/// only place that survives `resume` — the system prompt is rendered once
+/// and stored as message 0.
+const AUTO_CONTINUE_PROMPT: &str = "Continue the task yourself: plan, act, verify, repeat. \
+Stop and say why instead if it is finished, if you need a decision from me, or if the same \
+check keeps failing — and do not start the follow-ups you listed.";
+
+/// Whether a streamed event means the turn did real work. Only a tool
+/// that actually ran counts: plan mode and a user `Deny` both synthesize
+/// a full `ToolStart`/`ToolEnd` pair without dispatching anything, and
+/// treating those as work lets the auto-continue loop answer a refusal
+/// with another round. A tool that ran and *failed* still counts —
+/// retrying is the loop's business.
+fn counts_as_work(e: &TurnEvent) -> bool {
+    matches!(e, TurnEvent::ToolEnd { refused: false, .. })
+}
 
 /// Whether sticky auto-prompting should fire another `continue` turn: the
 /// mode is armed, the last turn finished cleanly *and* touched a tool (did
@@ -1696,7 +1716,7 @@ async fn submit_input<B: ratatui::backend::Backend>(
         while should_auto_continue(state.autoprompt, outcome, state.turn_used_tool, steps) {
             steps += 1;
             state.push(Entry::Info(format!("entropy {steps}")));
-            state.push(Entry::User(AUTO_CONTINUE_PROMPT.to_string()));
+            state.push(Entry::User(AUTO_CONTINUE_LABEL.to_string()));
             outcome = run_turn_ac(terminal, state, agent, AUTO_CONTINUE_PROMPT.to_string()).await;
         }
         state.working = false;
@@ -2712,7 +2732,7 @@ async fn run_turn<B: ratatui::backend::Backend>(
             evt = stream.next() => {
                 match evt {
                     Some(Ok(e)) => {
-                        if matches!(e, TurnEvent::ToolStart { .. }) {
+                        if counts_as_work(&e) {
                             state.turn_used_tool = true;
                         }
                         let is_end = matches!(e, TurnEvent::TurnEnd);
@@ -3406,7 +3426,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
             set_pref_warn(state, agent, "autoprompt", if new { "on" } else { "off" });
             state.push(Entry::Info(
                 if new {
-                    "entropy on — after each turn I'll continue on my own until the task is done (esc/^c stops, cap 100)".to_string()
+                    "entropy on — after each turn that did work I'll continue on my own; I stop when it's done, when I need a decision from you, or at the cap (esc/^c stops, cap 100)".to_string()
                 } else {
                     "entropy off".to_string()
                 },
@@ -6395,6 +6415,26 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_tool_call_is_not_work() {
+        let end = |refused| TurnEvent::ToolEnd {
+            name: "rm".into(),
+            output: "denied by user".into(),
+            refused,
+        };
+        // Dispatched — counts, even when the tool itself failed.
+        assert!(counts_as_work(&end(false)));
+        // Blocked by plan mode or denied by the user — does not count, so
+        // the loop can't answer the refusal with another `continue`.
+        assert!(!counts_as_work(&end(true)));
+        // The synthetic ToolStart both refusal paths also emit must not
+        // count on its own; only ToolEnd carries the verdict.
+        assert!(!counts_as_work(&TurnEvent::ToolStart {
+            name: "rm".into(),
+            arguments: "{}".into(),
+        }));
+    }
+
+    #[test]
     fn auto_continue_fires_only_while_armed_working_and_under_cap() {
         use TurnOutcome::*;
         // Armed, last turn completed and used a tool, under the cap → continue.
@@ -7322,6 +7362,7 @@ mod tests {
         s.apply(TurnEvent::ToolEnd {
             name: "read".into(),
             output: "file contents".into(),
+            refused: false,
         });
         s.apply(TurnEvent::AssistantStart);
         s.apply(TurnEvent::AssistantDelta("earlier answer".into()));
