@@ -279,7 +279,19 @@ pub const PROVIDERS: &[Provider] = &[
         name: "Mistral",
         base_url: "https://api.mistral.ai/v1",
         env_var: "MISTRAL_API_KEY",
-        prefixes: &["mistral-", "codestral-"],
+        // Every family Mistral's API serves, because `provider_selector`
+        // uses these to tell `mistral:pixtral-large-latest` (cloud) from
+        // `mistral:7b` (Ollama). A family missing here silently routes a
+        // paying customer's model to localhost.
+        prefixes: &[
+            "mistral-",
+            "codestral-",
+            "ministral-",
+            "pixtral-",
+            "magistral-",
+            "open-mistral-",
+            "open-mixtral-",
+        ],
     },
     Provider {
         name: "Groq",
@@ -1027,6 +1039,30 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 /// surfaces as a `length` truncation notice, same as the OpenAI path.
 const ANTHROPIC_MAX_TOKENS: u32 = 128_000;
 
+/// Output ceilings for the families that sit below [`ANTHROPIC_MAX_TOKENS`].
+/// Prefix-matched in order, so the more specific `claude-3-5-` / `claude-3-7-`
+/// entries must precede the `claude-3-` catch-all. Sending a `max_tokens`
+/// above a model's own cap is a 400 on the very first message, which is why
+/// this clamps down and never up: an unlisted model keeps the constant, and
+/// too *low* a value only truncates with a `length` notice.
+const ANTHROPIC_MAX_TOKENS_BY_PREFIX: &[(&str, u32)] = &[
+    ("claude-3-5-", 8_192),
+    ("claude-3-7-", 8_192),
+    ("claude-3-", 4_096),
+    ("claude-opus-4-1", 32_000),
+    ("claude-sonnet-4-5", 64_000),
+    ("claude-haiku-4-5", 64_000),
+    ("claude-opus-4-5", 64_000),
+];
+
+/// The `max_tokens` to request for `model`.
+fn anthropic_max_tokens(model: &str) -> u32 {
+    ANTHROPIC_MAX_TOKENS_BY_PREFIX
+        .iter()
+        .find(|(prefix, _)| model.starts_with(prefix))
+        .map_or(ANTHROPIC_MAX_TOKENS, |(_, cap)| *cap)
+}
+
 /// Build the JSON body for a native Anthropic `/v1/messages` request. `system`
 /// is lifted out of the message list into the top-level field (with a cache
 /// breakpoint); a second breakpoint on the final message caches the growing
@@ -1038,7 +1074,7 @@ fn build_anthropic_body(model: &str, messages: &[Message], tools: Option<&[ToolD
     }
     let mut body = serde_json::json!({
         "model": model,
-        "max_tokens": ANTHROPIC_MAX_TOKENS,
+        "max_tokens": anthropic_max_tokens(model),
         "messages": msgs,
         "stream": true,
     });
@@ -1643,6 +1679,58 @@ mod tests {
             provider_for_model("groq:llama-3.3-70b-versatile").map(|p| p.name),
             Some("Groq")
         );
+    }
+
+    #[test]
+    fn every_mistral_catalog_family_is_a_selector() {
+        // The body test in `provider_selector` only lets through names that
+        // match one of Mistral's `prefixes`, so a family missing from that
+        // list routes a paying customer to localhost. Every family the
+        // dropdown offers must survive the round trip.
+        for model in [
+            "mistral-large-latest",
+            "ministral-8b-latest",
+            "ministral-3b-2410",
+            "codestral-latest",
+            "pixtral-large-latest",
+            "open-mistral-nemo",
+            "open-mixtral-8x22b",
+            "magistral-medium-latest",
+        ] {
+            let tagged = format!("mistral:{model}");
+            let (url, _) = detect_endpoint(&tagged);
+            assert!(url.contains("mistral.ai"), "{tagged} went to {url}");
+            assert_eq!(resolve_model_name(&tagged), model, "{tagged}");
+        }
+        // …while the Ollama tags stay local, which is what the body test
+        // exists for in the first place.
+        for tag in ["mistral:7b", "mistral:latest", "mistral:7b-instruct-v0.3"] {
+            let (url, _) = detect_endpoint(tag);
+            assert_eq!(url, DEFAULT_BASE_URL, "{tag}");
+        }
+    }
+
+    #[test]
+    fn anthropic_max_tokens_clamps_the_lower_families() {
+        // Above a model's own ceiling the API 400s on the first message.
+        assert_eq!(anthropic_max_tokens("claude-sonnet-4-5"), 64_000);
+        assert_eq!(anthropic_max_tokens("claude-haiku-4-5-20251001"), 64_000);
+        assert_eq!(anthropic_max_tokens("claude-opus-4-1"), 32_000);
+        assert_eq!(anthropic_max_tokens("claude-3-5-sonnet-20241022"), 8_192);
+        assert_eq!(anthropic_max_tokens("claude-3-7-sonnet-latest"), 8_192);
+        assert_eq!(anthropic_max_tokens("claude-3-opus-20240229"), 4_096);
+        // The specific prefixes must win over the `claude-3-` catch-all.
+        assert_ne!(anthropic_max_tokens("claude-3-5-haiku-latest"), 4_096);
+        // Anything unlisted keeps the constant: clamping down is safe,
+        // clamping a new model down by guess is not.
+        assert_eq!(anthropic_max_tokens("claude-fable-5"), ANTHROPIC_MAX_TOKENS);
+        assert_eq!(
+            anthropic_max_tokens("claude-opus-4-7"),
+            ANTHROPIC_MAX_TOKENS
+        );
+        // And the body actually carries it.
+        let body = build_anthropic_body("claude-opus-4-1", &[], None);
+        assert_eq!(body["max_tokens"], 32_000);
     }
 
     #[test]
