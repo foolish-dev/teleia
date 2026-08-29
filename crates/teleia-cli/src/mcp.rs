@@ -45,6 +45,39 @@ pub struct McpClient {
     next_id: u64,
 }
 
+/// Build the child `Command` for one MCP server. Split out of
+/// [`McpClient::spawn`] so the environment a third-party binary is
+/// handed can be asserted without spawning anything.
+///
+/// An MCP server is third-party code — usually `npx something` — and
+/// teleia spawns it at boot (cli/src/main.rs:596). The spawn consults
+/// the permission mode not at all: in plan mode `plan_gate` returns
+/// `Block` for every routed *call* (teleia-agent:381), yet the server
+/// it refuses to talk to has held teleia's provider keys since launch,
+/// is long-lived, and has the network up. Same denylist as cargo
+/// ([`teleia_tools::scrub_credentials`]), and the same limit: this
+/// stops a server that merely inherits the key, not one written to go
+/// and read it out of teleia's own process environment.
+///
+/// The scrub runs *before* the `entry.env` loop, not after. That map is
+/// documented on `crate::config::McpEntry` as overriding the parent for
+/// this child, so a server that genuinely needs a key can still be
+/// handed one, deliberately, in config.toml. Reversing the two would
+/// silently break that.
+fn mcp_command(entry: &McpEntry) -> Command {
+    let mut cmd = Command::new(&entry.command);
+    cmd.args(&entry.args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    teleia_tools::scrub_credentials(&mut cmd);
+    for (k, v) in &entry.env {
+        cmd.env(k, v);
+    }
+    cmd
+}
+
 impl McpClient {
     /// Spawn the server, do the JSON-RPC handshake, and return a
     /// client ready for `list_tools` / `call_tool`. The server's
@@ -53,15 +86,7 @@ impl McpClient {
     /// surface via the `Result` and the boot-time warning in
     /// [`McpRegistry::spawn_all`].
     pub async fn spawn(name: &str, entry: &McpEntry) -> Result<Self> {
-        let mut cmd = Command::new(&entry.command);
-        cmd.args(&entry.args)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .kill_on_drop(true);
-        for (k, v) in &entry.env {
-            cmd.env(k, v);
-        }
+        let mut cmd = mcp_command(entry);
         let mut child = cmd
             .spawn()
             .with_context(|| format!("spawn MCP server `{}`", entry.command))?;
@@ -628,6 +653,72 @@ impl ToolRouter for McpRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::LspEntry;
+
+    #[test]
+    fn spawned_servers_do_not_inherit_teleias_provider_keys() {
+        // An MCP server is third-party code launched at boot
+        // (cli/src/main.rs:596). The spawn consults the permission mode
+        // not at all — plan mode `Block`s every routed *call*
+        // (teleia-agent:381) but cannot un-hand a key to a server that has
+        // been running with it since launch.
+        let entry = McpEntry {
+            command: "npx".to_string(),
+            args: vec!["some-mcp-server".to_string()],
+            env: Default::default(),
+        };
+        let cmd = mcp_command(&entry);
+        let envs: Vec<(String, bool)> = cmd
+            .as_std()
+            .get_envs()
+            .map(|(k, v)| (k.to_string_lossy().into_owned(), v.is_some()))
+            .collect();
+        for p in teleia_llm::PROVIDERS {
+            assert!(
+                envs.iter().any(|(k, set)| k == p.env_var && !*set),
+                "MCP child keeps {}: {envs:?}",
+                p.env_var
+            );
+        }
+
+        // An explicit per-server `env` still wins: it is documented on
+        // McpEntry as overriding the parent for this child, so the scrub
+        // sets the default and the user keeps the override. This is the
+        // assertion that fails if the two are ever reordered.
+        let mut env = std::collections::BTreeMap::new();
+        env.insert("ANTHROPIC_API_KEY".to_string(), "deliberate".to_string());
+        let entry = McpEntry {
+            command: "npx".to_string(),
+            args: vec![],
+            env,
+        };
+        let cmd = mcp_command(&entry);
+        assert!(
+            cmd.as_std()
+                .get_envs()
+                .any(|(k, v)| k == "ANTHROPIC_API_KEY" && v.is_some_and(|v| v == "deliberate")),
+            "an explicit config.toml env override must survive the scrub"
+        );
+
+        // LSP servers are the same class of third-party binary, spawned
+        // the same way at boot (cli/src/main.rs:568), with no `env` map to
+        // override with.
+        let lsp = LspEntry {
+            command: "rust-analyzer".to_string(),
+            args: vec![],
+            root_patterns: vec![],
+        };
+        let cmd = crate::lsp::lsp_command(&lsp);
+        for p in teleia_llm::PROVIDERS {
+            assert!(
+                cmd.as_std()
+                    .get_envs()
+                    .any(|(k, v)| k == p.env_var && v.is_none()),
+                "LSP child keeps {}",
+                p.env_var
+            );
+        }
+    }
 
     #[test]
     fn tool_call_outcome_surfaces_is_error_as_failure() {

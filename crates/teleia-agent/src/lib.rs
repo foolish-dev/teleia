@@ -358,6 +358,15 @@ fn inspects_only(name: &str) -> bool {
 /// `build.rs` and proc macros — strictly a superset of `bash`, which
 /// plan mode blocks. `format` is not here: `cargo fmt --all`
 /// (teleia-tools:1522) rewrites every file, so it stays Block.
+///
+/// `teleia_tools::scrub_credentials` keeps teleia's own provider keys
+/// out of the environment those cargo children are handed, so a
+/// `build.rs` cannot simply `env::var("ANTHROPIC_API_KEY")`. The code
+/// still runs, and still runs as the user: it can read teleia's own
+/// process environment back out of the OS (`/proc/<pid>/environ` on
+/// Linux, `KERN_PROCARGS2` on macOS, the PEB on Windows), or open
+/// `~/.ssh/id_rsa` and teleia's own config directly. This prompt is
+/// still the boundary; the scrub only removes the accident.
 fn needs_consent(name: &str) -> bool {
     matches!(
         name,

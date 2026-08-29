@@ -73,20 +73,36 @@ pub struct LspClient {
     open_docs: HashMap<String, i32>,
 }
 
+/// Build the child `Command` for one LSP server. Split out of
+/// [`LspClient::spawn`] for the same reason `mcp_command` is (see
+/// cli/src/mcp.rs): the environment handed to a third-party binary is
+/// then assertable without spawning it.
+///
+/// rust-analyzer et al. are third-party binaries spawned at boot
+/// (cli/src/main.rs:568) with no gate in front of them; they have no
+/// business holding teleia's provider keys, and unlike MCP, `LspEntry`
+/// has no `env` map to grant one back with, so the scrub is
+/// unconditional here.
+pub(crate) fn lsp_command(entry: &LspEntry) -> Command {
+    let mut cmd = Command::new(&entry.command);
+    cmd.args(&entry.args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        // Null, not inherit: the TUI owns the alternate screen, and a
+        // server that chats on stderr (rust-analyzer's progress) paints
+        // straight into the frame. mcp.rs makes the same call.
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    teleia_tools::scrub_credentials(&mut cmd);
+    cmd
+}
+
 impl LspClient {
     /// Spawn the LSP server, exchange the `initialize` handshake, send
     /// the `initialized` notification, and return a client ready for
     /// (eventually) request/response cycles.
     pub async fn spawn(name: &str, entry: &LspEntry) -> Result<Self> {
-        let mut cmd = Command::new(&entry.command);
-        cmd.args(&entry.args)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            // Null, not inherit: the TUI owns the alternate screen, and a
-            // server that chats on stderr (rust-analyzer's progress) paints
-            // straight into the frame. mcp.rs:60 made the same call.
-            .stderr(std::process::Stdio::null())
-            .kill_on_drop(true);
+        let mut cmd = lsp_command(entry);
         let mut child = cmd
             .spawn()
             .with_context(|| format!("spawn LSP server `{}`", entry.command))?;

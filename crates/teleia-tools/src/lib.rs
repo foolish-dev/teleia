@@ -105,8 +105,7 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         ToolDef::new(
             "bash",
-            "Run a shell command and return its combined stdout/stderr. 30s timeout.",
-            json!({
+            "Run a shell command and return its combined stdout/stderr. 30s timeout. The child does not inherit teleia's own LLM provider API keys: ANTHROPIC_API_KEY, OPENAI_API_KEY and the rest of the provider table are removed from the environment of every process teleia spawns, `cargo` and `git` included, so a repository's build.rs, proc macros or test suite cannot read them. Every other variable is inherited unchanged. If a command genuinely needs one — a project whose own tests call that provider — say so and tell the user to relaunch teleia with TELEIA_INHERIT_PROVIDER_KEYS=1; you cannot set it yourself, because a child process cannot change its parent's environment. Do not treat an empty provider key as a broken shell and retry.",            json!({
                 "type": "object",
                 "properties": {
                     "command": { "type": "string" }
@@ -591,15 +590,18 @@ struct BashArgs {
 
 async fn bash_tool(args: Value) -> Result<String> {
     let BashArgs { command } = serde_json::from_value(args)?;
-    let mut cmd = Command::new("bash");
-    cmd.arg("-lc").arg(&command).stdout(Stdio::piped());
-    // SAFETY: pre_exec runs in the forked child before exec. dup2(1, 2)
-    // routes the child's stderr fd onto stdout's pipe, so writes from
-    // both streams land in one buffer in emit order. setpgid(0, 0) puts
-    // bash in its own process group (pgid = bash's pid) so the timeout
-    // arm can SIGKILL the whole tree, not just bash. Unix-only; on other
-    // platforms stderr stays on the inherited fd and the timeout falls
-    // back to start_kill which only reaps bash itself.
+    // Same treatment as `run_command`: `bash 'cargo test'` reaches the
+    // same build.rs, and this is also the arm where a scrubbed child
+    // means `bash 'cat /proc/self/environ'` reads the *child's* environ
+    // rather than a provider key. Best-effort only — see
+    // `scrub_credentials` on the login shell.
+    let mut cmd = bash_command(&command); // SAFETY: pre_exec runs in the forked child before exec. dup2(1, 2)
+                                          // routes the child's stderr fd onto stdout's pipe, so writes from
+                                          // both streams land in one buffer in emit order. setpgid(0, 0) puts
+                                          // bash in its own process group (pgid = bash's pid) so the timeout
+                                          // arm can SIGKILL the whole tree, not just bash. Unix-only; on other
+                                          // platforms stderr stays on the inherited fd and the timeout falls
+                                          // back to start_kill which only reaps bash itself.
     #[cfg(unix)]
     unsafe {
         cmd.pre_exec(|| {
@@ -1443,12 +1445,97 @@ fn format_unix(t: u64, _local: bool) -> String {
     format!("{t}")
 }
 
+/// Variables removed from every child process teleia spawns. A
+/// *denylist*, and that choice is the whole design: the scrub only ever
+/// removes names on [`teleia_llm::PROVIDERS`], so nothing a build needs
+/// can break.
+///
+/// An allowlist (`env_clear` + re-add) is the reflex and it breaks the
+/// tool. Before `cargo check` starts you owe it PATH, HOME, TMPDIR,
+/// CARGO_HOME, RUSTUP_HOME, RUSTUP_TOOLCHAIN, RUSTC_WRAPPER, RUSTFLAGS,
+/// CC/CXX/PKG_CONFIG_PATH, the proxy vars, and on Windows SYSTEMROOT,
+/// COMSPEC, PATHEXT, TEMP, APPDATA, PROGRAMFILES and friends — ~50
+/// names, and drop SYSTEMROOT alone and DLL resolution fails before
+/// cargo runs. Worse, it would have to keep SSH_AUTH_SOCK and
+/// CARGO_REGISTRIES_*_TOKEN for private git and registry dependencies
+/// to resolve, so a list built to protect secrets would be obliged to
+/// hand `build.rs` two of the good ones.
+///
+/// `ENV_PUBLIC_VARS` is not that allowlist either and must not be
+/// reused as one: it answers "may this value be *printed* into a
+/// transcript", which is a different question from "does the build
+/// *need* it". Printing `DATABASE_URL` is a leak; a build reading it is
+/// Tuesday.
+///
+/// WHAT THIS DOES. `lint`/`typecheck`/`test` shell out to cargo, which
+/// compiles and runs `build.rs` and proc macros, so
+/// `env::var("ANTHROPIC_API_KEY")` in a cloned repo is otherwise a key
+/// in the transcript behind one approved keystroke. This removes that.
+///
+/// WHAT THIS IS NOT: a security boundary. The child runs as the same
+/// user with teleia as an ancestor, so hostile code can read teleia's
+/// own process environment back out of the OS — `/proc/<pid>/environ`
+/// on Linux (readable by any same-uid process; Yama's `ptrace_scope`
+/// gates ATTACH, not this read), `KERN_PROCARGS2` or `ps -Eww` on
+/// macOS, `ReadProcessMemory` into the PEB on Windows — and teleia's
+/// own environment still holds the key, which nothing here can change.
+/// It can equally open `~/.aws/credentials` or teleia's config and
+/// POST them out. `bash -lc` is a login shell besides, so a key
+/// exported from `/etc/profile` or `~/.bash_profile` comes back inside
+/// the child (`--noprofile --norc` would cost the user their PATH,
+/// aliases and direnv on every call — a worse trade). Treat this as
+/// removing the accident, not as containing an attacker, and do not
+/// let a later edit upgrade this comment into a guarantee.
+pub fn scrub_credentials(cmd: &mut Command) {
+    if provider_keys_inherited() {
+        return;
+    }
+    for p in teleia_llm::PROVIDERS {
+        cmd.env_remove(p.env_var);
+    }
+}
+
+/// Opt-out for the one real false positive: a project whose own tests
+/// call an LLM provider. Read from *teleia's* environment, so setting
+/// it is a deliberate act by the user before launch — a child cannot
+/// change its parent's environment, which means the model cannot switch
+/// the scrub off from inside a tool call.
+fn provider_keys_inherited() -> bool {
+    std::env::var_os("TELEIA_INHERIT_PROVIDER_KEYS").is_some_and(|v| !v.is_empty())
+}
+
+/// Every child teleia spawns for a tool is built here, so the
+/// environment it is handed can be asserted without spawning anything —
+/// which is what lets the test pin the wiring on all three platforms
+/// without mutating this process's environment. Stdio is deliberately
+/// left to the caller: `run_command` and `bash_tool` want different
+/// handles, and this must not silently change either.
+fn scrubbed_command(program: &str, args: &[&str]) -> Command {
+    let mut c = Command::new(program);
+    c.args(args);
+    scrub_credentials(&mut c);
+    c
+}
+
+/// `bash -lc <command>`, scrubbed. Split out of [`bash_tool`] for the
+/// same reason as [`scrubbed_command`]. Byte-identical to what
+/// `bash_tool` built before, stdin included: it stays inherited.
+fn bash_command(command: &str) -> Command {
+    let mut cmd = scrubbed_command("bash", &["-lc", command]);
+    cmd.stdout(Stdio::piped());
+    cmd
+}
+
 /// Run `cmd args…` and return combined stdout/stderr + exit hint.
 /// Used by lint/format/typecheck; missing binary surfaces as a
 /// "not found" error so the agent knows to suggest installing.
+///
+/// For a `.rs` path these are `cargo clippy`/`check`/`test`/`fmt`,
+/// which compile and run `build.rs` and proc macros out of the working
+/// tree — so the environment handed over here is read by code the
+/// repository controls. See [`scrub_credentials`].
 async fn run_command(cmd: &str, args: &[&str]) -> Result<String> {
-    let mut c = Command::new(cmd);
-    c.args(args);
+    let mut c = scrubbed_command(cmd, args);
     c.stdin(Stdio::null());
     c.stdout(Stdio::piped());
     c.stderr(Stdio::piped());
@@ -2763,6 +2850,107 @@ mod tests {
         }
     }
 
+    #[test]
+    fn scrub_credentials_keeps_provider_keys_out_of_every_child() {
+        // The real threat is a `build.rs` reading ANTHROPIC_API_KEY under
+        // `cargo test` (:1559), which a unit test cannot stage. Assert the
+        // property that removes it instead, against the command's pending
+        // env modifications — `get_envs` reports a removal as `None` — so
+        // nothing is spawned and no `set_var` races `environ` against the
+        // sibling tests in this binary that do fork.
+        assert!(
+            !provider_keys_inherited(),
+            "TELEIA_INHERIT_PROVIDER_KEYS must be unset to run this test"
+        );
+        let pending = |c: &Command| -> Vec<(String, bool)> {
+            c.as_std()
+                .get_envs()
+                .map(|(k, v)| (k.to_string_lossy().into_owned(), v.is_some()))
+                .collect()
+        };
+
+        let mut c = Command::new("cargo");
+        c.env("PATH", "/usr/bin");
+        c.env("CARGO_HOME", "/c");
+        scrub_credentials(&mut c);
+        let envs = pending(&c);
+        for p in teleia_llm::PROVIDERS {
+            assert!(
+                envs.iter().any(|(k, set)| k == p.env_var && !*set),
+                "{} is not scrubbed: {envs:?}",
+                p.env_var
+            );
+        }
+        // Nothing a build needs is disturbed: the scrub only ever
+        // *removes* names on the provider table. These are the assertions
+        // that fail if anyone turns it into an allowlist.
+        for keep in ["PATH", "CARGO_HOME"] {
+            assert!(
+                envs.iter().any(|(k, set)| k == keep && *set),
+                "{keep} lost: {envs:?}"
+            );
+        }
+        assert_eq!(
+            envs.len(),
+            teleia_llm::PROVIDERS.len() + 2,
+            "the scrub touched something outside the provider table: {envs:?}"
+        );
+
+        // And the wiring: both spawn paths are built through it. Pinned by
+        // construction, so this covers `bash` on Windows too — where a
+        // behavioural test could not run at all.
+        for built in [
+            scrubbed_command("cargo", &["test"]),
+            bash_command("echo hi"),
+        ] {
+            let envs = pending(&built);
+            for p in teleia_llm::PROVIDERS {
+                assert!(
+                    envs.iter().any(|(k, set)| k == p.env_var && !*set),
+                    "{} still reaches the child: {envs:?}",
+                    p.env_var
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bash_definition_documents_the_credential_scrub() {
+        // `scrub_credentials` makes $ANTHROPIC_API_KEY empty inside bash
+        // and inside anything cargo runs. An auth failure in a project's
+        // own tests then looks exactly like a broken shell, and a model
+        // that retries it blindly burns `retry_streak` into the
+        // MAX_IDENTICAL_FAILURES stop (teleia-agent:1358-1375). The
+        // description is the only place it can learn the difference.
+        let def = definitions()
+            .into_iter()
+            .find(|d| d.function.name == "bash")
+            .expect("bash is a builtin");
+        let desc = def.function.description;
+
+        // The opt-out has to be nameable, or the model can describe the
+        // symptom but not the fix.
+        assert!(desc.contains("TELEIA_INHERIT_PROVIDER_KEYS"), "{desc}");
+        // Every variable the description promises is scrubbed must be on
+        // the table the scrub actually walks — otherwise the model learns
+        // a rule the code does not implement, which is the same failure
+        // `env_definition_documents_the_redaction` catches for `env`.
+        for named in ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"] {
+            assert!(
+                desc.contains(named),
+                "bash description dropped {named}: {desc}"
+            );
+            assert!(
+                teleia_llm::PROVIDERS.iter().any(|p| p.env_var == named),
+                "described as scrubbed but not on the provider table: {named}"
+            );
+        }
+        // The scrub is a denylist. The description must not imply the
+        // child's environment is cleared, or the model stops trusting the
+        // variables that are still there — PATH and CARGO_HOME included.
+        assert!(desc.contains("Every other variable is inherited"), "{desc}");
+        assert!(!desc.contains("env_clear"), "{desc}");
+    }
     #[tokio::test]
     async fn replace_substitutes_regex_and_counts() {
         let path = tmp_path("replace.txt");
