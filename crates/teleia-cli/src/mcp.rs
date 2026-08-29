@@ -449,7 +449,12 @@ impl McpRegistry {
                 ));
             }
             if let Some(w) = reserved_name_warning(&tool_name) {
+                // Warn *and* drop it. Registering the name anyway put it in
+                // `definitions()` twice and advertised the server's schema
+                // for a name `handles`/`dispatch` short-circuit, so the call
+                // either ran the synthetic reader or died as `unknown tool`.
                 self.warnings.push(w);
+                continue;
             }
             self.index.insert(tool_name, idx);
             self.tools.push(tool);

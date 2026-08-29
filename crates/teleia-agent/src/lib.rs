@@ -421,6 +421,7 @@ fn plan_gate(name: &str, arguments: &str, routed: bool) -> PlanGate {
 fn allow_all_promotes(mode: PermissionMode) -> bool {
     matches!(mode, PermissionMode::Build)
 }
+
 /// A tool call whose result rejects a required argument as `undefined` /
 /// missing usually means the model dropped a large value — most often a
 /// file's `content` — while encoding the call (these reasoning models can
@@ -693,6 +694,7 @@ impl Agent {
         }
         self.router = Some(router);
     }
+
     /// Record which tool defs came from which MCP server, and apply any
     /// `mcp_disabled` pref so the persisted choice survives restart.
     /// Call after [`Agent::set_tool_router`].
@@ -759,14 +761,13 @@ impl Agent {
         // A def that lost a name collision was never advertised, so the
         // def carrying that name is the *built-in* — dropping it here
         // would delete a built-in tool from the catalogue.
-        let shadowed = &self.shadowed_router_tools;
-        let drop: std::collections::HashSet<&str> = defs
+        let drop: std::collections::HashSet<String> = defs
             .iter()
-            .map(|d| d.function.name.as_str())
-            .filter(|n| !shadowed.contains(*n))
+            .map(|d| d.function.name.clone())
+            .filter(|n| !self.shadowed_router_tools.contains(n))
+            .filter(|n| !self.enabled_peer_offers(n, name))
             .collect();
-        self.tools
-            .retain(|t| !drop.contains(t.function.name.as_str()));
+        self.tools.retain(|t| !drop.contains(&t.function.name));
     }
 
     fn show_mcp_tools(&mut self, name: &str) {
@@ -815,10 +816,29 @@ impl Agent {
     /// name the model saw earlier in the session still dispatches to the
     /// server the user just disabled.
     fn is_disabled_router_tool(&self, name: &str) -> bool {
-        self.mcp_disabled.iter().any(|server| {
-            self.mcp_servers
-                .get(server)
-                .is_some_and(|defs| defs.iter().any(|d| d.function.name == name))
+        let mut on_a_disabled_server = false;
+        for (server, defs) in &self.mcp_servers {
+            if defs.iter().any(|d| d.function.name == name) {
+                // MCP names are not namespaced, so two servers can claim
+                // one. Disabling either must not take the name away while
+                // the other is still on.
+                if !self.mcp_disabled.contains(server) {
+                    return false;
+                }
+                on_a_disabled_server = true;
+            }
+        }
+        on_a_disabled_server
+    }
+
+    /// Whether a server other than `except`, and still enabled, advertises
+    /// `tool`. The catalogue entry for a contested name belongs to that
+    /// server, so disabling `except` must leave it alone.
+    fn enabled_peer_offers(&self, tool: &str, except: &str) -> bool {
+        self.mcp_servers.iter().any(|(server, defs)| {
+            server != except
+                && !self.mcp_disabled.contains(server)
+                && defs.iter().any(|d| d.function.name == tool)
         })
     }
 
@@ -1312,7 +1332,9 @@ impl Agent {
                     yield TurnEvent::ToolStart {
                         name: call.function.name.clone(),
                         arguments: call.function.arguments.clone(),
-                    };                    let output = if routed {
+                    };
+
+                    let output = if routed {
                         let r = self.router.as_mut().unwrap();
                         match r.dispatch(&call.function.name, &call.function.arguments).await {
                             Ok(o) => o,
@@ -2186,6 +2208,7 @@ mod tests {
         // pinned anyway so a future caller can't read it as "promote".
         assert!(!allow_all_promotes(PermissionMode::Auto));
     }
+
     #[test]
     fn disable_mcp_hides_servers_tools_from_catalogue() {
         let mut agent = fake_agent();
@@ -2228,6 +2251,34 @@ mod tests {
         );
         agent.enable_mcp("git").unwrap();
         assert!(agent.is_routed("git_log"), "re-enabling must restore it");
+    }
+
+    #[test]
+    fn disabling_one_server_leaves_a_peers_identically_named_tool_alone() {
+        // MCP names are not namespaced. Disabling A must not take `search`
+        // away from B, which is still on — the user would lose a working
+        // tool from a server they never touched.
+        let mut agent = fake_agent();
+        agent.set_tool_router(Box::new(FakeRouter("search")));
+        let mut servers = BTreeMap::new();
+        servers.insert("alpha".to_string(), vec![fake_def("search")]);
+        servers.insert("bravo".to_string(), vec![fake_def("search")]);
+        agent.tools.push(fake_def("search"));
+        agent.set_mcp_servers(servers);
+
+        agent.disable_mcp("alpha").unwrap();
+        assert!(
+            agent.is_routed("search"),
+            "bravo still offers `search`, so it must keep dispatching"
+        );
+        assert!(
+            agent.tools().iter().any(|d| d.function.name == "search"),
+            "bravo's `search` must stay in the catalogue"
+        );
+
+        // Only once every server offering the name is off does it go.
+        agent.disable_mcp("bravo").unwrap();
+        assert!(!agent.is_routed("search"));
     }
 
     #[test]

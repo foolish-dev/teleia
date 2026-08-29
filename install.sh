@@ -86,8 +86,11 @@ verify_prebuilt() {
     # failing — DNS, a refused connection, a captive portal, a 5xx behind a
     # proxy — and treating those as "no checksum published" is how an
     # unverified binary lands on PATH exactly when something is wrong.
-    curl -fsSL --output "$TMP/SHA256SUMS" "$sums_url" 2>/dev/null
-    fetch_status=$?
+    # `|| fetch_status=$?`, not a bare call: the script runs under `set -e`
+    # (:17) and a standalone failing command would kill it before the status
+    # could be read — silently, since neither branch below would run.
+    fetch_status=0
+    curl -fsSL --output "$TMP/SHA256SUMS" "$sums_url" 2>/dev/null || fetch_status=$?
     if [ "$fetch_status" -eq 22 ]; then
         echo "note: no SHA256SUMS for this release — skipping integrity check" >&2
         return 0
