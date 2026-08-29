@@ -21,25 +21,10 @@ git log/blame and the tests that pin it — wrong-looking is often
 deliberate; fix only what you can show is broken.
 
 ## 4. Goal-driven execution
-Define success criteria, then loop until verified:
+Define success criteria, then verify against them. Pin new behavior with
+a test first; for a bug, write the failing test first.
 
-    cargo fmt --all -- --check
-    cargo clippy --all-targets --locked -- -D warnings
-    cargo build --all-targets --locked
-    cargo test --all-targets --locked
-
-Not done until all four pass. Pin new behavior with a test first; for a
-bug, write the failing test first.
-
-## 5. Auto-prompting loop
-Drive the task to done yourself: plan, act, verify, repeat — no nudge
-needed. A failing check is a cue to keep going, not to stop; don't narrate
-progress or ask "shall I continue?" — continue. Still stop where the
-earlier principles reserve it: real ambiguity, a user-only decision, an
-irreversible or outward-facing action — or when the same check keeps
-failing (say what's blocking rather than spin).
-
-## 6. Suggestions when done
+## 5. Suggestions when done
 End every finished task with a short list of concrete suggestions:
 things noticed but not done — follow-ups, risks, cleanups. Offers,
 not actions.
