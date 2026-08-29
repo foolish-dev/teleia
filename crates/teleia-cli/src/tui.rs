@@ -2685,8 +2685,18 @@ async fn run_turn<B: ratatui::backend::Backend>(
                     // Single-keystroke gate: y/n/a (Esc = deny).
                     if let Some(decision) = approval_decision(k) {
                         if let Some(pa) = state.pending_approval.take() {
+                            // Mirrors the agent's `allow_all_promotes`:
+                            // allow-all only promotes out of build. The
+                            // agent is mutably borrowed by the running
+                            // turn, so this can't be read back from it.
                             if matches!(decision, ToolApproval::AllowAll) {
-                                state.permission_mode = PermissionMode::Auto;
+                                if state.permission_mode == PermissionMode::Build {
+                                    state.permission_mode = PermissionMode::Auto;
+                                } else {
+                                    state.status =
+                                        "allow-all promotes only out of BUILD — approved this call"
+                                            .into();
+                                }
                             }
                             // A dropped responder just means the agent
                             // gave up before we got back; treat as if
