@@ -56,7 +56,6 @@ const SLASH_COMMANDS: &[&str] = &[
     "copy",
     "delete",
     "effort",
-    "entropy",
     "exit",
     "help",
     "key",
@@ -537,22 +536,11 @@ struct State {
     /// Whether to fire a desktop notification after each chat turn ends.
     /// Toggled at runtime via `/notify`; defaults to on.
     notify: bool,
-    /// Sticky auto-prompting. While on, after a chat turn that used a
-    /// tool, `submit_input` re-submits "continue" and runs again — driving
-    /// the task to completion on its own — until a turn finishes without
-    /// touching a tool, the user interrupts, or the [`LOOP_MAX`] cap is hit.
-    /// Toggled via `/entropy` (its UI name; this field + pref key stay
-    /// `autoprompt`), persisted across launches; defaults off.
-    autoprompt: bool,
     /// When a turn overflows the model's context window, automatically
     /// `/compact` (summarize + reseed a fresh session) and retry the turn
     /// once, instead of surfacing a dead-end error. Toggled via
     /// `/autocompact`, persisted across launches; defaults on.
     auto_compact: bool,
-    /// Set by `run_turn`: did the turn just streamed dispatch at least one
-    /// tool? The auto-prompt loop reads it right after to decide whether the
-    /// agent still has work to do. Reset at the start of every turn.
-    turn_used_tool: bool,
     /// Active mouse drag-selection, if any. Set on mouse-down inside the
     /// chat area, updated on drag, cleared on the next mouse-down (or Esc).
     /// On mouse-up the selected text is copied to the system clipboard and
@@ -685,19 +673,6 @@ struct LoopSpec {
 /// larger requested count is clamped to this and the banner shows it.
 const LOOP_MAX: usize = 100;
 
-/// The prompt re-submitted each round of sticky auto-prompting
-/// (`/entropy`). Generic on purpose — the agent decides from its own
-/// prior work what "continue" means, per the auto-prompting-loop guideline
-/// carried in the system prompt.
-const AUTO_CONTINUE_PROMPT: &str = "continue";
-
-/// Whether sticky auto-prompting should fire another `continue` turn: the
-/// mode is armed, the last turn finished cleanly *and* touched a tool (did
-/// work rather than just answering), and we're under [`LOOP_MAX`].
-fn should_auto_continue(armed: bool, outcome: TurnOutcome, used_tool: bool, steps: usize) -> bool {
-    armed && outcome == TurnOutcome::Completed && used_tool && steps < LOOP_MAX
-}
-
 pub struct KeyEntry {
     pub provider: String,
     pub env_var: String,
@@ -735,9 +710,7 @@ impl State {
             hostname: hostname(),
             username: username(),
             notify: true,
-            autoprompt: false,
             auto_compact: true,
-            turn_used_tool: false,
             selection: None,
             log_area: Rect::default(),
             pending_approval: None,
@@ -953,9 +926,6 @@ pub async fn run(
     state.input_history = agent.input_history(500);
     if let Some(v) = agent.get_pref("notify") {
         state.notify = v == "on";
-    }
-    if let Some(v) = agent.get_pref("autoprompt") {
-        state.autoprompt = v == "on";
     }
     if let Some(v) = agent.get_pref("auto_compact") {
         state.auto_compact = v == "on";
@@ -1741,19 +1711,7 @@ async fn submit_input<B: ratatui::backend::Backend>(
     } else {
         state.push(Entry::User(trimmed.to_string()));
         state.working = true;
-        let mut outcome = run_turn_ac(terminal, state, agent, trimmed.to_string()).await;
-        // Sticky auto-prompting: keep the agent going on its own. After a
-        // turn that used a tool (did work rather than just answering),
-        // re-submit "continue" and run again — stopping as soon as a turn
-        // finishes without touching a tool, the user interrupts, or the
-        // safety cap is hit.
-        let mut steps = 0;
-        while should_auto_continue(state.autoprompt, outcome, state.turn_used_tool, steps) {
-            steps += 1;
-            state.push(Entry::Info(format!("entropy {steps}")));
-            state.push(Entry::User(AUTO_CONTINUE_PROMPT.to_string()));
-            outcome = run_turn_ac(terminal, state, agent, AUTO_CONTINUE_PROMPT.to_string()).await;
-        }
+        run_turn_ac(terminal, state, agent, trimmed.to_string()).await;
         state.working = false;
     }
     state.tokens = agent.tokens();
@@ -1975,7 +1933,6 @@ fn translate_ex(cmd: &str) -> Result<String, String> {
         "theme" | "colorscheme" | "colo" => format!("theme {arg}"),
         "notify" | "notifications" => format!("notify {arg}"),
         "transparent" | "transparency" | "transp" => format!("transparent {arg}"),
-        "entropy" => format!("entropy {arg}"),
         "thinking" => format!("thinking {arg}"),
         "autocompact" => format!("autocompact {arg}"),
         "cd" | "lcd" | "tcd" => format!("cd {arg}"),
@@ -2129,7 +2086,7 @@ fn arg_placeholder(cmd: &str) -> Option<&'static str> {
         "save" | "load" | "delete" | "rm" => Some(" NAME"),
         "model" => Some(" [NAME]"),
         "theme" => Some(" [NAME]"),
-        "notify" | "transparent" | "entropy" | "thinking" | "autocompact" => Some(" [on|off]"),
+        "notify" | "transparent" | "thinking" | "autocompact" => Some(" [on|off]"),
         "prompt" => Some(" [NAME]"),
         "key" => Some(" PROVIDER"),
         "cd" => Some(" PATH"),
@@ -2234,10 +2191,7 @@ fn compute_menu(
                 kind: MenuKind::Theme,
             });
         }
-        if matches!(
-            cmd,
-            "notify" | "transparent" | "entropy" | "thinking" | "autocompact"
-        ) {
+        if matches!(cmd, "notify" | "transparent" | "thinking" | "autocompact") {
             let items: Vec<String> = ["on", "off"]
                 .iter()
                 .filter(|n| n.starts_with(arg))
@@ -2344,7 +2298,6 @@ const EX_COMMANDS: &[&str] = &[
     "delete",
     "edit",
     "effort",
-    "entropy",
     "exit",
     "file",
     "help",
@@ -2378,7 +2331,7 @@ fn ex_arg_placeholder(cmd: &str) -> Option<&'static str> {
     match cmd {
         "write" | "load" | "edit" | "delete" => Some(" NAME"),
         "model" | "theme" | "colorscheme" => Some(" [NAME]"),
-        "notify" | "transparent" | "entropy" | "thinking" | "autocompact" => Some(" [on|off]"),
+        "notify" | "transparent" | "thinking" | "autocompact" => Some(" [on|off]"),
         "mcps" => Some(" [enable|disable NAME]"),
         "effort" => Some(" [off|low|medium|high|xhigh|max|leetcode]"),
         "context" => Some(" [N|off]"),
@@ -2690,9 +2643,6 @@ async fn run_turn<B: ratatui::backend::Backend>(
     agent: &mut Agent,
     input: String,
 ) -> TurnOutcome {
-    // Reset the per-turn tool marker; the auto-prompt loop reads it after
-    // this turn returns to decide whether the agent still has work to do.
-    state.turn_used_tool = false;
     let stream = agent.turn(input);
     pin_mut!(stream);
     loop {
@@ -2783,9 +2733,6 @@ async fn run_turn<B: ratatui::backend::Backend>(
             evt = stream.next() => {
                 match evt {
                     Some(Ok(e)) => {
-                        if matches!(e, TurnEvent::ToolStart { .. }) {
-                            state.turn_used_tool = true;
-                        }
                         let is_end = matches!(e, TurnEvent::TurnEnd);
                         state.apply(e);
                         if is_end { return TurnOutcome::Completed; }
@@ -3464,30 +3411,6 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
                 if new { "on" } else { "off" }
             )));
         }
-        // UI name is `/entropy`; the internal field + pref key stay `autoprompt`.
-        "entropy" => {
-            let new = match arg.to_ascii_lowercase().as_str() {
-                "on" | "true" | "yes" | "1" => true,
-                "off" | "false" | "no" | "0" => false,
-                "" => !state.autoprompt,
-                _ => {
-                    state.push(Entry::Error(format!(
-                        "usage: /entropy [on|off]  (current: {})",
-                        if state.autoprompt { "on" } else { "off" }
-                    )));
-                    return;
-                }
-            };
-            state.autoprompt = new;
-            set_pref_warn(state, agent, "autoprompt", if new { "on" } else { "off" });
-            state.push(Entry::Info(
-                if new {
-                    "entropy on — after each turn I'll continue on my own until the task is done (esc/^c stops, cap 100)".to_string()
-                } else {
-                    "entropy off".to_string()
-                },
-            ));
-        }
         "autocompact" => {
             let new = match arg.to_ascii_lowercase().as_str() {
                 "on" | "true" | "yes" | "1" => true,
@@ -3667,7 +3590,7 @@ fn handle_slash(state: &mut State, agent: &mut Agent, cmd: &str) {
         }
         "help" | "?" => {
             state.push(Entry::Info(
-                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /effort [off|low|medium|high|xhigh|max|leetcode] · /key PROVIDER · /keys · /mcps · /lsps · /tools · /context · /compact · /plan · /build · /auto · /loop N PROMPT · /prompt [NAME] · /theme [NAME] · /notify [on|off] · /entropy [on|off] · /autocompact [on|off] · /thinking [on|off] · /transparent [on|off] · /copy · /cd PATH · /pwd · /version · /show · /help · /quit"
+                "commands: /reset · /clear · /save NAME · /load NAME · /delete NAME · /list · /model [NAME] · /effort [off|low|medium|high|xhigh|max|leetcode] · /key PROVIDER · /keys · /mcps · /lsps · /tools · /context · /compact · /plan · /build · /auto · /loop N PROMPT · /prompt [NAME] · /theme [NAME] · /notify [on|off] · /autocompact [on|off] · /thinking [on|off] · /transparent [on|off] · /copy · /cd PATH · /pwd · /version · /show · /help · /quit"
                     .into(),
             ));
         }
@@ -3687,26 +3610,6 @@ fn leetcode_badge(th: &Theme, frame: usize) -> Vec<(char, Color)> {
         .chars()
         .enumerate()
         .map(|(i, ch)| (ch, palette[(i + frame / 2) % palette.len()]))
-        .collect()
-}
-
-/// Per-character colours for the animated `entropy` badge. Where the
-/// leetcode badge flows an *ordered* rainbow, entropy *scatters*: each
-/// glyph jumps around a cool decay palette by a hash of (index, frame),
-/// so the colours jitter chaotically — visual disorder. Advances every
-/// other frame so it churns rather than strobes (the loop redraws ~20fps).
-fn entropy_badge(th: &Theme, frame: usize) -> Vec<(char, Color)> {
-    let palette = [th.purple, th.blue, th.cyan, th.green, th.dim];
-    "⟳ entropy"
-        .chars()
-        .enumerate()
-        .map(|(i, ch)| {
-            let seed = (i as u64)
-                .wrapping_mul(0x9E37_79B1)
-                .wrapping_add((frame as u64 / 2).wrapping_mul(0x85EB_CA77));
-            let idx = ((seed ^ (seed >> 13)) as usize) % palette.len();
-            (ch, palette[idx])
-        })
         .collect()
 }
 
@@ -4316,19 +4219,6 @@ fn draw(f: &mut ratatui::Frame, state: &mut State) {
     if state.reasoning_effort.as_deref() == Some("leetcode") {
         status_spans.push(Span::styled(" · ", Style::default().fg(th.dim)));
         for (ch, color) in leetcode_badge(&th, state.frame) {
-            status_spans.push(Span::styled(
-                ch.to_string(),
-                Style::default().fg(color).add_modifier(Modifier::BOLD),
-            ));
-        }
-    }
-    // Sticky auto-prompting (shown as `entropy`) is a persisted mode that
-    // changes behaviour across sessions, so surface it — an animated badge
-    // whose colours scatter chaotically, like the leetcode flourish but
-    // disordered rather than a flowing rainbow.
-    if state.autoprompt {
-        status_spans.push(Span::styled(" · ", Style::default().fg(th.dim)));
-        for (ch, color) in entropy_badge(&th, state.frame) {
             status_spans.push(Span::styled(
                 ch.to_string(),
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
@@ -6516,34 +6406,10 @@ mod tests {
     }
 
     #[test]
-    fn auto_continue_fires_only_while_armed_working_and_under_cap() {
-        use TurnOutcome::*;
-        // Armed, last turn completed and used a tool, under the cap → continue.
-        assert!(should_auto_continue(true, Completed, true, 0));
-        assert!(should_auto_continue(true, Completed, true, LOOP_MAX - 1));
-        // Disarmed → never.
-        assert!(!should_auto_continue(false, Completed, true, 0));
-        // Turn made no tool call → the agent is done working, stop.
-        assert!(!should_auto_continue(true, Completed, false, 0));
-        // Interrupted / errored turn → stop.
-        assert!(!should_auto_continue(true, Stopped, true, 0));
-        // Safety cap reached → stop.
-        assert!(!should_auto_continue(true, Completed, true, LOOP_MAX));
-    }
-
-    #[test]
     fn compact_is_a_listed_command_in_both_surfaces() {
         assert!(SLASH_COMMANDS.contains(&"compact"));
         assert!(EX_COMMANDS.contains(&"compact"));
         assert_eq!(translate_ex("compact").unwrap(), "compact");
-    }
-
-    #[test]
-    fn entropy_is_a_listed_command_with_on_off_completion() {
-        assert!(SLASH_COMMANDS.contains(&"entropy"));
-        assert!(EX_COMMANDS.contains(&"entropy"));
-        assert_eq!(arg_placeholder("entropy"), Some(" [on|off]"));
-        assert_eq!(translate_ex("entropy on").unwrap(), "entropy on");
     }
 
     #[test]
@@ -6972,20 +6838,6 @@ mod tests {
         // least one character's colour differs.
         let f2 = leetcode_badge(&TOKYO_NIGHT, 2);
         assert!(f0.iter().zip(&f2).any(|(a, b)| a.1 != b.1));
-    }
-
-    #[test]
-    fn entropy_badge_spells_the_word_and_animates() {
-        let f0 = entropy_badge(&TOKYO_NIGHT, 0);
-        let word: String = f0.iter().map(|(c, _)| c).collect();
-        assert_eq!(word, "⟳ entropy");
-        // The scatter shifts across frames — some colour differs a few
-        // frames on.
-        let f6 = entropy_badge(&TOKYO_NIGHT, 6);
-        assert!(
-            f0.iter().zip(&f6).any(|(a, b)| a.1 != b.1),
-            "entropy badge should animate between frames"
-        );
     }
 
     #[test]
