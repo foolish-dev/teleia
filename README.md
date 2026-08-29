@@ -84,12 +84,10 @@ Three stances control tool execution — cycle with `Shift+Tab` or set explicitl
 
 | mode      | chip    | behaviour                                                                  | trigger              |
 | --------- | ------- | -------------------------------------------------------------------------- | -------------------- |
-| **PLAN**  | blue    | only read-only tools run — filesystem reads, search, inspection, `sha256`, `web_search`, and `fetch` (plus `git`'s `status` / `diff` / `log`); every mutating tool short-circuits with a synthetic "blocked: plan mode" result | `/plan`, `--plan`    |
-| **BUILD** | green (default) | every tool call pauses for `y` allow / `n` deny / `a` allow-all (auto)                          | `/build`, default    |
+| **PLAN**  | blue    | only inspection built-ins run unprompted — filesystem reads, search, metadata, `sha256`, `diff` (plus `git`'s `status` / `diff` / `log` with non-flag paths); `fetch`, `web_search`, `env`, `lint`, `typecheck` and `test` prompt `y`/`n`/`a` because they reach the network or compile the working tree; every mutating tool, and every MCP or LSP tool regardless of its name, short-circuits with a synthetic "blocked: plan mode" result | `/plan`, `--plan`    || **BUILD** | green (default) | every tool call pauses for `y` allow / `n` deny / `a` allow-all (auto)                          | `/build`, default    |
 | **AUTO**  | red     | every tool dispatches immediately, no prompts                              | `/auto`, `--auto`    |
 
-`a` at any approval prompt allow-alls and flips into AUTO for the rest of the session. `Esc` denies.
-
+`a` at any approval prompt allow-alls. From BUILD it also flips into AUTO for the rest of the session; from PLAN it approves only that call, so one keystroke can't jump the mode you deliberately picked. `Esc` denies.
 ## Keybindings
 
 Four modes: **Insert** (default — type and edit), **Normal** (`Esc` to enter; vim motions), **Visual** (`v` from Normal; charwise selection over the chat scrollback), **Command** (`:` from Normal; vim ex-commands). The status-bar chip and input border colour signal the active mode.
@@ -196,8 +194,7 @@ A few worth calling out: `read` syntax-highlights via scope-aware syntect; `edit
 
 ## Providers
 
-The model name picks the provider. Use `provider:NAME` to disambiguate names that collide with local Ollama models.
-
+The model name picks the provider. Patterns match untagged names only: anything containing a `:` is read as an Ollama `family:tag` reference (`gpt-oss:20b`, `deepseek-r1:8b`, `command-r:latest`) and stays local, unless the part before the colon is a provider name. Use `provider:NAME` to disambiguate names that collide with local Ollama models. A name with no tag is still matched by pattern, so `gpt-oss` goes to OpenAI while `gpt-oss:20b` stays on Ollama — pick the tagged name from the `/model` list.
 | pattern                            | provider     | env var                 |
 | ---------------------------------- | ------------ | ----------------------- |
 | `claude-*`                         | Anthropic    | `ANTHROPIC_API_KEY`     |
@@ -221,6 +218,8 @@ The model name picks the provider. Use `provider:NAME` to disambiguate names tha
 | `deepinfra:NAME`                   | DeepInfra    | `DEEPINFRA_API_KEY`     |
 | `sambanova:NAME`                   | SambaNova    | `SAMBANOVA_API_KEY`     |
 | anything else                      | local Ollama | _none_                  |
+
+`mistral:NAME` is the one selector with a body test, because `mistral` is also an Ollama model family: `mistral:mistral-large-latest` goes to Mistral's API, `mistral:7b` and `mistral:latest` stay on Ollama.
 
 `claude-*` models route through Anthropic's native Messages API (prompt caching, native tool-use, `x-api-key`); every other cloud provider uses the OpenAI-compatible `/chat/completions` path. The `/model` dropdown pre-populates with ~210 named models across all twenty providers. `Tab` accepts, type to filter; any name is accepted including ones not in the catalog.
 

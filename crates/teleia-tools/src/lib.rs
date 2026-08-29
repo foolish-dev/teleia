@@ -305,12 +305,11 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         ToolDef::new(
             "env",
-            "Read environment variables. With `name`, returns that variable's value (errors if unset). Without it, returns every variable as sorted `KEY=VALUE` lines.",
+            "Inspect environment variables. With `name`, reports that variable (errors if unset); without it, reports every variable as sorted `NAME=VALUE` lines. Values are emitted only for a fixed list of non-secret shell and toolchain variables, matched as exact names rather than prefixes (PATH, HOME, SHELL, TERM, LANG, TMPDIR, XDG_CONFIG_HOME, XDG_DATA_HOME, CARGO_HOME, CARGO_TARGET_DIR, RUSTFLAGS, RUSTUP_TOOLCHAIN, VIRTUAL_ENV, GOPATH, JAVA_HOME, CI, …). Every other variable reads as `NAME=<redacted>`, or `NAME=<empty>` when it is set to the empty string — enough to answer 'is ANTHROPIC_API_KEY set?' without disclosing it. `<redacted>` is a placeholder, not the variable's value: this tool never emits a hidden value, whether you ask for one variable or for all of them. If a hidden value is genuinely required to finish the task, ask the user for it.",
             json!({ "type": "object", "properties": {
-                "name": { "type": "string", "description": "Single variable to read; omit to list all" }
+                "name": { "type": "string", "description": "Single variable to inspect; omit to list all" }
             } }),
-        ),
-        ToolDef::new(
+        ),        ToolDef::new(
             "replace",
             "Regex find-and-replace inside a single file, written in place. Unlike `edit` (literal, unique-match), this substitutes a Rust regex; `replacement` may reference capture groups as `$1` / `$name`. Replaces every match unless `all` is false (then only the first). Returns the occurrence count.",
             json!({ "type": "object", "properties": {
@@ -1643,22 +1642,163 @@ struct EnvArgs {
     name: Option<String>,
 }
 
+/// Variables whose *value* `env` may hand to the model; everything else
+/// is reported by name only.
+///
+/// Fail-closed by exact name, because both obvious alternatives fail on
+/// the ordinary cases: a KEY/TOKEN/SECRET denylist misses `DATABASE_URL`
+/// (`postgres://user:pw@host`) and whatever a project invents, and a
+/// `CARGO_*`-style prefix would hand over `CARGO_REGISTRY_TOKEN` — Cargo
+/// maps every config key, credentials included, into that namespace.
+/// Entries are values a build inspects, never values a build
+/// authenticates with — which is why `MAKEFLAGS` is absent: make
+/// forwards command-line variable assignments through it, so
+/// `make DEPLOY_TOKEN=…` would ship the token under a public name.
+/// Matched case-insensitively: Windows exports `Path`, `Temp`, `ComSpec`.
+const ENV_PUBLIC_VARS: &[&str] = &[
+    // shell / session
+    "PATH",
+    "HOME",
+    "PWD",
+    "OLDPWD",
+    "SHELL",
+    "SHLVL",
+    "USER",
+    "LOGNAME",
+    "HOSTNAME",
+    "TMPDIR",
+    "TERM",
+    "TERM_PROGRAM",
+    "COLORTERM",
+    "EDITOR",
+    "VISUAL",
+    "PAGER",
+    "LANG",
+    "LANGUAGE",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LC_MESSAGES",
+    "TZ",
+    "OSTYPE",
+    "MACHTYPE",
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    // windows spellings of the same
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "USERNAME",
+    "COMPUTERNAME",
+    "COMSPEC",
+    "SYSTEMROOT",
+    "WINDIR",
+    "TEMP",
+    "TMP",
+    "PATHEXT",
+    "OS",
+    "NUMBER_OF_PROCESSORS",
+    "PROCESSOR_ARCHITECTURE",
+    // xdg base dirs — teleia's own config and store paths derive from these
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_STATE_HOME",
+    "XDG_RUNTIME_DIR",
+    "TELEIA_TRANSPARENT",
+    // toolchains: the vars that change how a build resolves or behaves
+    "CARGO",
+    "CARGO_HOME",
+    "CARGO_TARGET_DIR",
+    "CARGO_MANIFEST_DIR",
+    "CARGO_BUILD_TARGET",
+    "CARGO_BUILD_JOBS",
+    "CARGO_INCREMENTAL",
+    "CARGO_TERM_COLOR",
+    "RUSTC",
+    "RUSTC_WRAPPER",
+    "RUSTFLAGS",
+    "RUSTDOCFLAGS",
+    "RUSTUP_HOME",
+    "RUSTUP_TOOLCHAIN",
+    "RUST_BACKTRACE",
+    "RUST_LOG",
+    "GOPATH",
+    "GOROOT",
+    "GOBIN",
+    "GOMODCACHE",
+    "GO111MODULE",
+    "JAVA_HOME",
+    "VIRTUAL_ENV",
+    "CONDA_PREFIX",
+    "CONDA_DEFAULT_ENV",
+    "PYENV_ROOT",
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "NODE_ENV",
+    "NODE_PATH",
+    "NVM_DIR",
+    "PNPM_HOME",
+    "BUN_INSTALL",
+    "DENO_DIR",
+    "CC",
+    "CXX",
+    "LD_LIBRARY_PATH",
+    "PKG_CONFIG_PATH",
+    "MANPATH",
+    "CI",
+];
+
+/// True when `env` may emit this variable's value verbatim.
+fn env_value_is_public(name: &str) -> bool {
+    ENV_PUBLIC_VARS.iter().any(|p| p.eq_ignore_ascii_case(name))
+}
+
+/// Render one variable for `env`. Anything off [`ENV_PUBLIC_VARS`]
+/// collapses to a marker: this text becomes a `Message::Tool` that the
+/// agent re-uploads to the provider on every later round
+/// (teleia-agent:992) and that teleia-store writes to sqlite in
+/// cleartext (teleia-store:130-137), so a value emitted once is leaked
+/// for the life of the session. The name still ships: set-ness is what
+/// the model actually needs. `<empty>` stays distinct from `<redacted>`
+/// because "set but empty" is the failure worth diagnosing — the same
+/// distinction `/keys` makes (teleia-cli/src/tui.rs:3337-3339).
+fn env_value_view(name: &str, value: &std::ffi::OsStr) -> String {
+    if env_value_is_public(name) {
+        value.to_string_lossy().into_owned()
+    } else if value.is_empty() {
+        "<empty>".to_string()
+    } else {
+        "<redacted>".to_string()
+    }
+}
+
 async fn env_tool(args: Value) -> Result<String> {
     let EnvArgs { name } = serde_json::from_value(args)?;
     match name {
-        Some(n) => std::env::var(&n).map_err(|_| anyhow!("${n} is not set")),
+        // A named lookup is redacted exactly like the dump: naming one
+        // secret is the cheaper way to exfiltrate it, not the more
+        // trustworthy one — the caller already knows the name to ask for.
+        Some(n) => std::env::var_os(&n)
+            .map(|v| env_value_view(&n, &v))
+            .ok_or_else(|| anyhow!("${n} is not set")),
         None => {
-            let mut vars: Vec<(String, String)> = std::env::vars().collect();
+            // vars_os, not vars: a single non-UTF-8 variable panics
+            // `vars()`, and a redacted value is never decoded anyway.
+            let mut vars: Vec<(std::ffi::OsString, std::ffi::OsString)> =
+                std::env::vars_os().collect();
             vars.sort();
             Ok(vars
                 .into_iter()
-                .map(|(k, v)| format!("{k}={v}"))
+                .map(|(k, v)| {
+                    let name = k.to_string_lossy();
+                    let view = env_value_view(&name, &v);
+                    format!("{name}={view}")
+                })
                 .collect::<Vec<_>>()
                 .join("\n"))
         }
     }
 }
-
 #[derive(Deserialize)]
 struct ReplaceArgs {
     path: String,
@@ -2507,15 +2647,112 @@ mod tests {
         assert!(dispatch("symlink", &args).await.is_err());
     }
 
-    #[tokio::test]
-    async fn env_reads_named_var_and_errors_when_unset() {
-        std::env::set_var("TELEIA_ENV_TEST_VAR", "present");
-        let hit = json!({ "name": "TELEIA_ENV_TEST_VAR" }).to_string();
-        assert_eq!(dispatch("env", &hit).await.unwrap(), "present");
-        let miss = json!({ "name": "TELEIA_DEFINITELY_UNSET_XYZZY" }).to_string();
-        assert!(dispatch("env", &miss).await.is_err());
+    #[test]
+    fn env_value_view_redacts_everything_it_does_not_recognize() {
+        use std::ffi::OsStr;
+        // Allowlisted names keep their value; matching is case-insensitive
+        // because Windows spells it `Path`.
+        assert_eq!(env_value_view("PATH", OsStr::new("/usr/bin")), "/usr/bin");
+        assert_eq!(env_value_view("Path", OsStr::new("C:\\bin")), "C:\\bin");
+        assert_eq!(env_value_view("CARGO_TARGET_DIR", OsStr::new("/t")), "/t");
+        // A `CARGO_*` prefix rule would have handed over the publish token.
+        assert_eq!(
+            env_value_view("CARGO_REGISTRY_TOKEN", OsStr::new("cio-abc123")),
+            "<redacted>"
+        );
+        // A KEY/TOKEN/SECRET denylist would have leaked both of these.
+        assert_eq!(
+            env_value_view("DATABASE_URL", OsStr::new("postgres://u:pw@h/db")),
+            "<redacted>"
+        );
+        assert_eq!(
+            env_value_view("SENTRY_DSN", OsStr::new("https://abc@o0.ingest/1")),
+            "<redacted>"
+        );
+        // make forwards `make VAR=value` overrides through MAKEFLAGS, so it
+        // is deliberately not public.
+        assert_eq!(
+            env_value_view("MAKEFLAGS", OsStr::new(" -- DEPLOY_TOKEN=abc")),
+            "<redacted>"
+        );
+        // Set-but-empty stays distinguishable from set-and-hidden.
+        assert_eq!(
+            env_value_view("ANTHROPIC_API_KEY", OsStr::new("")),
+            "<empty>"
+        );
     }
 
+    #[tokio::test]
+    async fn env_reports_set_ness_and_redacts_every_value_off_the_list() {
+        std::env::set_var("TELEIA_ENV_TEST_VAR", "sk-must-not-leak");
+        // Naming one secret is the cheapest exfiltration path, so it gets
+        // the same treatment as the dump: set-ness, never the payload.
+        let hit = json!({ "name": "TELEIA_ENV_TEST_VAR" }).to_string();
+        assert_eq!(dispatch("env", &hit).await.unwrap(), "<redacted>");
+        // An allowlisted name still answers with the real value, or the
+        // tool stops being useful.
+        let path = json!({ "name": "PATH" }).to_string();
+        assert_eq!(
+            dispatch("env", &path).await.unwrap(),
+            std::env::var("PATH").unwrap()
+        );
+        let miss = json!({ "name": "TELEIA_DEFINITELY_UNSET_XYZZY" }).to_string();
+        assert!(dispatch("env", &miss).await.is_err());
+
+        // The nameless dump keeps the name — that is the tool's job — and
+        // drops the value. The `set_var` above and this `vars_os()` walk
+        // share one test on purpose: split across two tests they race
+        // libc's `environ` under the parallel harness.
+        let out = dispatch("env", &json!({}).to_string()).await.unwrap();
+        assert!(out.contains("TELEIA_ENV_TEST_VAR=<redacted>"), "{out}");
+        assert!(!out.contains("sk-must-not-leak"), "{out}");
+        // Whole-dump invariant, whatever the host happens to export — on
+        // CI this covers the runner's own ACTIONS_* tokens.
+        for line in out.lines() {
+            let Some((k, v)) = line.split_once('=') else {
+                continue;
+            };
+            // Judge only lines that start a variable: an allowlisted value
+            // may itself contain newlines, and Windows exports hidden
+            // `=C:`-style entries whose name is empty.
+            if k.is_empty() || !k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                continue;
+            }
+            if !env_value_is_public(k) {
+                assert!(v == "<redacted>" || v == "<empty>", "leaked: {line}");
+            }
+        }
+    }
+
+    #[test]
+    fn env_definition_documents_the_redaction() {
+        // The model must read `<redacted>` as a placeholder rather than as
+        // the variable's value — the description is the only place it can
+        // learn that, so keep the two from drifting apart.
+        let def = definitions()
+            .into_iter()
+            .find(|d| d.function.name == "env")
+            .expect("env is a builtin");
+        let desc = def.function.description;
+        assert!(desc.contains("<redacted>"), "{desc}");
+        assert!(desc.contains("<empty>"), "{desc}");
+        // Never advertise the bypass: `bash` is gated in plan/build mode
+        // precisely so that reading a secret stays the user's decision.
+        assert!(!desc.contains("bash"), "{desc}");
+        // Every variable the description promises must really be public,
+        // or the model learns a rule the table does not implement — the
+        // `XDG_*`-style glob this catches is the whole failure mode.
+        for v in [
+            "PATH",
+            "XDG_CONFIG_HOME",
+            "CARGO_TARGET_DIR",
+            "VIRTUAL_ENV",
+            "CI",
+        ] {
+            assert!(desc.contains(v), "description dropped {v}: {desc}");
+            assert!(env_value_is_public(v), "described but not public: {v}");
+        }
+    }
     #[tokio::test]
     async fn replace_substitutes_regex_and_counts() {
         let path = tmp_path("replace.txt");

@@ -448,6 +448,9 @@ impl McpRegistry {
                     "MCP tool `{tool_name}` already registered; shadowing earlier server"
                 ));
             }
+            if let Some(w) = reserved_name_warning(&tool_name) {
+                self.warnings.push(w);
+            }
             self.index.insert(tool_name, idx);
             self.tools.push(tool);
         }
@@ -539,6 +542,28 @@ impl McpRegistry {
             }),
         ))
     }
+}
+
+/// Warning text for a server tool name teleia has already reserved, or
+/// `None` when the name is free. A built-in wins both the catalogue and
+/// the dispatcher (`teleia_agent::Agent::set_tool_router`), and
+/// [`READ_RESOURCE_TOOL`] is answered by the synthetic resource reader in
+/// `handles` / `dispatch` below — either way the server's tool never runs,
+/// so say so at boot rather than let it look live in `/mcps`.
+fn reserved_name_warning(tool: &str) -> Option<String> {
+    if tool == READ_RESOURCE_TOOL {
+        return Some(format!(
+            "MCP tool `{tool}` collides with teleia's synthetic resource reader; teleia answers that name itself and the server's tool is unreachable"
+        ));
+    }
+    teleia_tools::definitions()
+        .iter()
+        .any(|d| d.function.name == tool)
+        .then(|| {
+            format!(
+                "MCP tool `{tool}` collides with teleia's built-in `{tool}`; the built-in wins and the server's tool is unreachable"
+            )
+        })
 }
 
 impl ToolRouter for McpRegistry {
@@ -689,5 +714,20 @@ mod tests {
             .iter()
             .all(|d| d.function.name != READ_RESOURCE_TOOL));
         assert!(!reg.handles(READ_RESOURCE_TOOL));
+    }
+
+    #[test]
+    fn reserved_tool_names_are_warned() {
+        // A server may name a tool anything (`tools/list` is its own
+        // word); the names teleia has already claimed must be visible in
+        // /mcps, since teleia will never dispatch the server's version.
+        let w = reserved_name_warning("read").expect("`read` is a built-in");
+        assert!(w.contains("built-in"), "got: {w}");
+        assert!(w.contains("unreachable"), "got: {w}");
+        // The synthetic resource tool is reserved too: `handles` and
+        // `dispatch` both answer that name before the index is consulted.
+        let w = reserved_name_warning(READ_RESOURCE_TOOL).expect("synthetic name");
+        assert!(w.contains("unreachable"), "got: {w}");
+        assert!(reserved_name_warning("ctx7_query").is_none());
     }
 }

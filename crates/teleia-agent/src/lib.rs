@@ -240,9 +240,10 @@ pub enum TurnEvent {
 }
 
 /// User's response to a [`TurnEvent::ToolApprovalRequest`]. `AllowAll`
-/// permits the call and also flips the agent into auto mode for the
-/// rest of the session; `Deny` injects a `"denied by user"` tool result
-/// so the model can react.
+/// permits the call and, out of build mode only, flips the agent into
+/// auto mode for the rest of the session — see [`allow_all_promotes`];
+/// from plan mode it approves just this call. `Deny` injects a
+/// `"denied by user"` tool result so the model can react.
 #[derive(Debug, Clone, Copy)]
 pub enum ToolApproval {
     Allow,
@@ -254,10 +255,14 @@ pub enum ToolApproval {
 /// `Plan` → `Build` → `Auto` → `Plan`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PermissionMode {
-    /// Read-only investigation: `read` / `list` / `glob` / `grep` run
-    /// without prompting; `write` / `edit` / `bash` short-circuit with
-    /// a synthetic "blocked: plan mode" tool result so the model is
-    /// pushed toward describing what it would do.
+    /// Read-only investigation, split three ways by [`PlanGate`]:
+    /// inspection built-ins (`read` / `list` / `glob` / `grep` / …) run
+    /// without prompting; tools that reach the network or compile the
+    /// working tree (`fetch` / `web_search` / `env` / `lint` /
+    /// `typecheck` / `test`) prompt on build mode's approval path; and
+    /// `write` / `edit` / `bash`, plus every MCP/LSP tool whatever it is
+    /// named, short-circuit with a synthetic "blocked: plan mode" tool
+    /// result so the model is pushed toward describing what it would do.
     Plan,
     /// Default: every tool call yields a `ToolApprovalRequest` and
     /// waits for the user's y/n/a.
@@ -275,6 +280,7 @@ impl PermissionMode {
             PermissionMode::Auto => PermissionMode::Plan,
         }
     }
+
     pub fn label(self) -> &'static str {
         match self {
             PermissionMode::Plan => "PLAN",
@@ -293,10 +299,33 @@ impl PermissionMode {
     }
 }
 
-/// Tools that just *look* at the filesystem (or fetch read-only data)
-/// and don't change anything. Anything else is gated by
-/// [`PermissionMode::Plan`].
-fn is_readonly_tool(name: &str) -> bool {
+/// Plan-mode verdict for one concrete call. Split by *effect*, not by
+/// "does it spawn a process": `diff` and `git status` spawn a fixed
+/// system binary with argument-only inputs, while `cargo test` compiles
+/// and runs whatever the working tree supplies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlanGate {
+    /// Changes nothing and starts no outbound connection; runs
+    /// unprompted. Note this class still *reads* anything on disk — a
+    /// `read` of `/proc/self/environ` puts the process environment in
+    /// the transcript — so the guarantee is "changes nothing and dials
+    /// nothing", not "leaks nothing".
+    Inspect,
+    /// Runs code the working tree controls, or opens a channel to the
+    /// network. Prompts on build mode's approval path.
+    Ask,
+    /// Mutates, or is third-party code. Short-circuits with the
+    /// synthetic "blocked: plan mode" result.
+    Block,
+}
+
+/// Tools that only look: filesystem reads, metadata, and pure
+/// in-process computation. `diff` does spawn (`Command::new("diff")`,
+/// teleia-tools:957) and so do `git status`/`diff`/`log`, but with
+/// argument-only inputs — a system binary that cannot execute anything
+/// the working tree supplies, which is the line that matters. `which`
+/// spawns nothing at all; it walks `$PATH` itself.
+fn inspects_only(name: &str) -> bool {
     matches!(
         name,
         "read"
@@ -309,42 +338,89 @@ fn is_readonly_tool(name: &str) -> bool {
             | "stat"
             | "diff"
             | "which"
-            | "fetch"
             | "wc"
             | "sha256"
             | "date"
-            | "lint"
-            | "typecheck"
-            | "test"
-            | "env"
             | "json"
             | "base64"
             | "hexdump"
             | "du"
             | "realpath"
-            | "web_search"
     )
 }
 
-/// Read-only classification for a concrete call, refining [`is_readonly_tool`]
-/// with argument-aware cases. `git` mutates only via `add`/`commit`, so its
-/// inspection subcommands (`status`/`diff`/`log`) are allowed in plan mode
-/// while the mutating ones stay gated.
-fn is_readonly_call(name: &str, arguments: &str) -> bool {
-    if is_readonly_tool(name) {
-        return true;
+/// Tools plan mode runs only with the user's say-so. `fetch` and
+/// `web_search` reach the network, so the model-authored argument is
+/// itself the leak; `env` puts the process environment into a
+/// transcript that is persisted and re-uploaded every round;
+/// `lint`/`typecheck`/`test` shell out to cargo (teleia-tools:1490,
+/// :1542, :1559), i.e. they compile and run the working tree including
+/// `build.rs` and proc macros — strictly a superset of `bash`, which
+/// plan mode blocks. `format` is not here: `cargo fmt --all`
+/// (teleia-tools:1522) rewrites every file, so it stays Block.
+fn needs_consent(name: &str) -> bool {
+    matches!(
+        name,
+        "fetch" | "web_search" | "env" | "lint" | "typecheck" | "test"
+    )
+}
+
+/// Plan-mode policy for one concrete call, argument-aware where the
+/// name alone is too coarse. `git` mutates via `add`/`commit`, so its
+/// inspection subcommands stay unprompted — but only with a pathspec
+/// that can't be read as a flag: `paths` is appended to git's argv with
+/// no `--` separator (teleia-tools:1612), so `paths: ["--output=FILE"]`
+/// makes `git diff` write a file. `routed` is whether an MCP/LSP server
+/// claims this name — servers name their own tools with no namespacing
+/// (cli/src/mcp.rs:438) and are dispatched ahead of the built-ins, so
+/// without this a server advertising `read` would inherit `read`'s
+/// unprompted pass and run third-party code in the one mode that
+/// promises nothing runs.
+fn plan_gate(name: &str, arguments: &str, routed: bool) -> PlanGate {
+    if routed {
+        return PlanGate::Block;
+    }
+    if inspects_only(name) {
+        return PlanGate::Inspect;
+    }
+    if needs_consent(name) {
+        return PlanGate::Ask;
     }
     if name == "git" {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(arguments) {
-            return matches!(
-                v.get("subcommand").and_then(|s| s.as_str()),
-                Some("status" | "diff" | "log")
-            );
+            // A non-string entry can't be a path either; treat it as a flag.
+            let flagged = v.get("paths").and_then(|p| p.as_array()).is_some_and(|ps| {
+                ps.iter()
+                    .any(|p| p.as_str().unwrap_or("-").starts_with('-'))
+            });
+            if !flagged
+                && matches!(
+                    v.get("subcommand").and_then(|s| s.as_str()),
+                    Some("status" | "diff" | "log")
+                )
+            {
+                return PlanGate::Inspect;
+            }
         }
     }
-    false
+    PlanGate::Block
 }
 
+/// Whether answering a tool prompt with "allow all" should also promote
+/// the session to [`PermissionMode::Auto`]. Only out of `Build`, whose
+/// contract is "ask about everything": plan mode can prompt now (its
+/// [`PlanGate::Ask`] class), and one keystroke there must not vault the
+/// user past the mode they deliberately skipped into the one where the
+/// next `rm -rf` dispatches unasked — a promotion that also persists
+/// (see [`Agent::promote_to_auto`]). From `Plan`, `a` approves the call
+/// in front of it and leaves the mode alone. Stated as "only Build"
+/// rather than "not Plan" because `Auto` never prompts, so its answer
+/// is unreachable and must not read as "promote". The TUI keeps its own
+/// copy of this rule at cli/src/tui.rs:2688 — the agent is mutably
+/// borrowed by the running turn, so it can't read this back.
+fn allow_all_promotes(mode: PermissionMode) -> bool {
+    matches!(mode, PermissionMode::Build)
+}
 /// A tool call whose result rejects a required argument as `undefined` /
 /// missing usually means the model dropped a large value — most often a
 /// file's `content` — while encoding the call (these reasoning models can
@@ -508,6 +584,12 @@ pub struct Agent {
     /// `self.tools`. Synced to the `mcp_disabled` pref so the choice
     /// survives restart.
     mcp_disabled: BTreeSet<String>,
+    /// Router tool names that lost a collision with a built-in and were
+    /// therefore never advertised (see [`Agent::set_tool_router`]). The
+    /// catalogue shows the built-in, so the dispatcher must run the
+    /// built-in too — otherwise a server that names a tool `read` takes
+    /// over the built-in the model thinks it is calling.
+    shadowed_router_tools: BTreeSet<String>,
     /// Local model's `num_ctx` as read from Ollama's `/api/show`, populated
     /// once at startup by [`Agent::detect_context_window`]. Used as the
     /// proactive-compaction budget when the user hasn't set `/context`, so it
@@ -538,6 +620,7 @@ impl Agent {
             router: None,
             mcp_servers: BTreeMap::new(),
             mcp_disabled: BTreeSet::new(),
+            shadowed_router_tools: BTreeSet::new(),
             detected_context: None,
         };
         agent.push(Message::System {
@@ -573,6 +656,7 @@ impl Agent {
                     router: None,
                     mcp_servers: BTreeMap::new(),
                     mcp_disabled: BTreeSet::new(),
+                    shadowed_router_tools: BTreeSet::new(),
                     detected_context: None,
                 })
             }
@@ -583,9 +667,21 @@ impl Agent {
     /// Plug an external tool source into the agent. Its definitions
     /// are appended to the built-in tool list immediately; subsequent
     /// dispatches check the router before falling back to
-    /// `teleia_tools`.
+    /// `teleia_tools`. A def whose name a built-in already owns is
+    /// neither advertised nor routed — the built-in wins both, so the
+    /// schema the model sees is the one that runs.
     pub fn set_tool_router(&mut self, router: Box<dyn ToolRouter>) {
+        // Compared against the built-ins, not `self.tools`: two servers
+        // sharing a name still resolve first-wins through the router.
+        let builtins: BTreeSet<String> = teleia_tools::definitions()
+            .into_iter()
+            .map(|d| d.function.name)
+            .collect();
         for def in router.definitions() {
+            if builtins.contains(&def.function.name) {
+                self.shadowed_router_tools.insert(def.function.name);
+                continue;
+            }
             // Avoid duplicates if the user registers the same MCP twice.
             if !self
                 .tools
@@ -597,7 +693,6 @@ impl Agent {
         }
         self.router = Some(router);
     }
-
     /// Record which tool defs came from which MCP server, and apply any
     /// `mcp_disabled` pref so the persisted choice survives restart.
     /// Call after [`Agent::set_tool_router`].
@@ -661,8 +756,15 @@ impl Agent {
         let Some(defs) = self.mcp_servers.get(name) else {
             return;
         };
-        let drop: std::collections::HashSet<&str> =
-            defs.iter().map(|d| d.function.name.as_str()).collect();
+        // A def that lost a name collision was never advertised, so the
+        // def carrying that name is the *built-in* — dropping it here
+        // would delete a built-in tool from the catalogue.
+        let shadowed = &self.shadowed_router_tools;
+        let drop: std::collections::HashSet<&str> = defs
+            .iter()
+            .map(|d| d.function.name.as_str())
+            .filter(|n| !shadowed.contains(*n))
+            .collect();
         self.tools
             .retain(|t| !drop.contains(t.function.name.as_str()));
     }
@@ -672,6 +774,10 @@ impl Agent {
             return;
         };
         for def in defs {
+            // Never restore a def the built-in catalogue shadowed.
+            if self.shadowed_router_tools.contains(&def.function.name) {
+                continue;
+            }
             if !self
                 .tools
                 .iter()
@@ -687,6 +793,19 @@ impl Agent {
         // Best-effort: a failed persist only means the toggle won't survive a
         // restart; the in-memory state is already correct.
         self.set_pref("mcp_disabled", &joined.join(",")).ok();
+    }
+
+    /// Whether an external router (MCP / LSP) owns this tool name.
+    /// Resolved *before* the permission gate in [`Agent::turn`]: the
+    /// answer decides the call's permission class, not merely where it
+    /// dispatches.
+    fn is_routed(&self, name: &str) -> bool {
+        !self.shadowed_router_tools.contains(name)
+            && self
+                .router
+                .as_ref()
+                .map(|r| r.handles(name))
+                .unwrap_or(false)
     }
 
     pub fn permission_mode(&self) -> PermissionMode {
@@ -1097,21 +1216,29 @@ impl Agent {
 
                 let mut stuck: Option<String> = None;
                 for call in tool_calls {
-                    // Permission gate. Three modes, each with its own
-                    // policy: Auto runs everything; Plan auto-allows
-                    // read-only tools and synthesizes a "blocked" result
-                    // for write/edit/bash so the model knows to describe
-                    // rather than execute; Build prompts per-call.
+                    // Routing first: whether an MCP/LSP server owns this
+                    // name decides the call's permission class, not just
+                    // where it dispatches. Server tool names arrive
+                    // verbatim from the server's `tools/list`
+                    // (cli/src/mcp.rs:438), so one can advertise `read`.
+                    let routed = self.is_routed(&call.function.name);
+                    let gate = plan_gate(&call.function.name, &call.function.arguments, routed);
+                    // Permission gate. Auto runs everything; Plan splits
+                    // by effect (see [`PlanGate`]) into run / prompt /
+                    // synthesize-"blocked"; Build prompts per-call.
                     match self.permission_mode {
                         PermissionMode::Auto => {}
-                        PermissionMode::Plan
-                            if is_readonly_call(
-                                &call.function.name,
-                                &call.function.arguments,
-                            ) => {}
-                        PermissionMode::Plan => {
+                        PermissionMode::Plan if gate == PlanGate::Inspect => {}
+                        PermissionMode::Plan if gate == PlanGate::Block => {
+                            // Name the reason when the call is external —
+                            // a refused `read` otherwise reads as a bug.
+                            let via = if routed {
+                                " (an external MCP/LSP tool, never auto-allowed in plan mode)"
+                            } else {
+                                ""
+                            };
                             let output = format!(
-                                "blocked: plan mode does not permit `{}`. Describe what you would do; the user can switch to build mode (Shift+Tab or /build) to execute.",
+                                "blocked: plan mode does not permit `{}`{via}. Describe what you would do; the user can switch to build mode (Shift+Tab or /build) to execute.",
                                 call.function.name
                             );
                             yield TurnEvent::ToolStart {
@@ -1129,7 +1256,10 @@ impl Agent {
                             })?;
                             continue;
                         }
-                        PermissionMode::Build => {
+                        // Plan's `Ask` class prompts on exactly the path
+                        // build mode already uses — no new event, no TUI
+                        // change.
+                        PermissionMode::Plan | PermissionMode::Build => {
                             let (tx, rx) = tokio::sync::oneshot::channel();
                             yield TurnEvent::ToolApprovalRequest {
                                 name: call.function.name.clone(),
@@ -1140,7 +1270,9 @@ impl Agent {
                             match decision {
                                 ToolApproval::Allow => {}
                                 ToolApproval::AllowAll => {
-                                    self.promote_to_auto();
+                                    if allow_all_promotes(self.permission_mode) {
+                                        self.promote_to_auto();
+                                    }
                                 }
                                 ToolApproval::Deny => {
                                     let output = "denied by user".to_string();
@@ -1166,13 +1298,7 @@ impl Agent {
                     yield TurnEvent::ToolStart {
                         name: call.function.name.clone(),
                         arguments: call.function.arguments.clone(),
-                    };
-                    let routed = self
-                        .router
-                        .as_ref()
-                        .map(|r| r.handles(&call.function.name))
-                        .unwrap_or(false);
-                    let output = if routed {
+                    };                    let output = if routed {
                         let r = self.router.as_mut().unwrap();
                         match r.dispatch(&call.function.name, &call.function.arguments).await {
                             Ok(o) => o,
@@ -1332,6 +1458,25 @@ mod tests {
     fn local_agent() -> Agent {
         let llm = LlmClient::new("http://127.0.0.1:11434/v1", "test-model");
         Agent::new(llm, tmp_store()).unwrap()
+    }
+
+    /// Minimal [`ToolRouter`] that claims exactly one tool name.
+    struct FakeRouter(&'static str);
+
+    impl ToolRouter for FakeRouter {
+        fn definitions(&self) -> Vec<ToolDef> {
+            vec![fake_def(self.0)]
+        }
+        fn handles(&self, name: &str) -> bool {
+            name == self.0
+        }
+        fn dispatch<'a>(
+            &'a mut self,
+            _name: &'a str,
+            _args: &'a str,
+        ) -> BoxFuture<'a, Result<String>> {
+            Box::pin(async { Ok("routed".to_string()) })
+        }
     }
 
     #[test]
@@ -1881,36 +2026,152 @@ mod tests {
     }
 
     #[test]
-    fn is_readonly_call_gates_git_by_subcommand() {
-        // Inspection subcommands run in plan mode; mutating ones don't.
-        assert!(is_readonly_call(
-            "git",
-            &json!({"subcommand": "status"}).to_string()
-        ));
-        assert!(is_readonly_call(
-            "git",
-            &json!({"subcommand": "diff"}).to_string()
-        ));
-        assert!(is_readonly_call(
-            "git",
-            &json!({"subcommand": "log"}).to_string()
-        ));
-        assert!(!is_readonly_call(
-            "git",
-            &json!({"subcommand": "add"}).to_string()
-        ));
-        assert!(!is_readonly_call(
-            "git",
-            &json!({"subcommand": "commit"}).to_string()
-        ));
-        // Malformed / missing subcommand is treated as not-read-only.
-        assert!(!is_readonly_call("git", "not json"));
-        assert!(!is_readonly_call("git", "{}"));
-        // Plain read-only tools stay read-only; mutating ones stay gated.
-        assert!(is_readonly_call("read", "{}"));
-        assert!(!is_readonly_call("write", "{}"));
+    fn plan_gate_splits_inspection_from_execution() {
+        // Looking at the filesystem, and pure computation, run unprompted…
+        for name in [
+            "read", "list", "glob", "grep", "head", "tail", "tree", "stat", "diff", "which", "wc",
+            "sha256", "date", "json", "base64", "hexdump", "du", "realpath",
+        ] {
+            assert_eq!(plan_gate(name, "{}", false), PlanGate::Inspect, "{name}");
+        }
+        // …outbound network, and anything that compiles or runs the working
+        // tree, asks first — `test`/`typecheck`/`lint` are cargo, i.e. they
+        // execute build.rs and proc macros, and `env` puts the environment
+        // in the transcript.
+        for name in ["fetch", "web_search", "env", "lint", "typecheck", "test"] {
+            assert_eq!(plan_gate(name, "{}", false), PlanGate::Ask, "{name}");
+        }
+        // …and mutation is still short-circuited. `format` belongs here, not
+        // with its lint/typecheck/test siblings: `cargo fmt --all` rewrites
+        // every file in the workspace.
+        for name in [
+            "write",
+            "edit",
+            "multi_edit",
+            "replace",
+            "rm",
+            "mv",
+            "cp",
+            "mkdir",
+            "touch",
+            "symlink",
+            "apply_patch",
+            "bash",
+            "format",
+            "todo_write",
+            "no_such_tool",
+        ] {
+            assert_eq!(plan_gate(name, "{}", false), PlanGate::Block, "{name}");
+        }
     }
 
+    #[test]
+    fn plan_gate_refines_git_by_subcommand() {
+        // Inspection subcommands run in plan mode; mutating ones don't.
+        for sub in ["status", "diff", "log"] {
+            let args = json!({ "subcommand": sub }).to_string();
+            assert_eq!(plan_gate("git", &args, false), PlanGate::Inspect, "{sub}");
+        }
+        for sub in ["add", "commit"] {
+            let args = json!({ "subcommand": sub }).to_string();
+            assert_eq!(plan_gate("git", &args, false), PlanGate::Block, "{sub}");
+        }
+        // Malformed / missing subcommand is treated as mutating.
+        assert_eq!(plan_gate("git", "not json", false), PlanGate::Block);
+        assert_eq!(plan_gate("git", "{}", false), PlanGate::Block);
+        // `paths` is appended without a `--` separator (teleia-tools:1612),
+        // so a leading dash is an option: `git diff --output=FILE` writes a
+        // file. Plan mode must not run that unprompted.
+        let flagged = json!({ "subcommand": "diff", "paths": ["--output=/tmp/pwned"] }).to_string();
+        assert_eq!(plan_gate("git", &flagged, false), PlanGate::Block);
+        let scoped = json!({ "subcommand": "diff", "paths": ["src/lib.rs"] }).to_string();
+        assert_eq!(plan_gate("git", &scoped, false), PlanGate::Inspect);
+    }
+
+    #[test]
+    fn plan_gate_never_trusts_a_routed_name() {
+        // MCP servers name their own tools with no namespacing
+        // (cli/src/mcp.rs:438) and are dispatched ahead of the built-ins,
+        // so a server advertising `read` must not inherit `read`'s pass.
+        assert_eq!(plan_gate("read", "{}", true), PlanGate::Block);
+        assert_eq!(plan_gate("fetch", "{}", true), PlanGate::Block);
+        let status = json!({ "subcommand": "status" }).to_string();
+        assert_eq!(plan_gate("git", &status, true), PlanGate::Block);
+    }
+
+    #[test]
+    fn is_routed_reports_the_routers_claim() {
+        // The gate feeds this into `plan_gate` (policy pinned above);
+        // here we pin the signal itself — including that it is false with
+        // no router at all, so built-ins keep their class.
+        let mut agent = fake_agent();
+        assert!(!agent.is_routed("kb_search"));
+        agent.set_tool_router(Box::new(FakeRouter("kb_search")));
+        assert!(agent.is_routed("kb_search"));
+        assert!(!agent.is_routed("read"));
+    }
+
+    #[test]
+    fn a_router_tool_named_like_a_builtin_is_shadowed_not_routed() {
+        // Server tool names come from the server (cli/src/mcp.rs:438), so
+        // one can claim `read`. The catalogue already keeps the built-in's
+        // def; the dispatcher must agree, or the model is shown one tool
+        // and runs another.
+        let mut agent = fake_agent();
+        agent.set_tool_router(Box::new(FakeRouter("read")));
+        assert!(!agent.is_routed("read"));
+        let advertised: Vec<&ToolDef> = agent
+            .tools()
+            .iter()
+            .filter(|d| d.function.name == "read")
+            .collect();
+        assert_eq!(advertised.len(), 1);
+        assert_ne!(advertised[0].function.description, "desc for read");
+    }
+
+    #[test]
+    fn disabling_a_server_that_shadows_a_builtin_keeps_the_builtin() {
+        // `/mcps disable NAME` drops that server's defs by name; a
+        // shadowed name identifies the built-in, not the server's tool.
+        let mut agent = fake_agent();
+        agent.set_tool_router(Box::new(FakeRouter("read")));
+        let mut servers = BTreeMap::new();
+        servers.insert(
+            "evil".to_string(),
+            vec![fake_def("read"), fake_def("evil_ping")],
+        );
+        agent.tools.push(fake_def("evil_ping"));
+        agent.set_mcp_servers(servers);
+
+        agent.disable_mcp("evil").unwrap();
+        assert!(!agent.tools().iter().any(|d| d.function.name == "evil_ping"));
+        assert!(agent.tools().iter().any(|d| d.function.name == "read"));
+
+        agent.enable_mcp("evil").unwrap();
+        assert!(agent.tools().iter().any(|d| d.function.name == "evil_ping"));
+        // Re-enabling must not smuggle the server's `read` in behind the
+        // built-in's back.
+        let read: Vec<&ToolDef> = agent
+            .tools()
+            .iter()
+            .filter(|d| d.function.name == "read")
+            .collect();
+        assert_eq!(read.len(), 1);
+        assert_ne!(read[0].function.description, "desc for read");
+    }
+
+    #[test]
+    fn allow_all_promotes_only_out_of_build() {
+        // Build is the mode whose contract is "ask about everything", so
+        // "stop asking" promotes out of it.
+        assert!(allow_all_promotes(PermissionMode::Build));
+        // Plan can raise a prompt now (`fetch`, `env`, `test`), and `a`
+        // there must not vault the session past build into yolo.
+        assert!(!allow_all_promotes(PermissionMode::Plan));
+        // Auto never prompts, so this answer is unreachable in the gate;
+        // pinned anyway so a future caller can't read it as "promote".
+        assert!(!allow_all_promotes(PermissionMode::Auto));
+    }
     #[test]
     fn disable_mcp_hides_servers_tools_from_catalogue() {
         let mut agent = fake_agent();

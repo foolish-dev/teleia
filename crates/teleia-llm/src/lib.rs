@@ -376,35 +376,72 @@ pub const PROVIDERS: &[Provider] = &[
     },
 ];
 
-/// Resolve a model name to its provider. Checks the explicit
-/// `provider:model` form first (case-insensitive on the provider name),
-/// then falls back to prefix matching against the [`PROVIDERS`] table.
-/// Returns `None` for names that should route to Ollama.
+/// Provider names that are also Ollama model families, where `name:tag`
+/// is ambiguous: `mistral:7b` is Ollama's Mistral 7B, not a selector for
+/// Mistral's cloud API. Only these pay the body test in
+/// `provider_selector` — `groq:`/`openrouter:`/… can't collide, so they
+/// stay plain selectors and keep accepting off-catalog model names.
+/// Spell entries exactly as the [`PROVIDERS`] `name` field, and only add
+/// a provider whose `prefixes` is non-empty — with no prefixes the body
+/// test can never pass and every `name:` form would route local.
+const OLLAMA_FAMILY_NAMES: &[&str] = &["Mistral"];
+
+/// Split an explicit `provider:model` selector into its provider and the
+/// bare model name to put on the wire. `None` when the name isn't a
+/// selector — Ollama's `family:tag` form shares the syntax. For a head
+/// that doubles as an Ollama family the body must name something that
+/// provider actually serves (one of its [`Provider::prefixes`], or a
+/// `vendor/model` path); Ollama tags (`7b`, `latest`,
+/// `7b-instruct-v0.3-q4_K_M`) never do. The bias is deliberate: a cloud
+/// name misread as local 404s at Ollama, a local name misread as cloud
+/// ships the conversation and the API key to a third party.
+fn provider_selector(model: &str) -> Option<(&'static Provider, &str)> {
+    let (head, body) = model.split_once(':')?;
+    let p = PROVIDERS
+        .iter()
+        .find(|p| p.name.eq_ignore_ascii_case(head))?;
+    let names_a_cloud_model =
+        body.contains('/') || p.prefixes.iter().any(|pre| body.starts_with(pre));
+    // `p.name` is the canonical spelling — `head` matched it
+    // case-insensitively — so an exact compare is enough.
+    if OLLAMA_FAMILY_NAMES.contains(&p.name) && !names_a_cloud_model {
+        return None;
+    }
+    Some((p, body))
+}
+
+/// Resolve a model name to its provider. An explicit `provider:model`
+/// selector wins (case-insensitive on the provider name); any other
+/// colon is an Ollama `family:tag` and routes local; only an untagged
+/// name falls through to prefix matching against the [`PROVIDERS`]
+/// table. Returns `None` for names that should route to Ollama.
 pub fn provider_for_model(model: &str) -> Option<&'static Provider> {
-    if let Some((head, _)) = model.split_once(':') {
-        if let Some(p) = PROVIDERS.iter().find(|p| p.name.eq_ignore_ascii_case(head)) {
-            return Some(p);
-        }
+    if let Some((p, _)) = provider_selector(model) {
+        return Some(p);
+    }
+    // Prefix matching is for untagged names only. `gpt-oss:20b`,
+    // `deepseek-r1:8b` and `command-r:latest` come out of Ollama's
+    // /api/tags with a head that happens to share a cloud prefix —
+    // matching it would send a local model, and the conversation, to
+    // OpenAI/DeepSeek/Cohere.
+    if model.contains(':') {
+        return None;
     }
     PROVIDERS
         .iter()
         .find(|p| p.prefixes.iter().any(|pre| model.starts_with(pre)))
 }
 
-/// Strip a leading `provider:` prefix when present and recognized —
+/// Strip a leading `provider:` selector when present and recognized —
 /// providers don't accept their own name in the `"model"` request field.
 /// `groq:llama-3.3-70b-versatile` → `llama-3.3-70b-versatile`;
-/// `hf.co/FoolDev/Thanatos-27B-HERETIC:Q4_K_M` → unchanged (no provider
-/// matches `hf.co/...`).
+/// `hf.co/FoolDev/Thanatos-27B-HERETIC:Q4_K_M` and `mistral:7b` →
+/// unchanged, because an Ollama tag is part of the model's name, not a
+/// selector. Shares `provider_selector` with [`provider_for_model`] so
+/// the endpoint and the wire name can never disagree.
 pub fn resolve_model_name(model: &str) -> &str {
-    if let Some((head, rest)) = model.split_once(':') {
-        if PROVIDERS.iter().any(|p| p.name.eq_ignore_ascii_case(head)) {
-            return rest;
-        }
-    }
-    model
+    provider_selector(model).map_or(model, |(_, body)| body)
 }
-
 /// Detect the base URL and API-key env-var value for a model name. Used
 /// as a fallback when the caller doesn't supply `--base-url` /
 /// `--api-key` explicitly. See [`PROVIDERS`] for the full routing table;
@@ -1554,6 +1591,61 @@ mod tests {
     }
 
     #[test]
+    fn colon_tagged_ollama_names_never_route_to_cloud() {
+        // Every one of these comes back verbatim from `/api/tags`, and each
+        // head shares a prefix with some PROVIDERS entry. Matching that
+        // prefix against the whole tagged name shipped the local model —
+        // and the conversation — to a cloud endpoint.
+        for model in [
+            "gpt-oss:20b",
+            "gpt-oss:120b",
+            "deepseek-r1:8b",
+            "command-r:latest",
+            "mistral:7b",
+            "mistral:latest",
+            "mistral:7b-instruct-v0.3-q4_K_M",
+            "mistral-nemo:12b",
+            "llama3:latest",
+            "hf.co/FoolDev/Thanatos-27B-HERETIC:Q4_K_M",
+        ] {
+            assert!(
+                provider_for_model(model).is_none(),
+                "{model} routed to {:?}, expected local Ollama",
+                provider_for_model(model).map(|p| p.name)
+            );
+            // The tag is part of the name Ollama knows — never stripped.
+            assert_eq!(resolve_model_name(model), model);
+        }
+    }
+
+    #[test]
+    fn provider_name_that_is_also_an_ollama_family_needs_a_catalog_body() {
+        // `Mistral` is both a PROVIDERS entry and an Ollama family, so the
+        // body decides. A name from Mistral's own catalog is a real
+        // selector: route to the cloud and strip the head.
+        let p = provider_for_model("mistral:mistral-large-latest").expect("cloud Mistral");
+        assert_eq!(p.name, "Mistral");
+        assert_eq!(
+            resolve_model_name("mistral:mistral-large-latest"),
+            "mistral-large-latest"
+        );
+        // Case-insensitive on the head, like every other selector.
+        let (url, _) = detect_endpoint("MISTRAL:codestral-latest");
+        assert!(url.contains("mistral.ai"));
+        // An Ollama tag is not a selector: stay local and keep the name
+        // whole, or the request body says `"model":"7b"`.
+        let (url, _) = detect_endpoint("mistral:7b");
+        assert_eq!(url, DEFAULT_BASE_URL);
+        assert_eq!(resolve_model_name("mistral:7b"), "mistral:7b");
+        // A provider name that can't be an Ollama family keeps the plain
+        // selector — no body test, so off-catalog names still work.
+        assert_eq!(
+            provider_for_model("groq:llama-3.3-70b-versatile").map(|p| p.name),
+            Some("Groq")
+        );
+    }
+
+    #[test]
     fn looks_like_ollama_matches_default_and_explicit() {
         assert!(looks_like_ollama("http://127.0.0.1:11434/v1"));
         assert!(looks_like_ollama("http://ollama.example.com/v1"));
@@ -1631,6 +1723,14 @@ mod tests {
         client.set_model("groq:llama-3.3-70b-versatile".to_string());
         assert!(client.base_url().contains("groq.com"));
         assert_eq!(client.model(), "llama-3.3-70b-versatile");
+        // Back to a colon-tagged local model: the endpoint returns to
+        // Ollama, the cloud key is dropped, and the tag stays on the name —
+        // storing `7b` here is what made the request body ask Ollama for a
+        // model that doesn't exist.
+        client.set_model("mistral:7b".to_string());
+        assert_eq!(client.base_url(), DEFAULT_BASE_URL);
+        assert_eq!(client.model(), "mistral:7b");
+        assert!(client.api_key().is_none());
     }
 
     #[test]
