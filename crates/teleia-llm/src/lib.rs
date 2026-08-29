@@ -823,8 +823,7 @@ impl LlmClient {
             if let Some(key) = &self.api_key {
                 req = req.bearer_auth(key);
             }
-            let resp = req.send().await
-                .with_context(|| format!("POST {url}"))?;
+            let resp = send_with_retry(req, &url).await?;
 
             let status = resp.status();
             if !status.is_success() {
@@ -916,7 +915,7 @@ impl LlmClient {
             if let Some(key) = &self.api_key {
                 req = req.header("x-api-key", key.as_str());
             }
-            let resp = req.send().await.with_context(|| format!("POST {url}"))?;
+            let resp = send_with_retry(req, &url).await?;
 
             let status = resp.status();
             if !status.is_success() {
@@ -1049,6 +1048,40 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 /// this value — clamp per model if you target those. Hitting the ceiling
 /// surfaces as a `length` truncation notice, same as the OpenAI path.
 const ANTHROPIC_MAX_TOKENS: u32 = 128_000;
+
+/// Attempts, total, for a chat request — one try plus two retries.
+const MAX_SEND_ATTEMPTS: u32 = 3;
+
+/// First backoff step; doubles per retry (0.5s, 1s).
+const RETRY_BACKOFF_MS: u64 = 500;
+
+/// Statuses worth another go: rate limits and the transient server-side
+/// family, plus Anthropic's 529 "overloaded". A 4xx that is not 408/429 is
+/// the request's own fault and retrying only burns the user's quota.
+fn is_retryable_status(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 408 | 429 | 500 | 502 | 503 | 504 | 529)
+}
+
+/// Send a chat request, retrying a retryable status with exponential
+/// backoff. Only ever retries *before* the first byte of the stream: once
+/// tokens have been delivered they cannot be un-sent, so a mid-stream
+/// failure stays fatal.
+async fn send_with_retry(req: reqwest::RequestBuilder, url: &str) -> Result<reqwest::Response> {
+    let mut attempt: u32 = 0;
+    loop {
+        // A non-cloneable body (streaming upload) gets one shot; fall out
+        // of the loop and send the original.
+        let Some(this) = req.try_clone() else { break };
+        let resp = this.send().await.with_context(|| format!("POST {url}"))?;
+        attempt += 1;
+        if attempt >= MAX_SEND_ATTEMPTS || !is_retryable_status(resp.status()) {
+            return Ok(resp);
+        }
+        let backoff = RETRY_BACKOFF_MS * 2u64.pow(attempt - 1);
+        tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
+    }
+    req.send().await.with_context(|| format!("POST {url}"))
+}
 
 /// Output ceilings for the families that sit below [`ANTHROPIC_MAX_TOKENS`].
 /// Prefix-matched in order, so the more specific `claude-3-5-` / `claude-3-7-`
@@ -1723,6 +1756,26 @@ mod tests {
             let (url, _) = detect_endpoint(tag);
             assert_eq!(url, DEFAULT_BASE_URL, "{tag}");
         }
+    }
+
+    #[test]
+    fn retry_covers_transient_status_only() {
+        use reqwest::StatusCode;
+        // Rate limits and the transient server family, incl. Anthropic 529.
+        for c in [408u16, 429, 500, 502, 503, 504, 529] {
+            assert!(
+                is_retryable_status(StatusCode::from_u16(c).unwrap()),
+                "{c} should retry"
+            );
+        }
+        // The request's own fault — retrying burns quota and never succeeds.
+        for c in [400u16, 401, 403, 404, 413, 422] {
+            assert!(
+                !is_retryable_status(StatusCode::from_u16(c).unwrap()),
+                "{c} must not retry"
+            );
+        }
+        assert!(!is_retryable_status(StatusCode::OK));
     }
 
     #[test]

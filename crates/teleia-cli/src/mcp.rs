@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use teleia_agent::ToolRouter;
 use teleia_llm::ToolDef;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout, Command};
 
 use crate::config::McpEntry;
@@ -247,10 +247,23 @@ impl McpClient {
     }
 
     async fn read_line(&mut self) -> Result<String> {
+        // Bounded like lsp.rs's MAX_LSP_FRAME: a third-party server that
+        // never emits a newline would otherwise grow this String until the
+        // session OOMs. Well above any real JSON-RPC line.
+        const MAX_MCP_LINE: u64 = 64 * 1024 * 1024;
         let mut buf = String::new();
-        let n = self.stdout.read_line(&mut buf).await?;
+        let n = (&mut self.stdout)
+            .take(MAX_MCP_LINE)
+            .read_line(&mut buf)
+            .await?;
         if n == 0 {
             return Err(anyhow!("MCP `{}` closed stdout (server exited)", self.name));
+        }
+        if n as u64 == MAX_MCP_LINE && !buf.ends_with('\n') {
+            return Err(anyhow!(
+                "MCP `{}` sent a line over {MAX_MCP_LINE} bytes with no newline",
+                self.name
+            ));
         }
         Ok(buf)
     }

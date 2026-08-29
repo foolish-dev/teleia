@@ -165,7 +165,7 @@ From Normal mode, `:` opens a command line. The dropdown filters `EX_COMMANDS` b
 | `:cd PATH` / `:pwd`                                     | working directory                                     |
 | `:f` / `:file` / `:show` / `:info`                      | session info                                          |
 | `:model NAME`                                           | switch model                                          |
-| `:notify on|off` / `:transparent on|off`                | toggles                                               |
+| `:notify on\|off` / `:transparent on\|off`              | toggles                                               |
 | `:key PROVIDER` / `:keys`                               | api keys                                              |
 | `:mcps` / `:lsps` / `:tools`                            | tool inventory                                        |
 | `:plan` / `:build` / `:auto` / `:ask`                   | permission mode                                       |

@@ -84,6 +84,12 @@ function Verify-Prebuilt($target) {
     }
     $asset = "teleia-$target.exe"
     $pattern = "  " + [regex]::Escape($asset) + "$"
+    # Same shape check as install.sh: a proxy or captive portal returns 200
+    # with HTML, which parses as "target not listed" and installed unverified.
+    if (-not (Select-String -Path $sumsPath -Pattern '^[0-9a-fA-F]{64}\s')) {
+        Write-Warning "refusing to install unverified."
+        throw "SHA256SUMS is not a checksum file (proxy or captive portal?)"
+    }
     $line = Select-String -Path $sumsPath -Pattern $pattern | Select-Object -First 1
     if (-not $line) {
         Write-Warning "$asset not listed in SHA256SUMS — skipping integrity check"

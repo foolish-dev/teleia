@@ -99,6 +99,16 @@ verify_prebuilt() {
         echo "refusing to install unverified — re-run when the network is healthy." >&2
         exit 1
     fi
+    # A captive portal or proxy answers 200 with HTML, which downloads
+    # "successfully" and then simply doesn't list the target — under the
+    # old rule that was indistinguishable from an old release and installed
+    # unverified. A real SHA256SUMS has at least one 64-hex line; require
+    # that before treating a missing entry as benign.
+    if ! grep -qE '^[0-9a-fA-F]{64}[[:space:]]' "$TMP/SHA256SUMS"; then
+        echo "error: SHA256SUMS is not a checksum file (proxy or captive portal?)" >&2
+        echo "refusing to install unverified." >&2
+        exit 1
+    fi
     expected="$(grep " teleia-$target\$" "$TMP/SHA256SUMS" 2>/dev/null | awk '{print $1}' | head -n1)"
     if [ -z "$expected" ]; then
         echo "note: teleia-$target not listed in SHA256SUMS — skipping integrity check" >&2

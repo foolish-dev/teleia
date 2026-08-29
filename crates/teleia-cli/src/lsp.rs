@@ -82,7 +82,10 @@ impl LspClient {
         cmd.args(&entry.args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::inherit())
+            // Null, not inherit: the TUI owns the alternate screen, and a
+            // server that chats on stderr (rust-analyzer's progress) paints
+            // straight into the frame. mcp.rs:60 made the same call.
+            .stderr(std::process::Stdio::null())
             .kill_on_drop(true);
         let mut child = cmd
             .spawn()
