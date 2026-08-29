@@ -81,9 +81,20 @@ verify_prebuilt() {
     else
         sums_url="$REPO/releases/download/$TAG/SHA256SUMS"
     fi
-    if ! curl -fsSL --output "$TMP/SHA256SUMS" "$sums_url" 2>/dev/null; then
+    # curl exits 22 on an HTTP error, which is the honest "this release has
+    # no SHA256SUMS" answer. Every other non-zero exit is the network
+    # failing — DNS, a refused connection, a captive portal, a 5xx behind a
+    # proxy — and treating those as "no checksum published" is how an
+    # unverified binary lands on PATH exactly when something is wrong.
+    curl -fsSL --output "$TMP/SHA256SUMS" "$sums_url" 2>/dev/null
+    fetch_status=$?
+    if [ "$fetch_status" -eq 22 ]; then
         echo "note: no SHA256SUMS for this release — skipping integrity check" >&2
         return 0
+    elif [ "$fetch_status" -ne 0 ]; then
+        echo "error: could not fetch SHA256SUMS (curl exit $fetch_status)" >&2
+        echo "refusing to install unverified — re-run when the network is healthy." >&2
+        exit 1
     fi
     expected="$(grep " teleia-$target\$" "$TMP/SHA256SUMS" 2>/dev/null | awk '{print $1}' | head -n1)"
     if [ -z "$expected" ]; then

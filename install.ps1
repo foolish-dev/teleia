@@ -64,11 +64,21 @@ function Verify-Prebuilt($target) {
         "$Repo/releases/download/$Tag/SHA256SUMS"
     }
     $sumsPath = Join-Path $Tmp 'SHA256SUMS'
+    # A 404 is the honest "this release has no SHA256SUMS" answer. Anything
+    # else — DNS, a refused connection, a captive portal, a 5xx — is the
+    # network failing, and skipping the check there installs an unverified
+    # binary exactly when something is wrong.
     try {
         Invoke-WebRequest -Uri $sumsUrl -OutFile $sumsPath -UseBasicParsing
     } catch {
-        Write-Warning "no SHA256SUMS for this release — skipping integrity check"
-        return
+        $code = $_.Exception.Response.StatusCode.value__
+        if ($code -eq 404) {
+            Write-Warning "no SHA256SUMS for this release — skipping integrity check"
+            return
+        }
+        Write-Error "could not fetch SHA256SUMS ($($_.Exception.Message))"
+        Write-Error "refusing to install unverified — re-run when the network is healthy."
+        exit 1
     }
     $asset = "teleia-$target.exe"
     $pattern = "  " + [regex]::Escape($asset) + "$"
